@@ -1,0 +1,66 @@
+# Publishes the Expo web export to GitHub Pages on every push to the working
+# branch, so the hosted app is never behind the code.
+name: Deploy web
+
+on:
+  push:
+    branches: [claude/fitness-app-deploy-ux-lzw7zb]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and let a newer push win.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Point the bundle at the Pages sub-path
+        run: node .github/scripts/set-base-url.mjs "/${GITHUB_REPOSITORY#*/}"
+
+      # EXPO_OFFLINE keeps the export off Expo's API, which it does not need.
+      - name: Export the web build
+        run: npx expo export --platform web
+        env:
+          EXPO_OFFLINE: '1'
+          EXPO_NO_TELEMETRY: '1'
+
+      # Pages has no rewrite rules, so the 404 page doubles as the SPA entry
+      # and .nojekyll keeps the _expo/ directory from being swallowed.
+      - name: Make deep links resolve
+        run: |
+          cp dist/index.html dist/404.html
+          touch dist/.nojekyll
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
