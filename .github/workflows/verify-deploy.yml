@@ -1,10 +1,11 @@
-# Asks GitHub what Vercel deployed and then fetches it. Run by hand; this
-# exists because the machine the agent runs on is refused every vercel.app
-# host, and a runner is not.
+# Waits for Vercel to finish deploying this commit, then fetches the result and
+# fails if what comes back is not the app. Temporary: it exists because the
+# machine the agent runs on is refused every vercel.app host, and a runner is not.
 name: Verify deploy
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [master]
 
 permissions:
   contents: read
@@ -14,63 +15,67 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - name: What Vercel says it deployed
+      - name: Wait for Vercel to report a deployment
         env:
           GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
         run: |
-          echo "=== recent deployments ==="
-          gh api "repos/$GITHUB_REPOSITORY/deployments?per_page=10" \
-            --jq '.[] | "id=\(.id) env=\(.environment) ref=\(.ref) sha=\(.sha[0:7]) at=\(.created_at)"'
-
-          echo
-          echo "=== statuses ==="
-          for id in $(gh api "repos/$GITHUB_REPOSITORY/deployments?per_page=10" --jq '.[].id'); do
-            gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=5" \
-              --jq ".[] | \"deployment=$id state=\(.state) url=\(.environment_url // .target_url // \"-\")\"" || true
-          done
-
-          echo
-          gh api "repos/$GITHUB_REPOSITORY/deployments?per_page=10" --jq '.[].id' > /tmp/ids
           : > /tmp/urls
-          while read -r id; do
-            gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=5" \
-              --jq '.[] | select(.state == "success") | .environment_url // .target_url' >> /tmp/urls || true
-          done < /tmp/ids
-          sort -u /tmp/urls | grep -v '^null$' | grep . > /tmp/urls.uniq || true
-          echo "=== candidate urls ==="
-          cat /tmp/urls.uniq || echo "(none reported)"
+          for attempt in $(seq 1 40); do
+            echo "--- attempt $attempt"
+            gh api "repos/$GITHUB_REPOSITORY/deployments?sha=$SHA&per_page=20" \
+              --jq '.[] | "id=\(.id) env=\(.environment) ref=\(.ref)"' || true
+
+            for id in $(gh api "repos/$GITHUB_REPOSITORY/deployments?sha=$SHA&per_page=20" --jq '.[].id' 2>/dev/null); do
+              gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=10" \
+                --jq '.[] | "\(.state) \(.environment_url // .target_url // "-")"' 2>/dev/null | tee -a /tmp/raw || true
+            done
+
+            if grep -q '^success ' /tmp/raw 2>/dev/null; then
+              grep '^success ' /tmp/raw | awk '{print $2}' | grep -v '^-$' | sort -u > /tmp/urls
+              echo "Vercel reported success:"
+              cat /tmp/urls
+              break
+            fi
+            if grep -qE '^(failure|error) ' /tmp/raw 2>/dev/null; then
+              echo "Vercel reported a failed deployment for this commit."
+              cat /tmp/raw
+              exit 1
+            fi
+            sleep 15
+          done
 
       - name: Fetch what is actually being served
         run: |
           {
-            cat /tmp/urls.uniq 2>/dev/null
+            cat /tmp/urls 2>/dev/null
             echo "https://personal-trainer.vercel.app"
             echo "https://personal-trainer-mateo-sautons-projects.vercel.app"
           } | sort -u | grep . > /tmp/probe
 
-          fail=1
+          echo "probing:"; cat /tmp/probe
+
+          live=1
           while read -r url; do
             echo "--------------------------------------------------"
             code=$(curl -sS -L --max-time 45 -o /tmp/body -w '%{http_code}' "$url" || echo 000)
-            echo "$url -> HTTP $code ($(wc -c < /tmp/body) bytes)"
-            if [ "$code" = "200" ]; then
-              # The Expo export always names its bundle under /_expo/static/js/web/.
-              if grep -q "_expo/static/js/web" /tmp/body; then
-                echo "  serving the Expo web bundle"
-                grep -o '_expo/static/js/web/[^"]*' /tmp/body | head -1
-                fail=0
-              else
-                echo "  200, but this is not the Expo bundle:"
-                head -c 300 /tmp/body; echo
-              fi
+            echo "$url -> HTTP $code ($(wc -c < /tmp/body 2>/dev/null || echo 0) bytes)"
+            if [ "$code" = "200" ] && grep -q "_expo/static/js/web" /tmp/body; then
+              echo "  this is the Expo web bundle:"
+              grep -o '_expo/static/js/web/[^"]*' /tmp/body | head -1
+              # Deep links must fall back to the app shell, not a 404 page.
+              deep=$(curl -sS -L --max-time 45 -o /tmp/deep -w '%{http_code}' "$url/sign-in" || echo 000)
+              echo "  /sign-in -> HTTP $deep"
+              grep -q "_expo/static/js/web" /tmp/deep && echo "  deep link serves the app shell"
+              live=0
+            elif [ "$code" = "200" ]; then
+              echo "  200, but not the app:"; head -c 300 /tmp/body; echo
             else
-              head -c 200 /tmp/body; echo
+              head -c 200 /tmp/body 2>/dev/null; echo
             fi
           done < /tmp/probe
 
           echo "=================================================="
-          if [ "$fail" -ne 0 ]; then
-            echo "No URL served the app."
-            exit 1
-          fi
-          echo "The app is live."
+          [ "$live" -eq 0 ] && echo "THE APP IS LIVE" && exit 0
+          echo "No URL served the app."
+          exit 1
