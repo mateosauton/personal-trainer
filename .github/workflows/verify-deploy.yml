@@ -56,6 +56,7 @@ jobs:
             cat /tmp/urls 2>/dev/null
             echo "https://personal-trainer-mateo-sautons-projects.vercel.app"
             echo "https://${GITHUB_REPOSITORY%%/*}.github.io/${GITHUB_REPOSITORY#*/}/"
+            echo "https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@cdn/index.html"
           } | sort -u | grep . > /tmp/probe
 
           echo "probing:"; cat /tmp/probe

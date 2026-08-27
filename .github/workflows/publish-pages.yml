@@ -61,3 +61,29 @@ jobs:
           git commit -q -m "Publish ${GITHUB_SHA:0:7}"
           git push -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:gh-pages
           echo "pushed $(git rev-parse --short HEAD) to gh-pages"
+
+      # jsDelivr serves any public repo straight off a branch, with no site to
+      # enable first — the one public URL that needs nobody to throw a switch.
+      # It addresses files as /gh/<owner>/<repo>@<ref>/..., so this needs its
+      # own build: the prefix is baked into every asset URL.
+      - name: Export again, addressed for the CDN
+        run: |
+          rm -rf dist
+          node .github/scripts/set-base-url.mjs "/gh/${GITHUB_REPOSITORY}@cdn"
+          npx expo export --platform web
+        env:
+          EXPO_OFFLINE: '1'
+          EXPO_NO_TELEMETRY: '1'
+
+      - name: Publish to the cdn branch
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Publish ${GITHUB_SHA:0:7} for jsDelivr"
+          git push -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:cdn
+          echo "https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@cdn/index.html"
