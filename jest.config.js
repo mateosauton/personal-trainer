@@ -9,6 +9,9 @@
 module.exports = {
   testEnvironment: 'node',
   testMatch: ['**/__tests__/**/*.test.ts'],
+  // .claude/ holds throwaway git worktrees, whose copies of these same suites
+  // would otherwise be collected and run again.
+  testPathIgnorePatterns: ['/node_modules/', '/.claude/'],
   transform: {
     '^.+\\.tsx?$': [
       'babel-jest',
