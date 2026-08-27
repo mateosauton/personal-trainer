@@ -23,6 +23,37 @@ npm run lint    # tsc --noEmit
 npm run catalog # rebuild lib/data/exercises.json from source datasets
 ```
 
+## The hosted build
+
+The same code runs on the web: `npx expo export --platform web` writes a static
+single-page bundle to `dist/`, and `vercel.json` tells Vercel to do exactly that
+and to rewrite every app route back to `index.html`.
+
+Supabase credentials for that build live in the committed `.env.production`
+rather than in a dashboard setting, so any checkout builds the same app. That is
+safe on purpose: Expo bakes `EXPO_PUBLIC_*` into the bundle either way, and the
+publishable key is designed to ship in a client — every table is RLS'd to
+`auth.uid()`, so the key alone grants access to nothing. Local development reads
+`.env` instead, which is where a local backend goes.
+
+## Driving the UI without a device
+
+`tools/dev/` runs the app in a headless browser against a stand-in backend, for
+when there is no phone (or no route to Supabase) to hand:
+
+```bash
+node tools/dev/mock-supabase.mjs 54321 &          # GoTrue + the PostgREST slice this app uses
+printf 'EXPO_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321\nEXPO_PUBLIC_SUPABASE_KEY=mock\n' > .env
+npx expo start --web --port 8081 &
+node tools/dev/drive.mjs session ./shots            # screenshots a whole flow
+```
+
+The mock seeds two accounts — `demo@officegym.test` (onboarded, with a plan and
+history) and `fresh@officegym.test` (needs onboarding), both `demo1234` — and
+exposes `GET /__reset` and `GET /__state` so a test can assert that a write
+actually landed. `drive.mjs` holds one function per flow; add to it rather than
+writing a new script.
+
 ## How it works
 
 **The plan generator** (`lib/plan/`) is a deterministic rule engine, not a model
