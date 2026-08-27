@@ -10,31 +10,40 @@ import { colors } from '@/lib/theme';
 
 /**
  * Routing gate. Three states matter: signed out, signed in but not onboarded,
- * and ready. Redirects run in an effect so the navigator has mounted first.
+ * and ready.
+ *
+ * Screens behind the gate assert a session (`useUserId`), so the gate must not
+ * render one until it knows the user belongs there — hence `allowed`: while the
+ * redirect is still in flight the app holds on the splash rather than mounting
+ * a screen that would throw.
  */
 function Gate({ children }: { children: React.ReactNode }) {
   const { session, profile, loading } = useAuth();
   const segments = useSegments();
   const router = useRouter();
 
+  const group = segments[0];
+  const inAuth = group === '(auth)';
+  const inOnboarding = group === 'onboarding';
+
+  // Signed in and onboarded is the permissive case: tabs, a running session and
+  // anything else are all fine. The other two states pin you to one place.
+  const allowed = loading
+    ? false
+    : !session
+      ? inAuth
+      : !profile?.onboarded_at
+        ? inOnboarding
+        : !inAuth && !inOnboarding;
+
   useEffect(() => {
-    if (loading) return;
-    const group = segments[0];
-    const inAuth = group === '(auth)';
-    const inOnboarding = group === '(onboarding)';
+    if (loading || allowed) return;
+    if (!session) router.replace('/(auth)/sign-in');
+    else if (!profile?.onboarded_at) router.replace('/onboarding');
+    else router.replace('/(tabs)');
+  }, [loading, allowed, session, profile, router]);
 
-    if (!session) {
-      if (!inAuth) router.replace('/(auth)/sign-in');
-      return;
-    }
-    if (!profile?.onboarded_at) {
-      if (!inOnboarding) router.replace('/(onboarding)');
-      return;
-    }
-    if (inAuth || inOnboarding) router.replace('/(tabs)');
-  }, [session, profile, loading, segments, router]);
-
-  if (loading) {
+  if (!allowed) {
     return (
       <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
         <ActivityIndicator color={colors.accent} />
@@ -59,7 +68,9 @@ export default function RootLayout() {
               }}
             >
               <Stack.Screen name="(auth)" />
-              <Stack.Screen name="(onboarding)" />
+              {/* Not in a route group: a group index would claim "/" as well,
+                  and the tab bar's Today screen already owns it. */}
+              <Stack.Screen name="onboarding" />
               <Stack.Screen name="(tabs)" />
               <Stack.Screen name="session" options={{ animation: 'slide_from_bottom' }} />
             </Stack>
