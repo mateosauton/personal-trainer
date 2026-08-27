@@ -30,7 +30,7 @@ export interface Filter {
   patterns: Pattern[];
   /** Restrict to these categories; defaults to everything non-specialist. */
   categories?: Category[];
-  /** Lowercased substrings; any exercise matching one is dropped. */
+  /** Joint or area keys from onboarding, e.g. 'knee'. */
   limitations?: string[];
 }
 
@@ -40,9 +40,56 @@ const LEVEL_RANK: Record<Exercise['level'], number> = {
   advanced: 2,
 };
 
+/**
+ * What a declared limitation actually rules out.
+ *
+ * Matching the word against names and muscle lists is not enough: nothing in
+ * the dataset tags a back squat with "knee", so a knee complaint used to strip
+ * out knee circles and leave every squat and lunge standing. Each entry
+ * therefore names the muscles that load the joint and the movement patterns
+ * built around it.
+ */
+const LIMITATIONS: Record<string, { muscles: string[]; patterns: Pattern[] }> = {
+  shoulders: {
+    muscles: ['shoulders', 'chest'],
+    patterns: ['v_push', 'delts'],
+  },
+  'lower back': {
+    muscles: ['lower back'],
+    patterns: ['hinge', 'carry'],
+  },
+  knee: {
+    muscles: ['quadriceps'],
+    patterns: ['squat', 'lunge'],
+  },
+  neck: {
+    muscles: ['neck', 'traps'],
+    patterns: ['traps'],
+  },
+  wrist: {
+    muscles: ['forearms'],
+    patterns: ['forearms'],
+  },
+};
+
+function blockedBy(exercise: Exercise, limitations: string[]): boolean {
+  for (const raw of limitations) {
+    const key = raw.toLowerCase();
+    const rule = LIMITATIONS[key];
+    if (rule) {
+      if (rule.patterns.includes(exercise.pattern)) return true;
+      const muscles = [...exercise.primary_muscles, exercise.body_part].map((m) => m.toLowerCase());
+      if (rule.muscles.some((m) => muscles.includes(m))) return true;
+    }
+    // Free-text limitations still fall back to a name match.
+    if (exercise.name.toLowerCase().includes(key)) return true;
+  }
+  return false;
+}
+
 export function candidates(filter: Filter): Exercise[] {
   const max = LEVEL_RANK[filter.level];
-  const banned = filter.limitations?.filter(Boolean).map((s) => s.toLowerCase()) ?? [];
+  const banned = filter.limitations?.filter(Boolean) ?? [];
   return CATALOG.filter((e) => {
     if (!filter.patterns.includes(e.pattern)) return false;
     if (!filter.equipment.includes(e.equipment)) return false;
@@ -52,10 +99,7 @@ export function candidates(filter: Filter): Exercise[] {
     } else if (SPECIALIST.includes(e.category) && filter.level !== 'advanced') {
       return false;
     }
-    if (banned.length) {
-      const haystack = `${e.name} ${e.primary_muscles.join(' ')} ${e.body_part}`.toLowerCase();
-      if (banned.some((b) => haystack.includes(b))) return false;
-    }
+    if (banned.length && blockedBy(e, banned)) return false;
     return true;
   });
 }

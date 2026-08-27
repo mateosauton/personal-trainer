@@ -1,7 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, StyleSheet, View } from 'react-native';
 
 import { Body, Button, Card, Chip, Display, Heading, Muted, Overline, Screen } from '@/components/ui';
 import { useAuth, useUserId } from '@/lib/auth';
@@ -33,6 +33,9 @@ export default function SessionSummary() {
   const router = useRouter();
 
   const [lines, setLines] = useState<Line[]>([]);
+  // Computed on mount, committed only when the user saves.
+  const pendingProgress = useRef<ProgressRow[]>([]);
+  const committed = useRef(false);
   const [rpe, setRpe] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -121,7 +124,7 @@ export default function SessionSummary() {
       }
 
       if (!cancelled) {
-        await upsertProgress(userId, updates);
+        pendingProgress.current = updates;
         setLines(built);
         setLoading(false);
         if (built.some((l) => l.isPr)) {
@@ -140,8 +143,22 @@ export default function SessionSummary() {
   const save = async () => {
     setSaving(true);
     try {
+      // Guarded because a double tap, or a remount while this is in flight,
+      // would otherwise apply the same verdict twice -- two 'hold' results in
+      // a row read as a miss streak of 2 and silently deload the user 10%.
+      if (!committed.current) {
+        committed.current = true;
+        try {
+          await upsertProgress(userId, pendingProgress.current);
+        } catch (e) {
+          committed.current = false;
+          throw e;
+        }
+      }
       await finishSession(sessionId, { duration_s: durationS, rpe });
       router.replace('/(tabs)');
+    } catch (e) {
+      Alert.alert('Could not save', e instanceof Error ? e.message : 'Try again.');
     } finally {
       setSaving(false);
     }

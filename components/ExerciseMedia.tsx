@@ -1,5 +1,5 @@
 import { Image } from 'expo-image';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { StyleSheet, View, type ViewStyle } from 'react-native';
 import Animated, {
   Easing,
@@ -29,7 +29,9 @@ interface Props {
  * as the two ends of the movement.
  */
 export function ExerciseMedia({ exercise, style, paused = false }: Props) {
-  const media = resolveMedia(exercise);
+  // Memoised: resolveMedia builds a new object every call, and an unstable
+  // dep restarted the crossfade on every re-render of the player.
+  const media = useMemo(() => resolveMedia(exercise), [exercise.id]);
   const progress = useSharedValue(0);
 
   useEffect(() => {
@@ -50,7 +52,7 @@ export function ExerciseMedia({ exercise, style, paused = false }: Props) {
       false,
     );
     return () => cancelAnimation(progress);
-  }, [media, paused, exercise.id, progress]);
+  }, [media, paused, progress]);
 
   const endStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
 

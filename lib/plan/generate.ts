@@ -31,6 +31,40 @@ const SCHEME: Record<Goal, { b1: Scheme; b2: Scheme; b3: Scheme; b4: Scheme }> =
   },
 };
 
+/**
+ * What to reach for when a slot's own pattern has no candidates -- the catalog
+ * has real holes (no bodyweight horizontal pull at all, no bands core), so a
+ * sparsely equipped gym would otherwise drop whole blocks. Ordered by how well
+ * the substitute trains the same thing.
+ */
+const SUBSTITUTES: Record<Pattern, Pattern[]> = {
+  squat: ['lunge', 'hinge'],
+  hinge: ['squat', 'lunge'],
+  lunge: ['squat', 'hinge'],
+  h_push: ['v_push', 'triceps', 'delts'],
+  v_push: ['h_push', 'delts', 'triceps'],
+  h_pull: ['v_pull', 'biceps', 'traps'],
+  v_pull: ['h_pull', 'biceps', 'traps'],
+  biceps: ['h_pull', 'v_pull', 'forearms'],
+  triceps: ['h_push', 'v_push'],
+  delts: ['v_push', 'h_push'],
+  traps: ['h_pull', 'v_pull'],
+  calves: ['lunge', 'squat', 'conditioning'],
+  forearms: ['biceps', 'h_pull'],
+  core: ['conditioning', 'mobility'],
+  conditioning: ['core', 'lunge', 'squat'],
+  carry: ['hinge', 'core'],
+  mobility: ['core'],
+  other: ['core', 'conditioning'],
+};
+
+/** Everything a work block may fall back to; mobility is warm-up material. */
+const ANY_PATTERN: Pattern[] = [
+  'squat', 'hinge', 'lunge', 'h_push', 'v_push', 'h_pull', 'v_pull',
+  'core', 'conditioning', 'biceps', 'triceps', 'delts', 'calves', 'traps',
+  'forearms', 'carry',
+];
+
 interface Scheme {
   sets: number;
   low: number;
@@ -89,10 +123,9 @@ export interface GeneratedPlan {
 }
 
 /**
- * Picks one exercise for a slot.
+ * Picks one exercise for a slot, widening the search until something fits.
  *
- * Beyond the hard filters, exercises already used this week are skipped so a
- * week is varied.
+ * Exercises already used are skipped so a week stays varied.
  */
 function pick(
   patterns: Pattern[],
@@ -101,20 +134,40 @@ function pick(
   rng: () => number,
   prefer?: (e: Exercise) => boolean,
 ): Exercise | null {
-  const pool = candidates({ ...base, patterns });
-  if (pool.length === 0) return null;
+  // Widen in stages, and only as far as needed: the user's own kit first, then
+  // bodyweight (which they always have) before giving up on the pattern.
+  const equipmentTiers = [
+    base.equipment,
+    [...new Set([...base.equipment, 'bodyweight' as const])],
+  ];
+  const patternTiers = [
+    patterns,
+    [...new Set(patterns.flatMap((p) => SUBSTITUTES[p] ?? []))],
+    // Last resort. Declaring both bad knees and a bad lower back empties squat,
+    // hinge and lunge together, so a leg day has nothing of its own left to
+    // draw on. Training something safe beats handing back a two-block session.
+    ANY_PATTERN,
+  ];
 
-  const fresh = pool.filter((e) => !used.has(e.id));
-  // A small catalog slice can be exhausted mid-week; repeating beats an empty
-  // block, so fall back to the whole pool.
-  const usable = fresh.length > 0 ? fresh : pool;
+  for (const patternTier of patternTiers) {
+    if (patternTier.length === 0) continue;
+    for (const equipment of equipmentTiers) {
+      const pool = candidates({ ...base, equipment, patterns: patternTier });
+      if (pool.length === 0) continue;
 
-  const shortlist = prefer ? usable.filter(prefer) : [];
-  const source = shortlist.length > 0 ? shortlist : usable;
+      const fresh = pool.filter((e) => !used.has(e.id));
+      // A narrow pool can be exhausted mid-week. Repeating beats an empty
+      // block, but only once every wider option has been tried.
+      const usable = fresh.length > 0 ? fresh : pool;
+      const shortlist = prefer ? usable.filter(prefer) : [];
+      const source = shortlist.length > 0 ? shortlist : usable;
 
-  const choice = shuffle(source, rng)[0];
-  used.add(choice.id);
-  return choice;
+      const choice = shuffle(source, rng)[0];
+      used.add(choice.id);
+      return choice;
+    }
+  }
+  return null;
 }
 
 const isCompound = (e: Exercise) => e.mechanic === 'compound';
@@ -131,11 +184,12 @@ function warmupBlock(
   // needs no gym kit, so it holds whatever the office gym has that day.
   const warmBase: Omit<Filter, 'patterns'> = {
     ...base,
-    // Bodyweight is always available -- the user brings their own body -- but
-    // anything else must still be kit they actually have.
-    equipment: ['bodyweight', ...base.equipment.filter((e) => e === 'bands')],
+    // Bodyweight only. Bands are loaded work -- allowing them served a banded
+    // lateral raise as a "warm-up" -- and the user always has their own body,
+    // so this holds whatever the gym has that day.
+    equipment: ['bodyweight'],
     level: 'beginner' as Level,
-    categories: ['stretching', 'strength', 'cardio'],
+    categories: ['stretching', 'cardio', 'strength'],
   };
   for (const pattern of template.warmup) {
     const exercise = pick([pattern], warmBase, used, rng);
@@ -167,13 +221,26 @@ function buildDay(
   rng: () => number,
 ): GeneratedDay {
   const base: Omit<Filter, 'patterns'> = {
-    equipment: input.equipment,
+    // Bodyweight is always available; without it an empty equipment list would
+    // yield a plan of nothing but warm-ups.
+    equipment: input.equipment.length > 0
+      ? input.equipment
+      : (['bodyweight'] as GenerateInput['equipment']),
     level: input.experience,
     limitations: input.limitations,
   };
+
+  // Warm-up picks land here too, so today's work cannot repeat a drill the
+  // user has just done. The weekly set alone did not catch same-day clashes.
+  const usedToday = new Set<string>();
   const scheme = SCHEME[input.goal];
   const rest = REST[input.sessionMinutes] ?? REST[45];
-  const blocks: GeneratedBlock[] = [warmupBlock(template, base, usedWarmup, rng)];
+  const warmup = warmupBlock(template, base, usedWarmup, rng);
+  for (const item of warmup.items) usedToday.add(item.exercise_id);
+  const blocks: GeneratedBlock[] = [warmup];
+
+  // Work slots avoid both the week's picks and today's warm-up.
+  const taken = new Set<string>([...used, ...usedToday]);
 
   const toItem = (e: Exercise, s: Scheme): GeneratedItem => ({
     exercise_id: e.id,
@@ -185,7 +252,7 @@ function buildDay(
     notes: e.is_unilateral ? 'Per side' : null,
   });
 
-  const b1 = pick(template.b1, base, used, rng, (e) => isCompound(e) && isPlainLift(e));
+  const b1 = pick(template.b1, base, taken, rng, (e) => isCompound(e) && isPlainLift(e));
   if (b1) {
     blocks.push({
       kind: 'straight',
@@ -196,7 +263,7 @@ function buildDay(
     });
   }
 
-  const b2 = pick(template.b2, base, used, rng, (e) => isCompound(e) && isPlainLift(e));
+  const b2 = pick(template.b2, base, taken, rng, (e) => isCompound(e) && isPlainLift(e));
   if (b2) {
     blocks.push({
       kind: 'straight',
@@ -208,8 +275,8 @@ function buildDay(
   }
 
   const [leftPatterns, rightPatterns] = template.b3;
-  const left = pick(leftPatterns, base, used, rng);
-  const right = pick(rightPatterns, base, used, rng);
+  const left = pick(leftPatterns, base, taken, rng);
+  const right = pick(rightPatterns, base, taken, rng);
   const supersetItems = [left, right]
     .filter((e): e is Exercise => e !== null)
     .map((e) => toItem(e, scheme.b3));
@@ -226,7 +293,7 @@ function buildDay(
 
   const circuit: GeneratedItem[] = [];
   for (const pattern of template.b4) {
-    const exercise = pick([pattern], { ...base, level: input.experience }, used, rng);
+    const exercise = pick([pattern], { ...base, level: input.experience }, taken, rng);
     if (!exercise) continue;
     circuit.push({
       ...toItem(exercise, scheme.b4),
@@ -243,6 +310,9 @@ function buildDay(
       items: circuit,
     });
   }
+
+  // Fold today's work back into the week-long set.
+  for (const id of taken) used.add(id);
 
   return { name: template.name, focus: template.focus, blocks };
 }

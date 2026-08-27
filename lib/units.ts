@@ -35,6 +35,8 @@ export function effectiveLoadKg(
 
 /** Epley. Only meaningful in the 1-12 rep range, which is where the app lives. */
 export function estimateOneRepMax(loadKg: number, reps: number): number {
-  if (reps <= 1) return loadKg;
+  // A set of zero reps is a failed set, not a one rep max.
+  if (reps < 1 || loadKg <= 0) return 0;
+  if (reps === 1) return loadKg;
   return loadKg * (1 + reps / 30);
 }

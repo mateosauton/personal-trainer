@@ -34,6 +34,7 @@ const EQUIPMENT: { value: Equipment; label: string }[] = [
   { value: 'machine', label: 'Machines' },
   { value: 'bands', label: 'Bands' },
   { value: 'bodyweight', label: 'Bodyweight' },
+  { value: 'other', label: 'Balls / foam roller' },
 ];
 
 const LIMITATIONS = [

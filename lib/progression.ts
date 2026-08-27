@@ -1,4 +1,5 @@
-import type { Pattern } from './types';
+import type { Pattern, Units } from './types';
+import { displayToKg, kgToDisplay, step } from './units';
 
 /**
  * Lower-body lifts add weight in bigger jumps than upper-body ones: the same
@@ -6,8 +7,21 @@ import type { Pattern } from './types';
  */
 const LOWER_PATTERNS: Pattern[] = ['squat', 'hinge', 'lunge'];
 
-export const incrementKg = (pattern: Pattern) =>
-  LOWER_PATTERNS.includes(pattern) ? 5 : 2.5;
+/**
+ * Loads are stored in kg, but the jump has to land on plates the user's gym
+ * actually racks. A kg-fixed 2.5 step walks an lb lifter onto 140.5, 146,
+ * 151.5 -- numbers no plate set can make.
+ */
+export function incrementKg(pattern: Pattern, units: Units = 'kg'): number {
+  const plates = step(units);
+  return displayToKg(LOWER_PATTERNS.includes(pattern) ? plates * 2 : plates, units);
+}
+
+/** Snap a load to the nearest real plate increment for the user's units. */
+function roundToPlates(kg: number, units: Units): number {
+  const plates = step(units);
+  return displayToKg(Math.round(kgToDisplay(kg, units) / plates) * plates, units);
+}
 
 export interface SetOutcome {
   reps: number | null;
@@ -39,9 +53,13 @@ export function nextLoad(
   pattern: Pattern,
   workingLoadKg: number | null,
   state: ProgressState,
+  units: Units = 'kg',
 ): ProgressUpdate {
   const logged = sets.filter((s) => s.reps != null);
-  if (logged.length === 0 || workingLoadKg == null) {
+  // A zero or negative load carries no information to progress from -- an
+  // unweighted bodyweight set logs added_load_kg of 0, and scaling that by 0.9
+  // or rounding it up to one plate would both be nonsense.
+  if (logged.length === 0 || workingLoadKg == null || workingLoadKg <= 0) {
     return { last_weight_kg: workingLoadKg, miss_streak: state.miss_streak, verdict: null };
   }
 
@@ -52,7 +70,7 @@ export function nextLoad(
 
   if (allTopped && manageable) {
     return {
-      last_weight_kg: workingLoadKg + incrementKg(pattern),
+      last_weight_kg: workingLoadKg + incrementKg(pattern, units),
       miss_streak: 0,
       verdict: 'progress',
     };
@@ -62,11 +80,12 @@ export function nextLoad(
   if (missed) {
     const streak = state.miss_streak + 1;
     if (streak >= 2) {
-      return {
-        last_weight_kg: Math.round((workingLoadKg * 0.9) / 2.5) * 2.5,
-        miss_streak: 0,
-        verdict: 'deload',
-      };
+      // Rounding alone could push a light load *up* (1.5 kg -> 2.5 kg), so the
+      // result is clamped below the current load and floored at one increment.
+      const target = roundToPlates(workingLoadKg * 0.9, units);
+      const floor = incrementKg(pattern, units);
+      const deloaded = Math.min(Math.max(target, floor), workingLoadKg);
+      return { last_weight_kg: deloaded, miss_streak: 0, verdict: 'deload' };
     }
     return { last_weight_kg: workingLoadKg, miss_streak: streak, verdict: 'hold' };
   }

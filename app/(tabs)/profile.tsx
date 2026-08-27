@@ -19,6 +19,7 @@ const EQUIPMENT: { value: Equipment; label: string }[] = [
   { value: 'machine', label: 'Machines' },
   { value: 'bands', label: 'Bands' },
   { value: 'bodyweight', label: 'Bodyweight' },
+  { value: 'other', label: 'Balls / foam roller' },
 ];
 
 export default function ProfileTab() {
@@ -63,6 +64,10 @@ export default function ProfileTab() {
   };
 
   const regenerate = () => {
+    if (equipment.length === 0) {
+      Alert.alert('Pick some equipment', 'A plan needs at least one thing to train with.');
+      return;
+    }
     Alert.alert(
       'Build a new plan?',
       'Your logged sessions and weights stay. The current plan is replaced.',
@@ -74,6 +79,9 @@ export default function ProfileTab() {
             if (!profile?.goal || !profile.experience) return;
             setRegenerating(true);
             try {
+              // Rebuild uses the chips as they are on screen, so persist them
+              // first rather than generating against edits that were never saved.
+              await updateProfile(userId, { equipment });
               await savePlan(
                 userId,
                 generatePlan({
