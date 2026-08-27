@@ -50,9 +50,18 @@ node tools/dev/drive.mjs session ./shots            # screenshots a whole flow
 
 The mock seeds two accounts — `demo@officegym.test` (onboarded, with a plan and
 history) and `fresh@officegym.test` (needs onboarding), both `demo1234` — and
-exposes `GET /__reset` and `GET /__state` so a test can assert that a write
-actually landed. `drive.mjs` holds one function per flow; add to it rather than
-writing a new script.
+exposes `GET /__reset`, `GET /__state` (so a test can assert a write actually
+landed) and `GET /__slow?ms=700` (so anything the app shows *while* it waits is
+on screen long enough to see). `drive.mjs` holds one function per flow; add to
+it rather than writing a new script.
+
+To check the real thing rather than the dev server, `tools/dev/serve-dist.mjs`
+serves an exported `dist/` with the same rewrite rule Vercel applies:
+
+```bash
+npx expo export --platform web
+node tools/dev/serve-dist.mjs dist 8090
+```
 
 ## How it works
 
