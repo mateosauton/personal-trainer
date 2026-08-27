@@ -17,24 +17,36 @@ function Gate({ children }: { children: React.ReactNode }) {
   const segments = useSegments();
   const router = useRouter();
 
+  const group = segments[0];
+  const inAuth = group === '(auth)';
+  const inOnboarding = group === '(onboarding)';
+
+  const needsAuth = !session;
+  const needsOnboarding = Boolean(session) && !profile?.onboarded_at;
+
+  // True while the current route does not match where this user belongs, i.e.
+  // a redirect is pending. Children must not render in that window: screens
+  // behind the gate call useUserId(), which throws without a session, and the
+  // redirect only takes effect on the next tick.
+  const misplaced =
+    (needsAuth && !inAuth) ||
+    (needsOnboarding && !inOnboarding) ||
+    (!needsAuth && !needsOnboarding && (inAuth || inOnboarding));
+
   useEffect(() => {
     if (loading) return;
-    const group = segments[0];
-    const inAuth = group === '(auth)';
-    const inOnboarding = group === '(onboarding)';
-
-    if (!session) {
+    if (needsAuth) {
       if (!inAuth) router.replace('/(auth)/sign-in');
       return;
     }
-    if (!profile?.onboarded_at) {
+    if (needsOnboarding) {
       if (!inOnboarding) router.replace('/(onboarding)');
       return;
     }
     if (inAuth || inOnboarding) router.replace('/(tabs)');
-  }, [session, profile, loading, segments, router]);
+  }, [loading, needsAuth, needsOnboarding, inAuth, inOnboarding, router]);
 
-  if (loading) {
+  if (loading || misplaced) {
     return (
       <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
         <ActivityIndicator color={colors.accent} />
