@@ -30,6 +30,12 @@ const db = {
 };
 
 const tokens = new Map(); // access_token -> userId
+/** Storage stand-in: "<bucket>/<path>" -> { body, contentType }. */
+const objects = new Map();
+
+/** Artificial round-trip delay, set through GET /__slow?ms=600. */
+let latencyMs = 0;
+const settle = () => (latencyMs ? new Promise((r) => setTimeout(r, latencyMs)) : null);
 
 const SEED_USER = { id: '11111111-1111-4111-8111-111111111111', email: 'demo@officegym.test', password: 'demo1234' };
 const FRESH_USER = { id: '22222222-2222-4222-8222-222222222222', email: 'fresh@officegym.test', password: 'demo1234' };
@@ -246,6 +252,12 @@ const server = createServer(async (req, res) => {
     resetSeed();
     return json(res, 200, { ok: true });
   }
+  if (path === '/__slow') {
+    // Writes here are instant, which hides anything the app shows while it is
+    // waiting. This dials in the latency a real database would have.
+    latencyMs = Number(url.searchParams.get('ms') ?? 0) || 0;
+    return json(res, 200, { latencyMs });
+  }
   if (path === '/__state') {
     return json(res, 200, {
       profiles: [...db.profiles.values()],
@@ -284,6 +296,32 @@ const server = createServer(async (req, res) => {
     if (!userId) return json(res, 401, { message: 'Unauthorized' });
     const email = [...db.users.values()].find((u) => u.id === userId)?.email;
     return json(res, 200, { id: userId, email, aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {} });
+  }
+
+  if (path.startsWith('/storage/v1/') || path.startsWith('/rest/v1/')) await settle();
+
+  // Storage --------------------------------------------------------------
+  if (path.startsWith('/storage/v1/object/')) {
+    const publicPrefix = '/storage/v1/object/public/';
+    if (req.method === 'GET' && path.startsWith(publicPrefix)) {
+      const object = objects.get(path.slice(publicPrefix.length));
+      if (!object) return json(res, 404, { message: 'Not found' });
+      res.writeHead(200, {
+        'content-type': object.contentType,
+        'access-control-allow-origin': '*',
+      });
+      return res.end(object.body);
+    }
+    if (req.method === 'POST' || req.method === 'PUT') {
+      const key = path.slice('/storage/v1/object/'.length);
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      objects.set(key, {
+        body: Buffer.concat(chunks),
+        contentType: req.headers['content-type'] ?? 'application/octet-stream',
+      });
+      return json(res, 200, { Key: key, Id: randomUUID() });
+    }
   }
 
   // PostgREST ------------------------------------------------------------

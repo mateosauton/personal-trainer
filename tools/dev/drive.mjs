@@ -78,8 +78,8 @@ async function run() {
   await page.goto(base, { waitUntil: 'networkidle' });
   await page.waitForTimeout(4000); // metro's first bundle
   if (await dismissOverlay('root-error')) {
-    // "/" is ambiguous between the tab and onboarding groups; go to the real
-    // sign-in route so the rest of the flow can be exercised.
+    // Something threw on the way in. Record it, then go straight to sign-in so
+    // the rest of the flow can still be exercised.
     await page.goto(`${base}/sign-in`, { waitUntil: 'networkidle' });
     await page.waitForTimeout(2500);
     await dismissOverlay();
@@ -102,10 +102,37 @@ async function run() {
     // --- onboarding -----------------------------------------------------
     async onboarding() {
       await signIn('fresh');
-      await shot('onboarding-step-1');
-      for (let i = 0; i < 8; i += 1) {
+      await page.waitForTimeout(1500);
+
+      // Name and photo. On web the picker is a file input, so answer the
+      // chooser rather than driving a native sheet.
+      const name = page.getByPlaceholder('Your name');
+      if (await name.count()) {
+        await name.fill('Mateo');
+        if (process.env.PHOTO) {
+          const chooser = page.waitForEvent('filechooser', { timeout: 5000 }).catch(() => null);
+          await page.getByLabel(/photo/i).first().click();
+          const fc = await chooser;
+          if (fc) {
+            await fc.setFiles(process.env.PHOTO);
+            await page.waitForTimeout(1200);
+          }
+        }
+      }
+
+      for (let i = 0; i < 10; i += 1) {
         const label = await page.getByText(/Step \d of \d/).first().textContent().catch(() => null);
         await shot(`onboarding-${(label ?? `step-${i}`).toLowerCase().replace(/\s+/g, '-')}`);
+
+        // The measurements step is the one that used to trap the keypad.
+        const bodyweight = page.getByLabel('Bodyweight');
+        if (await bodyweight.count()) {
+          await bodyweight.first().fill('78');
+          await page.getByLabel('Height').first().fill('180');
+          await page.waitForTimeout(300);
+          await shot('measurements-filled');
+        }
+
         const cont = page.getByText('Continue', { exact: true });
         if (await cont.count()) {
           await cont.first().click();
@@ -115,9 +142,12 @@ async function run() {
         const build = page.getByText('Build my plan', { exact: true });
         if (await build.count()) {
           await build.first().click();
-          await page.waitForTimeout(300);
+          await page.waitForTimeout(120);
           await shot('building-plan');
-          await page.waitForTimeout(4000);
+          await page.waitForTimeout(500);
+          await shot('building-plan-later');
+          // Long enough to cover a slow backend finishing the first plan read.
+          await page.waitForTimeout(9000);
           await shot('after-build');
         }
         break;

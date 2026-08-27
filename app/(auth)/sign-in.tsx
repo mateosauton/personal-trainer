@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body, Button, Display, Muted, Overline, Screen } from '@/components/ui';
 import { supabase } from '@/lib/db/supabase';
-import { colors, radius, space, type } from '@/lib/theme';
+import { colors, radius, space, type, webFocusRing } from '@/lib/theme';
 
 export default function SignIn() {
   const [email, setEmail] = useState('');
@@ -156,6 +156,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     paddingHorizontal: space.lg,
     paddingVertical: space.lg,
+    ...webFocusRing,
   },
   error: { color: colors.danger, ...type.small },
   notice: { color: colors.accent, ...type.small },

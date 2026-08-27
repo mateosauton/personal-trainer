@@ -48,8 +48,10 @@ export interface Exercise {
 export interface Profile {
   id: string;
   display_name: string | null;
+  avatar_url: string | null;
   units: Units;
   bodyweight_kg: number | null;
+  height_cm: number | null;
   goal: Goal | null;
   experience: Level | null;
   days_per_week: number | null;
