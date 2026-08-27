@@ -56,6 +56,7 @@ jobs:
           echo "probing:"; cat /tmp/probe
 
           live=1
+          protected=1
           while read -r url; do
             echo "--------------------------------------------------"
             code=$(curl -sS -L --max-time 45 -o /tmp/body -w '%{http_code}' "$url" || echo 000)
@@ -68,14 +69,26 @@ jobs:
               echo "  /sign-in -> HTTP $deep"
               grep -q "_expo/static/js/web" /tmp/deep && echo "  deep link serves the app shell"
               live=0
-            elif [ "$code" = "200" ]; then
-              echo "  200, but not the app:"; head -c 300 /tmp/body; echo
+            elif [ "$code" = "200" ] && grep -qi 'Authentication Required\|vercel.com/sso-api\|data-dpl-id' /tmp/body; then
+              # Vercel answers 200 with its own SSO page when the project has
+              # Deployment Protection on. The app is deployed; it is just gated.
+              echo "  Vercel's login page — Deployment Protection is on for this URL."
+              protected=0
             else
               head -c 200 /tmp/body 2>/dev/null; echo
             fi
           done < /tmp/probe
 
           echo "=================================================="
-          [ "$live" -eq 0 ] && echo "THE APP IS LIVE" && exit 0
+          if [ "$live" -eq 0 ]; then
+            echo "THE APP IS LIVE"
+            exit 0
+          fi
+          if [ "$protected" -eq 0 ]; then
+            echo "The build deployed, but Deployment Protection is gating it."
+            echo "Vercel -> project -> Settings -> Deployment Protection ->"
+            echo "Vercel Authentication -> Disabled (or previews only)."
+            exit 1
+          fi
           echo "No URL served the app."
           exit 1
