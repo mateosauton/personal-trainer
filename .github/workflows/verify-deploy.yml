@@ -1,0 +1,76 @@
+# Asks GitHub what Vercel deployed and then fetches it. Run by hand; this
+# exists because the machine the agent runs on is refused every vercel.app
+# host, and a runner is not.
+name: Verify deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: What Vercel says it deployed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "=== recent deployments ==="
+          gh api "repos/$GITHUB_REPOSITORY/deployments?per_page=10" \
+            --jq '.[] | "id=\(.id) env=\(.environment) ref=\(.ref) sha=\(.sha[0:7]) at=\(.created_at)"'
+
+          echo
+          echo "=== statuses ==="
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/deployments?per_page=10" --jq '.[].id'); do
+            gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=5" \
+              --jq ".[] | \"deployment=$id state=\(.state) url=\(.environment_url // .target_url // \"-\")\"" || true
+          done
+
+          echo
+          gh api "repos/$GITHUB_REPOSITORY/deployments?per_page=10" --jq '.[].id' > /tmp/ids
+          : > /tmp/urls
+          while read -r id; do
+            gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=5" \
+              --jq '.[] | select(.state == "success") | .environment_url // .target_url' >> /tmp/urls || true
+          done < /tmp/ids
+          sort -u /tmp/urls | grep -v '^null$' | grep . > /tmp/urls.uniq || true
+          echo "=== candidate urls ==="
+          cat /tmp/urls.uniq || echo "(none reported)"
+
+      - name: Fetch what is actually being served
+        run: |
+          {
+            cat /tmp/urls.uniq 2>/dev/null
+            echo "https://personal-trainer.vercel.app"
+            echo "https://personal-trainer-mateo-sautons-projects.vercel.app"
+          } | sort -u | grep . > /tmp/probe
+
+          fail=1
+          while read -r url; do
+            echo "--------------------------------------------------"
+            code=$(curl -sS -L --max-time 45 -o /tmp/body -w '%{http_code}' "$url" || echo 000)
+            echo "$url -> HTTP $code ($(wc -c < /tmp/body) bytes)"
+            if [ "$code" = "200" ]; then
+              # The Expo export always names its bundle under /_expo/static/js/web/.
+              if grep -q "_expo/static/js/web" /tmp/body; then
+                echo "  serving the Expo web bundle"
+                grep -o '_expo/static/js/web/[^"]*' /tmp/body | head -1
+                fail=0
+              else
+                echo "  200, but this is not the Expo bundle:"
+                head -c 300 /tmp/body; echo
+              fi
+            else
+              head -c 200 /tmp/body; echo
+            fi
+          done < /tmp/probe
+
+          echo "=================================================="
+          if [ "$fail" -ne 0 ]; then
+            echo "No URL served the app."
+            exit 1
+          fi
+          echo "The app is live."
