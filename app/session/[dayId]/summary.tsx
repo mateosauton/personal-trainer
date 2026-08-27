@@ -33,7 +33,6 @@ export default function SessionSummary() {
   const router = useRouter();
 
   const [lines, setLines] = useState<Line[]>([]);
-  const [rpe, setRpe] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -140,7 +139,8 @@ export default function SessionSummary() {
   const save = async () => {
     setSaving(true);
     try {
-      await finishSession(sessionId, { duration_s: durationS, rpe });
+      // The effort scale is gone from the UI; the column stays nullable.
+      await finishSession(sessionId, { duration_s: durationS, rpe: null });
       router.replace('/(tabs)');
     } finally {
       setSaving(false);
@@ -170,21 +170,6 @@ export default function SessionSummary() {
           <Stat label="Volume" value={formatWeight(totalVolume, units)} />
         </View>
       </Card>
-
-      <Overline style={{ marginTop: space.xl }}>How was it?</Overline>
-      <View style={styles.rpeRow}>
-        {[6, 7, 8, 9, 10].map((v) => (
-          <Chip
-            key={v}
-            label={v === 10 ? 'Max' : `${v}`}
-            selected={rpe === v}
-            onPress={() => {
-              Haptics.selectionAsync();
-              setRpe(rpe === v ? null : v);
-            }}
-          />
-        ))}
-      </View>
 
       <View style={{ gap: space.md, marginTop: space.xl }}>
         {lines.map((line) => (
@@ -219,7 +204,6 @@ const Stat = ({ label, value }: { label: string; value: string }) => (
 const styles = StyleSheet.create({
   center: { alignItems: 'center', justifyContent: 'center' },
   stats: { flexDirection: 'row', justifyContent: 'space-between' },
-  rpeRow: { flexDirection: 'row', gap: space.sm, marginTop: space.md },
   line: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   lineName: { ...type.body, fontWeight: '600' },
 });
