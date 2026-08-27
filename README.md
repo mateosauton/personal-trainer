@@ -25,9 +25,17 @@ npm run catalog # rebuild lib/data/exercises.json from source datasets
 
 ## The hosted build
 
+**https://personal-trainer-mateo-sautons-projects.vercel.app**
+
 The same code runs on the web: `npx expo export --platform web` writes a static
 single-page bundle to `dist/`, and `vercel.json` tells Vercel to do exactly that
-and to rewrite every app route back to `index.html`.
+and to rewrite every app route back to `index.html`. Vercel builds `master` on
+every push. `vercel.json` also states the install command outright, because the
+project predates this repo and would otherwise inherit the one it was set up
+with.
+
+`personal-trainer.vercel.app` is **not** this app — that hostname belongs to an
+unrelated Vercel account.
 
 Supabase credentials for that build live in the committed `.env.production`
 rather than in a dashboard setting, so any checkout builds the same app. That is
