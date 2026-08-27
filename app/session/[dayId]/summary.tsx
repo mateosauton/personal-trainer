@@ -33,10 +33,6 @@ export default function SessionSummary() {
   const router = useRouter();
 
   const [lines, setLines] = useState<Line[]>([]);
-  // Computed on mount, committed only when the user saves.
-  const pendingProgress = useRef<ProgressRow[]>([]);
-  const committed = useRef(false);
-  const [rpe, setRpe] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -143,19 +139,8 @@ export default function SessionSummary() {
   const save = async () => {
     setSaving(true);
     try {
-      // Guarded because a double tap, or a remount while this is in flight,
-      // would otherwise apply the same verdict twice -- two 'hold' results in
-      // a row read as a miss streak of 2 and silently deload the user 10%.
-      if (!committed.current) {
-        committed.current = true;
-        try {
-          await upsertProgress(userId, pendingProgress.current);
-        } catch (e) {
-          committed.current = false;
-          throw e;
-        }
-      }
-      await finishSession(sessionId, { duration_s: durationS, rpe });
+      // The effort scale is gone from the UI; the column stays nullable.
+      await finishSession(sessionId, { duration_s: durationS, rpe: null });
       router.replace('/(tabs)');
     } catch (e) {
       Alert.alert('Could not save', e instanceof Error ? e.message : 'Try again.');
@@ -187,21 +172,6 @@ export default function SessionSummary() {
           <Stat label="Volume" value={formatWeight(totalVolume, units)} />
         </View>
       </Card>
-
-      <Overline style={{ marginTop: space.xl }}>How was it?</Overline>
-      <View style={styles.rpeRow}>
-        {[6, 7, 8, 9, 10].map((v) => (
-          <Chip
-            key={v}
-            label={v === 10 ? 'Max' : `${v}`}
-            selected={rpe === v}
-            onPress={() => {
-              Haptics.selectionAsync();
-              setRpe(rpe === v ? null : v);
-            }}
-          />
-        ))}
-      </View>
 
       <View style={{ gap: space.md, marginTop: space.xl }}>
         {lines.map((line) => (
@@ -236,7 +206,6 @@ const Stat = ({ label, value }: { label: string; value: string }) => (
 const styles = StyleSheet.create({
   center: { alignItems: 'center', justifyContent: 'center' },
   stats: { flexDirection: 'row', justifyContent: 'space-between' },
-  rpeRow: { flexDirection: 'row', gap: space.sm, marginTop: space.md },
   line: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   lineName: { ...type.body, fontWeight: '600' },
 });

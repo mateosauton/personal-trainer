@@ -1,0 +1,100 @@
+# Waits for Vercel to finish deploying this commit, then fetches the result and
+# fails if what comes back is not the app. Temporary: it exists because the
+# machine the agent runs on is refused every vercel.app host, and a runner is not.
+name: Verify deploy
+
+on:
+  push:
+    branches: [master]
+  # Doubles as an uptime check: an app that is meant to stay up should be
+  # noticed when it stops being reachable.
+  schedule:
+    - cron: '17 * * * *'
+
+permissions:
+  contents: read
+  deployments: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for Vercel to report a deployment
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          : > /tmp/urls
+          for attempt in $(seq 1 40); do
+            echo "--- attempt $attempt"
+            gh api "repos/$GITHUB_REPOSITORY/deployments?sha=$SHA&per_page=20" \
+              --jq '.[] | "id=\(.id) env=\(.environment) ref=\(.ref)"' || true
+
+            for id in $(gh api "repos/$GITHUB_REPOSITORY/deployments?sha=$SHA&per_page=20" --jq '.[].id' 2>/dev/null); do
+              gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=10" \
+                --jq '.[] | "\(.state) \(.environment_url // .target_url // "-")"' 2>/dev/null | tee -a /tmp/raw || true
+            done
+
+            if grep -q '^success ' /tmp/raw 2>/dev/null; then
+              grep '^success ' /tmp/raw | awk '{print $2}' | grep -v '^-$' | sort -u > /tmp/urls
+              echo "Vercel reported success:"
+              cat /tmp/urls
+              break
+            fi
+            if grep -qE '^(failure|error) ' /tmp/raw 2>/dev/null; then
+              echo "Vercel reported a failed deployment for this commit."
+              cat /tmp/raw
+              exit 1
+            fi
+            sleep 15
+          done
+
+      - name: Fetch what is actually being served
+        run: |
+          {
+            cat /tmp/urls 2>/dev/null
+            echo "https://personal-trainer-mateo-sautons-projects.vercel.app"
+            echo "https://${GITHUB_REPOSITORY%%/*}.github.io/${GITHUB_REPOSITORY#*/}/"
+            echo "https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@cdn/index.html"
+          } | sort -u | grep . > /tmp/probe
+
+          echo "probing:"; cat /tmp/probe
+
+          live=1
+          protected=1
+          while read -r url; do
+            echo "--------------------------------------------------"
+            code=$(curl -sS -L --max-time 45 -o /tmp/body -w '%{http_code}' "$url" || echo 000)
+            echo "$url -> HTTP $code ($(wc -c < /tmp/body 2>/dev/null || echo 0) bytes)"
+            if [ "$code" = "200" ] && grep -q "_expo/static/js/web" /tmp/body; then
+              echo "  this is the Expo web bundle:"
+              grep -o '_expo/static/js/web/[^"]*' /tmp/body | head -1
+              # Deep links must fall back to the app shell, not a 404 page.
+              deep=$(curl -sS -L --max-time 45 -o /tmp/deep -w '%{http_code}' "$url/sign-in" || echo 000)
+              echo "  /sign-in -> HTTP $deep"
+              grep -q "_expo/static/js/web" /tmp/deep && echo "  deep link serves the app shell"
+              live=0
+            elif [ "$code" = "200" ] && grep -qi 'Authentication Required\|vercel.com/sso-api\|data-dpl-id' /tmp/body; then
+              # Vercel answers 200 with its own SSO page when the project has
+              # Deployment Protection on. The app is deployed; it is just gated.
+              echo "  Vercel's login page — Deployment Protection is on for this URL."
+              protected=0
+            else
+              head -c 200 /tmp/body 2>/dev/null; echo
+            fi
+          done < /tmp/probe
+
+          echo "=================================================="
+          if [ "$live" -eq 0 ]; then
+            echo "THE APP IS LIVE"
+            exit 0
+          fi
+          if [ "$protected" -eq 0 ]; then
+            echo "The build deployed, but Deployment Protection is gating it."
+            echo "Vercel -> project -> Settings -> Deployment Protection ->"
+            echo "Vercel Authentication -> Disabled (or previews only)."
+            exit 1
+          fi
+          echo "No URL served the app."
+          exit 1

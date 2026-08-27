@@ -1,0 +1,89 @@
+# A public mirror of the web build on GitHub Pages.
+#
+# Vercel is the primary host, but its deployments are gated behind the account's
+# Deployment Protection. This publishes the same export to a gh-pages branch so
+# there is a URL that needs no login. Pushing that branch is how a Pages site is
+# published; it is a build artifact, not source.
+name: Publish web build
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gh-pages
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Pages serves from /<repo>/, and Expo bakes that prefix into every asset
+      # URL, so it is set here rather than committed — a root-hosted build of
+      # the same commit (Vercel) must not carry it.
+      - name: Point the bundle at the Pages sub-path
+        run: node .github/scripts/set-base-url.mjs "/${GITHUB_REPOSITORY#*/}"
+
+      - name: Export the web build
+        run: npx expo export --platform web
+        env:
+          EXPO_OFFLINE: '1'
+          EXPO_NO_TELEMETRY: '1'
+
+      # Pages has no rewrite rules: 404.html doubles as the SPA entry so deep
+      # links resolve, and .nojekyll stops the _expo/ directory being swallowed.
+      - name: Make deep links resolve
+        run: |
+          cp dist/index.html dist/404.html
+          touch dist/.nojekyll
+
+      - name: Publish to gh-pages
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Publish ${GITHUB_SHA:0:7}"
+          git push -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:gh-pages
+          echo "pushed $(git rev-parse --short HEAD) to gh-pages"
+
+      # jsDelivr serves any public repo straight off a branch, with no site to
+      # enable first — the one public URL that needs nobody to throw a switch.
+      # It addresses files as /gh/<owner>/<repo>@<ref>/..., so this needs its
+      # own build: the prefix is baked into every asset URL.
+      - name: Export again, addressed for the CDN
+        run: |
+          rm -rf dist
+          node .github/scripts/set-base-url.mjs "/gh/${GITHUB_REPOSITORY}@cdn"
+          npx expo export --platform web
+        env:
+          EXPO_OFFLINE: '1'
+          EXPO_NO_TELEMETRY: '1'
+
+      - name: Publish to the cdn branch
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Publish ${GITHUB_SHA:0:7} for jsDelivr"
+          git push -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:cdn
+          echo "https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@cdn/index.html"

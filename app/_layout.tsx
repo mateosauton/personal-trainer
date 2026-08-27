@@ -1,6 +1,5 @@
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -8,52 +7,53 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { colors } from '@/lib/theme';
 
+const Splash = () => (
+  <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
+    <ActivityIndicator color={colors.accent} />
+  </View>
+);
+
 /**
  * Routing gate. Three states matter: signed out, signed in but not onboarded,
- * and ready. Redirects run in an effect so the navigator has mounted first.
+ * and ready.
+ *
+ * `Stack.Protected` rather than a redirect in an effect: every screen behind
+ * the gate asserts a session, so a screen the user does not belong on must
+ * never mount in the first place. Guarding declaratively also means the
+ * navigator is always there to handle the move — unmounting it and *then*
+ * asking the router to go somewhere is what left the app on a dead spinner.
  */
-function Gate({ children }: { children: React.ReactNode }) {
+function Routes() {
   const { session, profile, loading } = useAuth();
-  const segments = useSegments();
-  const router = useRouter();
+  if (loading) return <Splash />;
 
-  const group = segments[0];
-  const inAuth = group === '(auth)';
-  const inOnboarding = group === '(onboarding)';
+  const signedIn = session != null;
+  const onboarded = signedIn && profile?.onboarded_at != null;
 
-  const needsAuth = !session;
-  const needsOnboarding = Boolean(session) && !profile?.onboarded_at;
+  return (
+    <Stack
+      screenOptions={{
+        headerShown: false,
+        contentStyle: { backgroundColor: colors.bg },
+        animation: 'slide_from_right',
+      }}
+    >
+      <Stack.Protected guard={!signedIn}>
+        <Stack.Screen name="(auth)" />
+      </Stack.Protected>
 
-  // True while the current route does not match where this user belongs, i.e.
-  // a redirect is pending. Children must not render in that window: screens
-  // behind the gate call useUserId(), which throws without a session, and the
-  // redirect only takes effect on the next tick.
-  const misplaced =
-    (needsAuth && !inAuth) ||
-    (needsOnboarding && !inOnboarding) ||
-    (!needsAuth && !needsOnboarding && (inAuth || inOnboarding));
+      {/* Onboarding is not in a route group: a group index would claim "/" too,
+          and the tab bar's Today screen already owns it. */}
+      <Stack.Protected guard={signedIn && !onboarded}>
+        <Stack.Screen name="onboarding" />
+      </Stack.Protected>
 
-  useEffect(() => {
-    if (loading) return;
-    if (needsAuth) {
-      if (!inAuth) router.replace('/(auth)/sign-in');
-      return;
-    }
-    if (needsOnboarding) {
-      if (!inOnboarding) router.replace('/(onboarding)');
-      return;
-    }
-    if (inAuth || inOnboarding) router.replace('/(tabs)');
-  }, [loading, needsAuth, needsOnboarding, inAuth, inOnboarding, router]);
-
-  if (loading || misplaced) {
-    return (
-      <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator color={colors.accent} />
-      </View>
-    );
-  }
-  return <>{children}</>;
+      <Stack.Protected guard={onboarded}>
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="session" options={{ animation: 'slide_from_bottom' }} />
+      </Stack.Protected>
+    </Stack>
+  );
 }
 
 export default function RootLayout() {
@@ -62,20 +62,7 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <AuthProvider>
           <StatusBar style="light" />
-          <Gate>
-            <Stack
-              screenOptions={{
-                headerShown: false,
-                contentStyle: { backgroundColor: colors.bg },
-                animation: 'slide_from_right',
-              }}
-            >
-              <Stack.Screen name="(auth)" />
-              <Stack.Screen name="(onboarding)" />
-              <Stack.Screen name="(tabs)" />
-              <Stack.Screen name="session" options={{ animation: 'slide_from_bottom' }} />
-            </Stack>
-          </Gate>
+          <Routes />
         </AuthProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

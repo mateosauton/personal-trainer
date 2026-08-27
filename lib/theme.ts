@@ -56,6 +56,16 @@ export const type = {
   numeral: { fontSize: 44, fontWeight: '800', letterSpacing: -1.5, lineHeight: 48 },
 } as const;
 
+/**
+ * The hosted web build gets the browser's default focus ring, which is a loud
+ * orange against this palette. react-native-web turns `outlineColor` into CSS;
+ * React Native's own style types have no notion of a focus ring, hence the
+ * cast. On a device it is inert.
+ */
+export const webFocusRing = { outlineColor: colors.accent } as unknown as {
+  outlineColor: string;
+};
+
 export const duration = {
   fast: 140,
   base: 240,

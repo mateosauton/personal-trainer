@@ -18,6 +18,30 @@ export async function updateProfile(userId: string, patch: Partial<Profile>) {
 }
 
 /**
+ * Puts a picked photo in the public `avatars` bucket and hands back its URL.
+ * Objects are pathed under the user's id because that is what the storage
+ * policy checks; the bucket itself is public so the app can render a plain URL.
+ */
+export async function uploadAvatar(userId: string, uri: string): Promise<string> {
+  const response = await fetch(uri);
+  const contentType = response.headers.get('content-type') || 'image/jpeg';
+  const body = await response.arrayBuffer();
+  const extension = contentType.split('/')[1]?.split('+')[0] || 'jpg';
+  // One object per user: re-picking replaces the old photo rather than
+  // orphaning it, and the URL stays stable.
+  const path = `${userId}/avatar.${extension}`;
+
+  const { error } = await supabase.storage
+    .from('avatars')
+    .upload(path, body, { contentType, upsert: true });
+  if (error) throw error;
+
+  const { data } = supabase.storage.from('avatars').getPublicUrl(path);
+  // A cache-buster, since the path never changes but the photo can.
+  return `${data.publicUrl}?v=${Date.now()}`;
+}
+
+/**
  * Writes a generated plan and retires any previous one. Blocks and items are
  * inserted level by level because each level needs the ids the level above
  * just produced.

@@ -12,6 +12,24 @@ export const displayToKg = (value: number, units: Units) =>
 /** Plate maths: kg gyms step in 2.5, lb gyms in 5. */
 export const step = (units: Units) => (units === 'kg' ? 2.5 : 5);
 
+const CM_PER_INCH = 2.54;
+
+/** Height rides along with the weight unit: kg means cm, lb means inches. */
+export const heightUnit = (units: Units) => (units === 'kg' ? 'cm' : 'in');
+
+export const cmToDisplay = (cm: number, units: Units) =>
+  units === 'kg' ? cm : cm / CM_PER_INCH;
+
+export const displayToCm = (value: number, units: Units) =>
+  units === 'kg' ? value : value * CM_PER_INCH;
+
+export function formatHeight(cm: number | null, units: Units): string {
+  if (cm == null) return '—';
+  if (units === 'kg') return `${Math.round(cm)} cm`;
+  const totalInches = Math.round(cm / CM_PER_INCH);
+  return `${Math.floor(totalInches / 12)}′${totalInches % 12}″`;
+}
+
 export function formatWeight(kg: number | null, units: Units): string {
   if (kg == null) return '—';
   const value = kgToDisplay(kg, units);

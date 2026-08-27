@@ -91,6 +91,15 @@ export interface GenerateInput {
   limitations: string[];
 }
 
+/**
+ * Every kind of kit the generator can slot an exercise into. The app no longer
+ * asks what the gym has — a rack of dumbbells is a safe assumption in the kind
+ * of gym this is for, and one fewer question is worth more than the filtering.
+ */
+export const ALL_EQUIPMENT: Exercise['equipment'][] = [
+  'barbell', 'dumbbell', 'kettlebell', 'cable', 'machine', 'bands', 'bodyweight',
+];
+
 export interface GeneratedItem {
   exercise_id: string;
   sets: number;

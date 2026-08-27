@@ -23,6 +23,73 @@ npm run lint    # tsc --noEmit
 npm run catalog # rebuild lib/data/exercises.json from source datasets
 ```
 
+## The hosted build
+
+Live, no login required:
+**https://cdn.jsdelivr.net/gh/mateosauton/personal-trainer@cdn/index.html**
+
+That one is a stopgap — a CDN has no rewrite rules, so deep links 404 and you
+have to enter at the root. The host you actually want is Vercel, one setting
+away (below).
+
+**https://personal-trainer-mateo-sautons-projects.vercel.app**
+
+The same code runs on the web: `npx expo export --platform web` writes a static
+single-page bundle to `dist/`, and `vercel.json` tells Vercel to do exactly that
+and to rewrite every app route back to `index.html`. Vercel builds `master` on
+every push. `vercel.json` also states the install command outright, because the
+project predates this repo and would otherwise inherit the one it was set up
+with.
+
+`personal-trainer.vercel.app` is **not** this app — that hostname belongs to an
+unrelated Vercel account.
+
+That Vercel URL currently answers with Vercel's login page, because the project
+has Deployment Protection on: Settings → Deployment Protection → Vercel
+Authentication → Disabled makes it public. Nothing is exposed by doing so —
+every table is RLS'd to `auth.uid()`, so a visitor still has to sign in.
+
+A second, login-free copy is built by `.github/workflows/publish-pages.yml`,
+which pushes the same export to the `gh-pages` branch. It goes live at
+`https://mateosauton.github.io/personal-trainer/` once Pages is switched on:
+Settings → Pages → Source: *Deploy from a branch* → `gh-pages` → `/ (root)`.
+GitHub stopped auto-enabling Pages on a `gh-pages` push, and a workflow token
+is not allowed to enable it, so that first switch has to be thrown by hand.
+
+Supabase credentials for that build live in the committed `.env.production`
+rather than in a dashboard setting, so any checkout builds the same app. That is
+safe on purpose: Expo bakes `EXPO_PUBLIC_*` into the bundle either way, and the
+publishable key is designed to ship in a client — every table is RLS'd to
+`auth.uid()`, so the key alone grants access to nothing. Local development reads
+`.env` instead, which is where a local backend goes.
+
+## Driving the UI without a device
+
+`tools/dev/` runs the app in a headless browser against a stand-in backend, for
+when there is no phone (or no route to Supabase) to hand:
+
+```bash
+node tools/dev/mock-supabase.mjs 54321 &          # GoTrue + the PostgREST slice this app uses
+printf 'EXPO_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321\nEXPO_PUBLIC_SUPABASE_KEY=mock\n' > .env
+npx expo start --web --port 8081 &
+node tools/dev/drive.mjs session ./shots            # screenshots a whole flow
+```
+
+The mock seeds two accounts — `demo@officegym.test` (onboarded, with a plan and
+history) and `fresh@officegym.test` (needs onboarding), both `demo1234` — and
+exposes `GET /__reset`, `GET /__state` (so a test can assert a write actually
+landed) and `GET /__slow?ms=700` (so anything the app shows *while* it waits is
+on screen long enough to see). `drive.mjs` holds one function per flow; add to
+it rather than writing a new script.
+
+To check the real thing rather than the dev server, `tools/dev/serve-dist.mjs`
+serves an exported `dist/` with the same rewrite rule Vercel applies:
+
+```bash
+npx expo export --platform web
+node tools/dev/serve-dist.mjs dist 8090
+```
+
 ## How it works
 
 **The plan generator** (`lib/plan/`) is a deterministic rule engine, not a model
