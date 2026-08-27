@@ -1,6 +1,8 @@
 import type { Session } from '@supabase/supabase-js';
+import * as Linking from 'expo-linking';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
+import { completeAuthFromUrl } from './deep-link';
 import { getProfile } from './db/queries';
 import { supabase } from './db/supabase';
 import type { Profile } from './types';
@@ -32,7 +34,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setLoading(false);
       }
     });
-    return () => sub.subscription.unsubscribe();
+
+    // An email confirmation link opens the app with the tokens attached.
+    // onAuthStateChange picks the session up once completeAuthFromUrl sets it.
+    Linking.getInitialURL().then((url) => {
+      if (url) completeAuthFromUrl(url);
+    });
+    const linkSub = Linking.addEventListener('url', ({ url }) => {
+      completeAuthFromUrl(url);
+    });
+
+    return () => {
+      sub.subscription.unsubscribe();
+      linkSub.remove();
+    };
   }, []);
 
   const userId = session?.user.id;

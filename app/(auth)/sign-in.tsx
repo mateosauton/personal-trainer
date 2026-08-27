@@ -3,6 +3,7 @@ import { KeyboardAvoidingView, Platform, StyleSheet, TextInput, View } from 'rea
 
 import { Body, Button, Display, Muted, Overline, Screen } from '@/components/ui';
 import { supabase } from '@/lib/db/supabase';
+import { authRedirectTo } from '@/lib/deep-link';
 import { colors, radius, space, type } from '@/lib/theme';
 
 export default function SignIn() {
@@ -19,11 +20,17 @@ export default function SignIn() {
     setNotice(null);
     try {
       if (mode === 'signUp') {
-        const { data, error: signUpError } = await supabase.auth.signUp({ email, password });
+        const { data, error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+          options: { emailRedirectTo: authRedirectTo() },
+        });
         if (signUpError) throw signUpError;
         // With email confirmation on, there is no session yet -- say so rather
         // than leaving the user staring at an unchanged screen.
-        if (!data.session) setNotice('Check your email to confirm, then sign in.');
+        if (!data.session) {
+          setNotice('Check your email, then tap the link on this phone to come back here.');
+        }
       } else {
         const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
         if (signInError) throw signInError;
