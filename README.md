@@ -37,6 +37,18 @@ with.
 `personal-trainer.vercel.app` is **not** this app — that hostname belongs to an
 unrelated Vercel account.
 
+That Vercel URL currently answers with Vercel's login page, because the project
+has Deployment Protection on: Settings → Deployment Protection → Vercel
+Authentication → Disabled makes it public. Nothing is exposed by doing so —
+every table is RLS'd to `auth.uid()`, so a visitor still has to sign in.
+
+A second, login-free copy is built by `.github/workflows/publish-pages.yml`,
+which pushes the same export to the `gh-pages` branch. It goes live at
+`https://mateosauton.github.io/personal-trainer/` once Pages is switched on:
+Settings → Pages → Source: *Deploy from a branch* → `gh-pages` → `/ (root)`.
+GitHub stopped auto-enabling Pages on a `gh-pages` push, and a workflow token
+is not allowed to enable it, so that first switch has to be thrown by hand.
+
 Supabase credentials for that build live in the committed `.env.production`
 rather than in a dashboard setting, so any checkout builds the same app. That is
 safe on purpose: Expo bakes `EXPO_PUBLIC_*` into the bundle either way, and the
