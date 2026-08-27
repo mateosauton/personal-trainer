@@ -98,10 +98,10 @@ export default function SignIn() {
 }
 
 const styles = StyleSheet.create({
-  content: { flexGrow: 1, justifyContent: 'space-between' },
-  header: { marginTop: space.xxxl },
+  content: { flexGrow: 1 },
+  header: { marginTop: space.xl },
   display: { marginTop: space.md },
-  form: { gap: space.md, marginTop: space.xxxl },
+  form: { gap: space.md, marginTop: space.xxl },
   input: {
     ...type.body,
     color: colors.text,
