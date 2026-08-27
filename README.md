@@ -25,6 +25,13 @@ npm run catalog # rebuild lib/data/exercises.json from source datasets
 
 ## The hosted build
 
+Live, no login required:
+**https://cdn.jsdelivr.net/gh/mateosauton/personal-trainer@cdn/index.html**
+
+That one is a stopgap — a CDN has no rewrite rules, so deep links 404 and you
+have to enter at the root. The host you actually want is Vercel, one setting
+away (below).
+
 **https://personal-trainer-mateo-sautons-projects.vercel.app**
 
 The same code runs on the web: `npx expo export --platform web` writes a static
