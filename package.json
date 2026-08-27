@@ -2,6 +2,9 @@
   "name": "office-gym-trainer",
   "version": "1.0.0",
   "main": "expo-router/entry",
+  "engines": {
+    "node": "22.x"
+  },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
     "@gorhom/bottom-sheet": "^5.2.14",
