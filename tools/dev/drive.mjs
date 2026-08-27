@@ -187,6 +187,39 @@ async function run() {
       await page.waitForTimeout(1500);
       await shot('resting');
     },
+
+    // --- a session from Begin to Save & finish ---------------------------
+    async fullSession() {
+      await signIn('onboarded');
+      await page.waitForTimeout(1500);
+      await tap('Start session');
+      await page.waitForTimeout(2500);
+      await tap('Begin');
+      await page.waitForTimeout(3000);
+
+      // Click whatever the current step offers until the summary shows up.
+      for (let i = 0; i < 80; i += 1) {
+        if (await page.getByText('Save & finish', { exact: true }).count()) break;
+        const buttons = ['Done', 'Complete set', 'Skip rest', 'Next set', 'Finish session'];
+        let clicked = false;
+        for (const label of buttons) {
+          const button = page.getByText(label, { exact: true });
+          if (await button.count()) {
+            await button.first().click();
+            clicked = true;
+            break;
+          }
+        }
+        if (!clicked) break;
+        await page.waitForTimeout(400);
+      }
+
+      await page.waitForTimeout(2500);
+      await shot('summary');
+      await page.mouse.wheel(0, 600);
+      await page.waitForTimeout(600);
+      await shot('summary-scrolled');
+    },
   };
 
   const flow = flows[scenario];
