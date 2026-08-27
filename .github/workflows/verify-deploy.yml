@@ -6,6 +6,10 @@ name: Verify deploy
 on:
   push:
     branches: [master]
+  # Doubles as an uptime check: an app that is meant to stay up should be
+  # noticed when it stops being reachable.
+  schedule:
+    - cron: '17 * * * *'
 
 permissions:
   contents: read
@@ -16,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Wait for Vercel to report a deployment
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.sha }}
