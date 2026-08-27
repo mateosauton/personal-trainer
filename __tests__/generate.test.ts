@@ -140,10 +140,4 @@ describe('generatePlan', () => {
     expect(finisher(short).rounds).toBeLessThan(finisher(long).rounds);
   });
 
-  it('favours exercises that have real animations', () => {
-    const plan = generatePlan(base);
-    const ids = plan.days.flatMap((d) => d.blocks.flatMap((b) => b.items.map((i) => i.exercise_id)));
-    const animated = ids.filter((id) => getExercise(id)?.media_kind === 'animated');
-    expect(animated.length).toBeGreaterThan(0);
-  });
 });

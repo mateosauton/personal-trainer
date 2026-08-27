@@ -91,10 +91,8 @@ export interface GeneratedPlan {
 /**
  * Picks one exercise for a slot.
  *
- * Two preferences beyond the hard filters: exercises already used this week are
- * skipped so a week is varied, and among equally valid candidates the ones with
- * real animated demos (RepDB) win -- the app looks better the more often those
- * appear.
+ * Beyond the hard filters, exercises already used this week are skipped so a
+ * week is varied.
  */
 function pick(
   patterns: Pattern[],
@@ -114,10 +112,7 @@ function pick(
   const shortlist = prefer ? usable.filter(prefer) : [];
   const source = shortlist.length > 0 ? shortlist : usable;
 
-  const animated = source.filter((e) => e.media_kind === 'animated');
-  const tier = animated.length > 0 && rng() < 0.75 ? animated : source;
-
-  const choice = shuffle(tier, rng)[0];
+  const choice = shuffle(source, rng)[0];
   used.add(choice.id);
   return choice;
 }

@@ -20,22 +20,20 @@ const AnimatedImage = Animated.createAnimatedComponent(Image);
 interface Props {
   exercise: Exercise;
   style?: ViewStyle;
-  /** Paused media reads as a still frame -- used behind the rest timer. */
+  /** Paused holds the start frame -- used behind the rest timer. */
   paused?: boolean;
 }
 
 /**
- * Renders an exercise demo without the caller knowing which media tier it came
- * from. RepDB exercises play a real looping WebP; everything else crossfades
- * between the start and end stills, which reads as the movement's two ends.
+ * Shows an exercise demo by crossfading its start and end stills, which reads
+ * as the two ends of the movement.
  */
 export function ExerciseMedia({ exercise, style, paused = false }: Props) {
   const media = resolveMedia(exercise);
   const progress = useSharedValue(0);
-  const isCrossfade = media?.kind === 'crossfade';
 
   useEffect(() => {
-    if (!isCrossfade || paused) {
+    if (!media || paused) {
       cancelAnimation(progress);
       return;
     }
@@ -52,7 +50,7 @@ export function ExerciseMedia({ exercise, style, paused = false }: Props) {
       false,
     );
     return () => cancelAnimation(progress);
-  }, [isCrossfade, paused, exercise.id, progress]);
+  }, [media, paused, exercise.id, progress]);
 
   const endStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
 
@@ -60,35 +58,19 @@ export function ExerciseMedia({ exercise, style, paused = false }: Props) {
     return <View style={[styles.frame, styles.empty, style]} />;
   }
 
-  if (media.kind === 'animated') {
-    return (
-      <View style={[styles.frame, style]}>
-        <Image
-          source={media.source}
-          style={StyleSheet.absoluteFill}
-          contentFit="contain"
-          // expo-image plays animated WebP natively; pausing swaps to frame 0.
-          autoplay={!paused}
-          cachePolicy="memory-disk"
-          transition={duration.fast}
-        />
-      </View>
-    );
-  }
-
   return (
     <View style={[styles.frame, style]}>
       <Image
         source={media.start}
         style={StyleSheet.absoluteFill}
-        contentFit="contain"
+        contentFit="cover"
         cachePolicy="memory-disk"
         transition={duration.base}
       />
       <AnimatedImage
         source={media.end}
         style={[StyleSheet.absoluteFill, endStyle]}
-        contentFit="contain"
+        contentFit="cover"
         cachePolicy="memory-disk"
       />
     </View>

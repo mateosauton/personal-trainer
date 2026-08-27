@@ -19,9 +19,11 @@ export type Pattern =
   | 'biceps' | 'triceps' | 'delts' | 'calves' | 'traps' | 'forearms'
   | 'carry' | 'other';
 
-export type MediaRefs =
-  | { asset: string }
-  | { start: string; end: string };
+/** The two stills the app crossfades to convey a movement. */
+export interface MediaRefs {
+  start: string;
+  end: string;
+}
 
 export interface Exercise {
   id: string;
@@ -33,15 +35,11 @@ export interface Exercise {
   level: Level;
   is_bodyweight: boolean;
   is_unilateral: boolean;
-  met: number | null;
   primary_muscles: string[];
   secondary_muscles: string[];
   instructions: string[];
-  tips: string[];
-  media_kind: 'animated' | 'crossfade';
   media_refs: MediaRefs;
   category: Category;
-  source: 'repdb' | 'fedb';
   pattern: Pattern;
 }
 

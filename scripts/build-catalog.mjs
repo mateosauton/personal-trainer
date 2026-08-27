@@ -1,21 +1,16 @@
 /**
- * Builds the exercise catalog from two sources and emits both artifacts the app
- * needs.
+ * Builds the exercise catalog from free-exercise-db.
  *
  * Emits lib/data/exercises.json: the catalog bundled in the app. The plan
  * generator runs on-device and reads it, so it must work with no network.
  * Postgres deliberately holds no copy -- see the catalog_is_client_side
  * migration.
  *
- * Sources:
- *   free-exercise-db  873 exercises, Unlicense (public domain), 2 stills each
- *   RepDB preview      16 exercises, CC BY-NC 4.0, true animated WebP
- *
- * RepDB wins on id collisions -- its metadata is richer (met, is_unilateral,
- * tips, force_type).
+ * Source: free-exercise-db, 873 exercises, Unlicense (public domain), two
+ * stills per exercise which the app crossfades to convey the movement.
  */
 
-import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,26 +23,19 @@ const FEDB_IMG = 'https://cdn.jsdelivr.net/gh/yuhonas/free-exercise-db@main/exer
 const EQUIPMENT = {
   barbell: 'barbell',
   'e-z curl bar': 'barbell',
-  ez_bar: 'barbell',
   dumbbell: 'dumbbell',
   cable: 'cable',
   machine: 'machine',
-  smith_machine: 'machine',
-  plate_loaded_lateral_raise_machine: 'machine',
   kettlebells: 'kettlebell',
-  kettlebell: 'kettlebell',
   bands: 'bands',
   'body only': 'bodyweight',
-  pull_up_bar: 'bodyweight',
   'medicine ball': 'other',
   'exercise ball': 'other',
-  stability_ball: 'other',
   'foam roll': 'other',
-  battle_rope: 'other',
   other: 'other',
 };
 
-const LEVEL = { beginner: 'beginner', intermediate: 'intermediate', expert: 'advanced', advanced: 'advanced' };
+const LEVEL = { beginner: 'beginner', intermediate: 'intermediate', expert: 'advanced' };
 
 /**
  * Movement pattern drives which block an exercise can fill. Name keywords are
@@ -76,7 +64,6 @@ const MUSCLE_PATTERNS = {
   quadriceps: 'squat',
   hamstrings: 'hinge',
   glutes: 'hinge',
-  lower_back: 'hinge',
   'lower back': 'hinge',
   chest: 'h_push',
   shoulders: 'v_push',
@@ -106,7 +93,7 @@ function classifyPattern({ name, category, primaryMuscles }) {
 }
 
 /** free-exercise-db ids are directory names; images are `<id>/0.jpg` and `/1.jpg`. */
-function fromFedb(raw) {
+function normalize(raw) {
   const equipment = EQUIPMENT[raw.equipment ?? 'other'] ?? 'other';
   return {
     id: raw.id,
@@ -118,18 +105,14 @@ function fromFedb(raw) {
     level: LEVEL[raw.level] ?? 'beginner',
     is_bodyweight: equipment === 'bodyweight',
     is_unilateral: /\b(one.?arm|single.?leg|single.?arm|one.?leg|alternating)\b/i.test(raw.name),
-    met: null,
     primary_muscles: raw.primaryMuscles ?? [],
     secondary_muscles: raw.secondaryMuscles ?? [],
     instructions: raw.instructions ?? [],
-    tips: [],
-    media_kind: 'crossfade',
     media_refs: {
       start: `${FEDB_IMG}/${raw.images[0]}`,
       end: `${FEDB_IMG}/${raw.images[1] ?? raw.images[0]}`,
     },
     category: raw.category ?? 'strength',
-    source: 'fedb',
     pattern: classifyPattern({
       name: raw.name,
       category: raw.category,
@@ -138,56 +121,12 @@ function fromFedb(raw) {
   };
 }
 
-function fromRepdb(raw) {
-  const equipment = EQUIPMENT[raw.equipment ?? 'body only'] ?? 'bodyweight';
-  return {
-    id: raw.id,
-    name: raw.name_en,
-    body_part: raw.body_part,
-    equipment: raw.equipment == null ? 'bodyweight' : equipment,
-    mechanic: raw.mechanic ?? null,
-    force_type: raw.force_type ?? null,
-    level: LEVEL[raw.difficulty] ?? 'beginner',
-    // RepDB tags pull-up as non-bodyweight because it lists a pull-up bar as
-    // equipment. For load maths it plainly is bodyweight, so trust the bar.
-    is_bodyweight: raw.is_bodyweight || raw.equipment === 'pull_up_bar' || raw.equipment == null,
-    is_unilateral: raw.is_unilateral ?? false,
-    met: raw.met ?? null,
-    primary_muscles: raw.primary_muscles ?? [],
-    secondary_muscles: raw.secondary_muscles ?? [],
-    instructions: raw.instructions_en ?? [],
-    tips: raw.tips_en ?? [],
-    media_kind: 'animated',
-    // Resolved against the bundled asset map in lib/media/assets.ts.
-    media_refs: { asset: `${raw.id}.webp` },
-    category: raw.category ?? 'strength',
-    source: 'repdb',
-    pattern: classifyPattern({
-      name: raw.name_en,
-      category: raw.category,
-      primaryMuscles: [raw.body_part],
-    }),
-  };
-}
-
 const main = async () => {
   const res = await fetch(FEDB_URL);
   if (!res.ok) throw new Error(`free-exercise-db fetch failed: ${res.status}`);
-  const fedb = await res.json();
+  const raw = await res.json();
 
-  const repdb = JSON.parse(
-    readFileSync(join(ROOT, 'data/repdb/preview.json'), 'utf8'),
-  ).exercises;
-
-  const byId = new Map();
-  for (const raw of fedb) byId.set(raw.id, fromFedb(raw));
-  let overwritten = 0;
-  for (const raw of repdb) {
-    if (byId.has(raw.id)) overwritten += 1;
-    byId.set(raw.id, fromRepdb(raw));
-  }
-
-  const catalog = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+  const catalog = raw.map(normalize).sort((a, b) => a.id.localeCompare(b.id));
 
   mkdirSync(join(ROOT, 'lib/data'), { recursive: true });
   writeFileSync(
@@ -199,8 +138,7 @@ const main = async () => {
     acc[e.pattern] = (acc[e.pattern] ?? 0) + 1;
     return acc;
   }, {});
-  console.log(`catalog: ${catalog.length} exercises (${overwritten} RepDB id collisions)`);
-  console.log(`animated: ${catalog.filter((e) => e.media_kind === 'animated').length}`);
+  console.log(`catalog: ${catalog.length} exercises`);
   console.log('patterns:', counts);
 };
 

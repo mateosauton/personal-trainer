@@ -2,8 +2,8 @@ import raw from '@/lib/data/exercises.json';
 import type { Category, Equipment, Exercise, Pattern } from '@/lib/types';
 
 /**
- * The bundled catalog: 889 exercises merged from free-exercise-db (public
- * domain) and the RepDB preview (CC BY-NC). Built by scripts/build-catalog.mjs.
+ * The bundled catalog: 873 exercises from free-exercise-db, public domain
+ * under the Unlicense. Built by scripts/build-catalog.mjs.
  */
 export const CATALOG = raw as unknown as Exercise[];
 

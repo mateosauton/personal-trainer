@@ -1,7 +1,7 @@
 # Office Gym
 
 A personal training app for the office gym. Onboards you, generates a plan from
-your answers, and runs each session as **Warm-up + 4 blocks** with an animated
+your answers, and runs each session as **Warm-up + 4 blocks** with an exercise
 demo, target reps, and a weight prompt after every set.
 
 Built with Expo / React Native (runs in Expo Go, no Xcode needed) and Supabase.
@@ -41,29 +41,19 @@ backs the load off 10%.
 **Bodyweight movements** store load as `bodyweight + added_load_kg`, so a
 weighted pull-up is comparable to a lat pulldown and estimated 1RMs stay honest.
 
-**The catalog** is 889 exercises bundled in the app (`lib/data/exercises.json`),
+**The catalog** is 873 exercises bundled in the app (`lib/data/exercises.json`),
 not in Postgres — it is static reference data versioned with the binary, and the
 generator runs on-device, so it must work with no network. Postgres holds only
 your data, every table RLS'd to `auth.uid()`.
 
-**Media** has two tiers behind one component (`components/ExerciseMedia.tsx`):
-16 exercises play a real looping animation, the rest crossfade between start and
-end stills. The player never branches on which.
+**Media** is one path (`components/ExerciseMedia.tsx`): every exercise crossfades
+between its start and end stills, which reads as the two ends of the movement.
+The stills stream from a CDN and are disk-cached, so a session repeats offline
+after its first run.
 
-## Licensing — read before shipping this
+## Licensing
 
-**This app is licensed for personal, non-commercial use only.**
-
-The 16 animations in `assets/exercises/` come from the [RepDB](https://repdb.co)
-preview pack under **CC BY-NC 4.0**: attribution required, non-commercial use
-only. If this ever goes to the App Store, gets sold, or is deployed as a company
-product, either delete `assets/exercises/` — the media layer falls back cleanly
-to tier 2, no code change — or buy a commercial tier ($499 Standard includes
-animations).
-
-The remaining artwork and exercise data come from
+Exercise data and images come from
 [free-exercise-db](https://github.com/yuhonas/free-exercise-db), public domain
-under the Unlicense.
-
-Both credits are surfaced in-app on Profile → Attribution, which is a licence
-obligation, not decoration.
+under the Unlicense. Nothing here restricts commercial use, and the credit in
+Profile -> Attribution is courtesy rather than obligation.
