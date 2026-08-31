@@ -70,8 +70,7 @@ when there is no phone (or no route to Supabase) to hand:
 
 ```bash
 node tools/dev/mock-supabase.mjs 54321 &          # GoTrue + the PostgREST slice this app uses
-printf 'EXPO_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321\nEXPO_PUBLIC_SUPABASE_KEY=mock\n' > .env
-npx expo start --web --port 8081 &
+NODE_ENV=test npx expo start --web --port 8081 &  # loads the committed .env.test mock settings
 node tools/dev/drive.mjs session ./shots            # screenshots a whole flow
 ```
 
