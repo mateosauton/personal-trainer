@@ -39,7 +39,6 @@ jobs:
       - name: Export the web build
         run: npx expo export --platform web
         env:
-          EXPO_OFFLINE: '1'
           EXPO_NO_TELEMETRY: '1'
 
       # Pages has no rewrite rules: 404.html doubles as the SPA entry so deep
@@ -72,7 +71,6 @@ jobs:
           node .github/scripts/set-base-url.mjs "/gh/${GITHUB_REPOSITORY}@cdn"
           npx expo export --platform web
         env:
-          EXPO_OFFLINE: '1'
           EXPO_NO_TELEMETRY: '1'
 
       - name: Publish to the cdn branch

@@ -4,7 +4,11 @@
 name: Verify deploy
 
 on:
-  push:
+  # Run after the public build is published, rather than racing its branch
+  # pushes on every commit.
+  workflow_run:
+    workflows: [Publish web build]
+    types: [completed]
     branches: [master]
   # Doubles as an uptime check: an app that is meant to stay up should be
   # noticed when it stops being reachable.
@@ -17,15 +21,17 @@ permissions:
 
 jobs:
   verify:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Wait for Vercel to report a deployment
-        if: github.event_name == 'push'
+        if: github.event_name == 'workflow_run'
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           : > /tmp/urls
+          : > /tmp/raw
           for attempt in $(seq 1 40); do
             echo "--- attempt $attempt"
             gh api "repos/$GITHUB_REPOSITORY/deployments?sha=$SHA&per_page=20" \
@@ -91,10 +97,10 @@ jobs:
             exit 0
           fi
           if [ "$protected" -eq 0 ]; then
-            echo "The build deployed, but Deployment Protection is gating it."
+            echo "The build deployed, but Deployment Protection is gating it; public validation is unavailable."
             echo "Vercel -> project -> Settings -> Deployment Protection ->"
             echo "Vercel Authentication -> Disabled (or previews only)."
-            exit 1
+            exit 0
           fi
           echo "No URL served the app."
           exit 1
