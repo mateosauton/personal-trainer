@@ -7,26 +7,14 @@
  * presets rather than babel-preset-expo.
  */
 module.exports = {
-  testEnvironment: 'node',
-  testMatch: ['**/__tests__/**/*.test.ts'],
-  // .claude/ holds throwaway git worktrees, whose copies of these same suites
-  // would otherwise be collected and run again.
+  preset: 'jest-expo',
+  testMatch: ['**/__tests__/**/*.test.{ts,tsx}'],
   testPathIgnorePatterns: ['/node_modules/', '/.claude/'],
-  transform: {
-    '^.+\\.tsx?$': [
-      'babel-jest',
-      {
-        // Ignore the project babel.config.js: it pulls in
-        // babel-preset-expo and the Reanimated worklets plugin, neither of
-        // which these node-side tests need.
-        configFile: false,
-        babelrc: false,
-        presets: [
-          ['@babel/preset-env', { targets: { node: 'current' } }],
-          '@babel/preset-typescript',
-        ],
-      },
-    ],
+  setupFilesAfterEnv: ['<rootDir>/jest-setup.js'],
+  moduleNameMapper: {
+    '^@/(.*)$': '<rootDir>/$1',
+    // Jest picks lucide's `react-native` export condition, which is untransformed
+    // ESM. Metro handles that; jest does not, so point it at the CJS build.
+    '^lucide-react-native/icons/(.*)$': '<rootDir>/node_modules/lucide-react-native/dist/cjs/icons/$1.js',
   },
-  moduleNameMapper: { '^@/(.*)$': '<rootDir>/$1' },
 };

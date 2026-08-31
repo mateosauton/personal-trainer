@@ -22,13 +22,14 @@ interface Props {
   style?: ViewStyle;
   /** Paused holds the start frame -- used behind the rest timer. */
   paused?: boolean;
+  testID?: string;
 }
 
 /**
  * Shows an exercise demo by crossfading its start and end stills, which reads
  * as the two ends of the movement.
  */
-export function ExerciseMedia({ exercise, style, paused = false }: Props) {
+export function ExerciseMedia({ exercise, style, paused = false, testID }: Props) {
   // Memoised: resolveMedia builds a new object every call, and an unstable
   // dep restarted the crossfade on every re-render of the player.
   const media = useMemo(() => resolveMedia(exercise), [exercise.id]);
@@ -57,11 +58,11 @@ export function ExerciseMedia({ exercise, style, paused = false }: Props) {
   const endStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
 
   if (!media) {
-    return <View style={[styles.frame, styles.empty, style]} />;
+    return <View testID={testID} style={[styles.frame, styles.empty, style]} />;
   }
 
   return (
-    <View style={[styles.frame, style]}>
+    <View testID={testID} style={[styles.frame, style]}>
       <Image
         source={media.start}
         style={StyleSheet.absoluteFill}

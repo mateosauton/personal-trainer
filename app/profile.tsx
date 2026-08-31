@@ -1,12 +1,14 @@
 import * as Haptics from 'expo-haptics';
+import { useRouter } from 'expo-router';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useState } from 'react';
-import { Alert, Keyboard, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Keyboard, Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { Attribution } from '@/components/Attribution';
 import { NumberField } from '@/components/NumberField';
 import { Button, Card, Chip, Display, Muted, Overline, Screen } from '@/components/ui';
+import { confirm, notify } from '@/lib/alerts';
 import { useAuth, useUserId } from '@/lib/auth';
 import { savePlan, updateProfile, uploadAvatar } from '@/lib/db/queries';
 import { ALL_EQUIPMENT, generatePlan } from '@/lib/plan/generate';
@@ -16,6 +18,7 @@ import type { Units } from '@/lib/types';
 
 export default function ProfileTab() {
   const userId = useUserId();
+  const router = useRouter();
   const { profile, refreshProfile, signOut } = useAuth();
 
   const units: Units = profile?.units ?? 'kg';
@@ -43,7 +46,7 @@ export default function ProfileTab() {
     Haptics.selectionAsync();
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert('Photo access is off', 'Allow photo access to change your picture.');
+      notify('Photo access is off', 'Allow photo access to change your picture.');
       return;
     }
     const picked = await ImagePicker.launchImageLibraryAsync({
@@ -72,7 +75,7 @@ export default function ProfileTab() {
       setPhotoUri(null);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
-      Alert.alert('Could not save', e instanceof Error ? e.message : 'Try again.');
+      notify('Could not save', e instanceof Error ? e.message : 'Try again.');
     } finally {
       setSaving(false);
     }
@@ -91,55 +94,60 @@ export default function ProfileTab() {
     await refreshProfile();
   };
 
-  const regenerate = () => {
-    if (equipment.length === 0) {
-      Alert.alert('Pick some equipment', 'A plan needs at least one thing to train with.');
+  const regenerate = async () => {
+    // Onboarding sets both, but a profile row that predates it -- or one whose
+    // write failed -- would otherwise make this button do nothing at all.
+    if (!profile?.goal || !profile.experience) {
+      notify('Not enough to go on', 'Finish onboarding first so we know your goal and experience.');
       return;
     }
-    Alert.alert(
-      'Build a new plan?',
-      'Your logged sessions and weights stay. The current plan is replaced.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Rebuild',
-          onPress: async () => {
-            if (!profile?.goal || !profile.experience) return;
-            setRegenerating(true);
-            try {
-              // Rebuild uses the chips as they are on screen, so persist them
-              // first rather than generating against edits that were never saved.
-              await updateProfile(userId, { equipment });
-              await savePlan(
-                userId,
-                generatePlan({
-                  userId,
-                  goal: profile.goal,
-                  experience: profile.experience,
-                  daysPerWeek: profile.days_per_week ?? 4,
-                  sessionMinutes: profile.session_minutes ?? 45,
-                  equipment: ALL_EQUIPMENT,
-                  limitations: profile.limitations,
-                }),
-              );
-              await refreshProfile();
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            } catch (e) {
-              Alert.alert('Could not rebuild', e instanceof Error ? e.message : 'Try again.');
-            } finally {
-              setRegenerating(false);
-            }
-          },
-        },
-      ],
-    );
+    const rebuild = await confirm({
+      title: 'Build a new plan?',
+      message: 'Your logged sessions and weights stay. The current plan is replaced.',
+      confirmLabel: 'Rebuild',
+    });
+    if (!rebuild) return;
+
+    setRegenerating(true);
+    try {
+      // Keep the profile honest about what the plan was built from.
+      await updateProfile(userId, { equipment: ALL_EQUIPMENT });
+      await savePlan(
+        userId,
+        generatePlan({
+          userId,
+          goal: profile.goal,
+          experience: profile.experience,
+          daysPerWeek: profile.days_per_week ?? 4,
+          sessionMinutes: profile.session_minutes ?? 45,
+          equipment: ALL_EQUIPMENT,
+          limitations: profile.limitations,
+        }),
+      );
+      await refreshProfile();
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e) {
+      notify('Could not rebuild', e instanceof Error ? e.message : 'Try again.');
+    } finally {
+      setRegenerating(false);
+    }
   };
 
   const avatar = photoUri ?? profile?.avatar_url ?? null;
 
   return (
     <Screen>
-      <Overline>You</Overline>
+      <View style={styles.topRow}>
+        <Overline>You</Overline>
+        {/* A modal needs its own way out; there is no tab to go back to. */}
+        <Button
+          variant="ghost"
+          icon="close"
+          accessibilityLabel="Close profile"
+          onPress={() => router.back()}
+          style={styles.close}
+        />
+      </View>
       <Display style={{ marginTop: space.sm }}>Profile</Display>
 
       <Card style={{ marginTop: space.xl, gap: space.md }}>
@@ -212,6 +220,8 @@ export default function ProfileTab() {
 }
 
 const styles = StyleSheet.create({
+  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  close: { minHeight: 44, paddingHorizontal: 0 },
   row: { flexDirection: 'row', gap: space.sm, alignItems: 'center' },
   labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   avatar: {

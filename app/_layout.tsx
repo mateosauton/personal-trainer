@@ -1,11 +1,15 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { profileGate } from '@/lib/auth-gate';
+import { Button, Body, Screen } from '@/components/ui';
 import { colors } from '@/lib/theme';
+import { startOutboxSync } from '@/lib/session/sync';
 
 const Splash = () => (
   <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
@@ -24,11 +28,22 @@ const Splash = () => (
  * asking the router to go somewhere is what left the app on a dead spinner.
  */
 function Routes() {
-  const { session, profile, loading } = useAuth();
+  const { session, profileState, loading, refreshProfile, signOut } = useAuth();
   if (loading) return <Splash />;
 
   const signedIn = session != null;
-  const onboarded = signedIn && profile?.onboarded_at != null;
+  const gate = profileGate(signedIn, profileState);
+  if (gate === 'loading') return <Splash />;
+  if (gate === 'error') {
+    return (
+      <Screen scroll={false} style={{ justifyContent: 'center' }}>
+        <Body>Couldn’t reach the server. Your plan has not been changed.</Body>
+        <Button title="Retry" onPress={() => { void refreshProfile(); }} style={{ marginTop: 24 }} />
+        <Button title="Sign out" variant="ghost" onPress={() => { void signOut(); }} />
+      </Screen>
+    );
+  }
+  const onboarded = gate === 'ready';
 
   return (
     <Stack
@@ -50,13 +65,25 @@ function Routes() {
 
       <Stack.Protected guard={onboarded}>
         <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="session" options={{ animation: 'slide_from_bottom' }} />
+        {/* Profile is a modal over the tabs, opened by the avatar on Home. */}
+        <Stack.Screen name="profile" options={{ presentation: 'modal' }} />
+        {/* A live session owns the screen: full-screen, no tab bar, and no
+            swipe-back — dropping out mid-set by accident loses the logged work. */}
+        <Stack.Screen
+          name="session"
+          options={{
+            animation: 'slide_from_bottom',
+            presentation: 'fullScreenModal',
+            gestureEnabled: false,
+          }}
+        />
       </Stack.Protected>
     </Stack>
   );
 }
 
 export default function RootLayout() {
+  useEffect(() => startOutboxSync(), []);
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>

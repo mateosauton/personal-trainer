@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Keyboard, KeyboardAvoidingView, Platform, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body, Button, Display, Muted, Overline, Screen } from '@/components/ui';
 import { supabase } from '@/lib/db/supabase';
 import { authRedirectTo } from '@/lib/deep-link';
+import { devLoginEmail, devLoginEnabled, devSignIn } from '@/lib/dev-auth';
 import { colors, radius, space, type, webFocusRing } from '@/lib/theme';
 
 export default function SignIn() {
@@ -15,8 +16,12 @@ export default function SignIn() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const insets = useSafeAreaInsets();
+  const passwordRef = useRef<TextInput>(null);
 
   const isSignUp = mode === 'signUp';
+  // The keyboard's return key and the button are the same action, so they read
+  // the same condition rather than each deciding for themselves.
+  const canSubmit = email.length > 0 && password.length >= 6 && !busy;
 
   /** Both routes back to sign-in run through here so they behave identically. */
   const goTo = (next: 'signIn' | 'signUp') => {
@@ -24,6 +29,19 @@ export default function SignIn() {
     setMode(next);
     setError(null);
     setNotice(null);
+  };
+
+  const devSubmit = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await devSignIn();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Dev sign-in failed');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const submit = async () => {
@@ -66,7 +84,8 @@ export default function SignIn() {
         <View style={[styles.topBar, { paddingTop: insets.top + space.sm }]}>
           <Button
             variant="ghost"
-            title="← Back to sign in"
+            icon="back"
+            title="Back to sign in"
             accessibilityLabel="Back to sign in"
             onPress={() => goTo('signIn')}
             style={styles.backButton}
@@ -96,16 +115,24 @@ export default function SignIn() {
             autoCapitalize="none"
             autoComplete="email"
             keyboardType="email-address"
+            returnKeyType="next"
+            submitBehavior="submit"
+            onSubmitEditing={() => passwordRef.current?.focus()}
             value={email}
             onChangeText={setEmail}
           />
           <TextInput
+            ref={passwordRef}
             style={styles.input}
             placeholder="Password"
             placeholderTextColor={colors.faint}
             autoCapitalize="none"
             autoComplete={isSignUp ? 'new-password' : 'current-password'}
             secureTextEntry
+            returnKeyType="go"
+            onSubmitEditing={() => {
+              if (canSubmit) submit();
+            }}
             value={password}
             onChangeText={setPassword}
           />
@@ -117,7 +144,7 @@ export default function SignIn() {
             title={isSignUp ? 'Create account' : 'Sign in'}
             onPress={submit}
             loading={busy}
-            disabled={!email || password.length < 6}
+            disabled={!canSubmit}
           />
           {/* In sign-up this is the second, deliberately button-shaped way back
               — the ghost text on its own read as a caption, not a control. */}
@@ -133,6 +160,18 @@ export default function SignIn() {
             accessibilityLabel={isSignUp ? 'Back to sign in' : 'Create an account'}
             onPress={() => goTo(isSignUp ? 'signIn' : 'signUp')}
           />
+
+          {/* Testing shortcut. Present only in a dev build (or with the opt-in
+              flag set) and only for the whitelisted address. */}
+          {devLoginEnabled && !isSignUp ? (
+            <Button
+              variant="surface"
+              title={`Dev sign-in · ${devLoginEmail}`}
+              accessibilityLabel="Sign in with the test account"
+              onPress={devSubmit}
+              loading={busy}
+            />
+          ) : null}
         </View>
       </Screen>
     </KeyboardAvoidingView>

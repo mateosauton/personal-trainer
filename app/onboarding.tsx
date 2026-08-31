@@ -5,8 +5,10 @@ import { useState } from 'react';
 import {
   Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View,
 } from 'react-native';
-import Animated, { FadeIn, FadeOut, Layout } from 'react-native-reanimated';
+import Animated, { FadeIn, ReduceMotion, SlideInLeft, SlideInRight, SlideOutLeft, SlideOutRight, withDelay } from 'react-native-reanimated';
 
+import { DoodlePop, MarkerStroke } from '@/components/Doodle';
+import { Icon } from '@/components/Icon';
 import { NumberField } from '@/components/NumberField';
 import {
   Body, Button, Chip, Display, Heading, Muted, Overline, ProgressBar, Screen,
@@ -16,6 +18,7 @@ import { savePlan, updateProfile, uploadAvatar } from '@/lib/db/queries';
 import { ALL_EQUIPMENT, generatePlan } from '@/lib/plan/generate';
 import { colors, radius, space, type, webFocusRing } from '@/lib/theme';
 import { displayToCm, displayToKg, heightUnit } from '@/lib/units';
+import { getStepDirection, motion, type StepDirection } from '@/lib/motion';
 import type { Goal, Level, Units } from '@/lib/types';
 
 const GOALS: { value: Goal; label: string; blurb: string }[] = [
@@ -50,6 +53,7 @@ export default function Onboarding() {
   const { refreshProfile } = useAuth();
 
   const [index, setIndex] = useState(0);
+  const [direction, setDirection] = useState<StepDirection>('forward');
   const [name, setName] = useState('');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [goal, setGoal] = useState<Goal>('hypertrophy');
@@ -154,6 +158,7 @@ export default function Onboarding() {
     Keyboard.dismiss();
     Haptics.selectionAsync();
     if (index === STEPS.length - 1) return finish();
+    setDirection(getStepDirection(index, index + 1));
     setIndex(index + 1);
   };
 
@@ -177,9 +182,14 @@ export default function Onboarding() {
         <Pressable style={styles.flex} onPress={Keyboard.dismiss} accessible={false}>
           <Animated.View
             key={step}
-            entering={FadeIn.duration(220)}
-            exiting={FadeOut.duration(120)}
-            layout={Layout}
+            entering={(direction === 'forward' ? SlideInRight : SlideInLeft)
+              .duration(motion.base)
+              .springify()
+              .damping(motion.settle.damping)
+              .reduceMotion(ReduceMotion.System)}
+            exiting={(direction === 'forward' ? SlideOutLeft : SlideOutRight)
+              .duration(motion.fast)
+              .reduceMotion(ReduceMotion.System)}
             style={styles.body}
           >
             {step === 'you' && (
@@ -346,9 +356,11 @@ export default function Onboarding() {
           {index > 0 ? (
             <Button
               variant="ghost"
+              icon="back"
               title="Back"
               onPress={() => {
                 Keyboard.dismiss();
+                setDirection(getStepDirection(index, index - 1));
                 setIndex(index - 1);
               }}
             />
@@ -367,7 +379,7 @@ export default function Onboarding() {
 function Building({ stage, name }: { stage: number; name: string }) {
   return (
     <Screen scroll={false} style={styles.building}>
-      <Animated.View entering={FadeIn.duration(300)} style={{ gap: space.md }}>
+      <Animated.View entering={FadeIn.duration(300).reduceMotion(ReduceMotion.System)} style={{ gap: space.md }}>
         <Overline>Hang tight</Overline>
         <Display>{name ? `Right then,\n${name}.` : 'Right then.'}</Display>
         <Muted>Putting your week together. This takes a moment.</Muted>
@@ -375,12 +387,19 @@ function Building({ stage, name }: { stage: number; name: string }) {
 
       <View style={styles.stages}>
         {BUILD_STAGES.map((label, i) => (
-          <View key={label} style={styles.stageRow}>
-            <View style={[styles.tick, i < stage && styles.tickDone, i === stage && styles.tickActive]}>
-              {i < stage ? <Body style={styles.tickMark}>✓</Body> : null}
-            </View>
+          <Animated.View
+            key={label}
+            entering={FadeIn.delay(i * 70).duration(motion.base).reduceMotion(ReduceMotion.System)}
+            style={styles.stageRow}
+          >
+            <DoodlePop active={i <= stage}>
+              <View style={[styles.tick, i < stage && styles.tickDone, i === stage && styles.tickActive]}>
+                {i < stage ? <Icon name="check" size={14} color={colors.accentInk} /> : null}
+              </View>
+            </DoodlePop>
             <Body style={[styles.stageLabel, i > stage && { color: colors.faint }]}>{label}</Body>
-          </View>
+            {i === stage ? <MarkerStroke style={styles.stageMarker} /> : null}
+          </Animated.View>
         ))}
       </View>
     </Screen>
@@ -432,6 +451,7 @@ function Option({
       <Body style={[styles.optionBlurb, selected && { color: colors.accentInk, opacity: 0.75 }]}>
         {blurb}
       </Body>
+      {selected ? <MarkerStroke testID="selected-marker" style={styles.optionMarker} /> : null}
     </Pressable>
   );
 }
@@ -477,14 +497,17 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     padding: space.lg,
     gap: space.xs,
+    overflow: 'hidden',
   },
   optionSelected: { backgroundColor: colors.accent, borderColor: colors.accent },
   optionBlurb: { color: colors.muted, ...type.small },
+  optionMarker: { position: 'absolute', left: space.lg, right: space.lg, bottom: 7, backgroundColor: colors.accentInk },
   actions: { gap: space.xs },
   error: { color: colors.danger, ...type.small, marginBottom: space.sm },
   building: { padding: space.lg, justifyContent: 'center', gap: space.xxxl },
   stages: { gap: space.lg },
-  stageRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  stageRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, position: 'relative' },
+  stageMarker: { position: 'absolute', left: 36, right: 0, bottom: -5 },
   tick: {
     width: 24,
     height: 24,
@@ -496,6 +519,5 @@ const styles = StyleSheet.create({
   },
   tickActive: { borderColor: colors.accent, backgroundColor: colors.surface },
   tickDone: { borderColor: colors.accent, backgroundColor: colors.accent },
-  tickMark: { ...type.small, fontWeight: '800', color: colors.accentInk },
   stageLabel: { ...type.body, color: colors.text },
 });

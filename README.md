@@ -91,6 +91,29 @@ node tools/dev/serve-dist.mjs dist 8090
 
 ## How it works
 
+**Two tabs.** *Home* is who you are (avatar top-left, opening the profile),
+how you are doing (streak, sessions, the last fortnight as a strip) and what is
+next: today's time, reps and tonnage — projected from the plan before you train,
+replaced by what you actually did once a session is logged — then one Start
+button. *Plan* is the plan and its record together: a month calendar with every
+trained day filled green, a card per session in the rotation showing reps,
+estimated minutes, blocks and the muscles it targets, and the recent-session
+list that used to be its own History tab. A live session takes the whole screen
+with no tab bar and no swipe-back (`app/session/`).
+
+The numbers behind all of that are pure functions, tested rather than trusted:
+`lib/stats.ts` (streak, tonnage, calendar days) and `lib/plan/estimate.ts`
+(sets, reps, minutes, body parts, projected volume). Both tabs read one hook,
+`lib/useDashboard.ts`, so they cannot disagree.
+
+**Signing in for testing.** With `EXPO_PUBLIC_DEV_LOGIN_EMAIL` and
+`EXPO_PUBLIC_DEV_LOGIN_PASSWORD` set in `.env`, the sign-in screen grows a
+one-tap button for that account — see `lib/dev-auth.ts`, which also holds the
+address whitelist. It signs a real account in, so RLS and every query behave
+normally. It only appears in a dev build unless `EXPO_PUBLIC_ALLOW_DEV_LOGIN=1`
+is set; leave that unset for the hosted build, since `EXPO_PUBLIC_*` values are
+baked into the shipped bundle.
+
 **The plan generator** (`lib/plan/`) is a deterministic rule engine, not a model
 call. It picks a split from your training frequency, then fills each day with a
 warm-up plus four blocks: two straight-set compounds, an antagonist superset,
