@@ -45,3 +45,6 @@ yarn-error.*
 
 # agent worktrees
 .claude/
+.vercel
+.env*
+!.env.test

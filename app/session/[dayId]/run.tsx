@@ -1,19 +1,23 @@
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, View } from 'react-native';
-import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import Animated, { ReduceMotion, SlideInRight, SlideOutLeft } from 'react-native-reanimated';
 
 import { ExerciseMedia } from '@/components/ExerciseMedia';
+import { Icon } from '@/components/Icon';
 import { RestPage, type SetDraft, type UpNext } from '@/components/RestPage';
 import {
   Body, Button, Display, Heading, Muted, Overline, ProgressBar, Screen,
 } from '@/components/ui';
+import { confirm, notify } from '@/lib/alerts';
 import { useAuth, useUserId } from '@/lib/auth';
 import { getExercise } from '@/lib/catalog';
-import { getActivePlan, getProgress, logSet, type ProgressRow } from '@/lib/db/queries';
+import { getActivePlan, getProgress, type ProgressRow } from '@/lib/db/queries';
+import { flushOutbox, pendingSyncCount, queueCompletion, queueSet } from '@/lib/session/sync';
 import { buildQueue, partnerOf, type QueueEntry } from '@/lib/session/queue';
 import { colors, radius, space, type } from '@/lib/theme';
+import { motion } from '@/lib/motion';
 import { displayToKg, formatWeight, kgToDisplay } from '@/lib/units';
 import type { PlanDay, SetLog } from '@/lib/types';
 
@@ -36,9 +40,11 @@ export default function SessionRun() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<SetDraft | null>(null);
+  const [pendingSync, setPendingSync] = useState(0);
   /** What is actually in set_logs for the set being rested on. */
   const savedRef = useRef<SetDraft | null>(null);
   const startedAt = useRef(Date.now());
+  const completionStarted = useRef(false);
 
   useEffect(() => {
     Promise.all([getActivePlan(userId), getProgress(userId)])
@@ -56,15 +62,18 @@ export default function SessionRun() {
   // Running off the end means everything is logged. Navigating is a side
   // effect, so it belongs here and not in the render pass.
   useEffect(() => {
-    if (!finished) return;
-    router.replace({
-      pathname: '/session/[dayId]/summary',
-      params: {
-        dayId,
-        sessionId,
-        elapsed: String(Math.round((Date.now() - startedAt.current) / 1000)),
-      },
-    });
+    if (!finished || completionStarted.current) return;
+    completionStarted.current = true;
+    const elapsed = Math.max(1, Math.round((Date.now() - startedAt.current) / 1000));
+    void queueCompletion(sessionId, elapsed)
+      .then(() => flushOutbox())
+      .then(() => {
+        router.replace({ pathname: '/session/[dayId]/summary', params: { dayId, sessionId, elapsed: String(elapsed) } });
+      })
+      .catch((error: unknown) => {
+        completionStarted.current = false;
+        notify('Could not finish session', error instanceof Error ? error.message : 'Try again.');
+      });
   }, [finished, dayId, sessionId, router]);
 
   const units = profile?.units ?? 'kg';
@@ -90,9 +99,10 @@ export default function SessionRun() {
         rpe: null,
       };
       try {
-        await logSet(sessionId, set);
+        await queueSet(sessionId, set);
+        setPendingSync(await pendingSyncCount());
       } catch (e) {
-        Alert.alert('Could not save that set', e instanceof Error ? e.message : 'Try again.');
+        notify('Could not save that set', e instanceof Error ? e.message : 'Try again.');
         return false;
       }
       // Keep the prefill fresh so later sets of the same exercise suggest what
@@ -198,11 +208,15 @@ export default function SessionRun() {
     advance();
   };
 
-  const quit = () => {
-    Alert.alert('Leave this session?', 'Sets you already logged are saved.', [
-      { text: 'Stay', style: 'cancel' },
-      { text: 'Leave', style: 'destructive', onPress: () => router.replace('/(tabs)') },
-    ]);
+  const quit = async () => {
+    const leaving = await confirm({
+      title: 'Leave this session?',
+      message: 'Sets you already logged are saved.',
+      confirmLabel: 'Leave',
+      cancelLabel: 'Stay',
+      destructive: true,
+    });
+    if (leaving) router.replace('/(tabs)');
   };
 
   const resting = phase === 'resting' && draft != null;
@@ -221,12 +235,16 @@ export default function SessionRun() {
           <ProgressBar value={(cursor + (resting ? 1 : 0)) / queue.length} />
         </View>
         <Pressable onPress={quit} hitSlop={12} accessibilityLabel="Leave session">
-          <Muted style={styles.close}>Close</Muted>
+          <Icon name="close" size={22} color={colors.muted} />
         </Pressable>
       </View>
 
       {resting ? (
-        <Animated.View key={`rest:${entry.key}`} entering={FadeIn.duration(220)} style={styles.flex}>
+        <Animated.View
+          key={`rest:${entry.key}`}
+          entering={SlideInRight.duration(motion.base).springify().damping(motion.settle.damping).reduceMotion(ReduceMotion.System)}
+          style={styles.flex}
+        >
           <RestPage
             exercise={exercise ?? null}
             setLabel={`Set ${entry.set} of ${entry.setsTotal}`}
@@ -245,8 +263,8 @@ export default function SessionRun() {
         <>
           <Animated.View
             key={entry.key}
-            entering={FadeIn.duration(220)}
-            exiting={FadeOut.duration(120)}
+            entering={SlideInRight.duration(motion.base).springify().damping(motion.settle.damping).reduceMotion(ReduceMotion.System)}
+            exiting={SlideOutLeft.duration(motion.fast).reduceMotion(ReduceMotion.System)}
             style={styles.body}
           >
             {exercise ? <ExerciseMedia exercise={exercise} style={styles.media} /> : null}
@@ -287,6 +305,7 @@ export default function SessionRun() {
               }}
               style={{ marginTop: space.md }}
             />
+            {pendingSync > 0 ? <Muted style={{ textAlign: 'center', marginTop: space.sm }}>{pendingSync} set{pendingSync === 1 ? '' : 's'} syncing</Muted> : null}
           </View>
         </>
       )}
@@ -298,7 +317,6 @@ const styles = StyleSheet.create({
   center: { alignItems: 'center', justifyContent: 'center' },
   flex: { flex: 1 },
   header: { flexDirection: 'row', alignItems: 'center', gap: space.lg },
-  close: { ...type.overline, color: colors.muted },
   body: { flex: 1, justifyContent: 'center' },
   media: { width: '100%' },
   target: { ...type.title, color: colors.accent },

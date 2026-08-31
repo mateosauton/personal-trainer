@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import type { GeneratedPlan } from '@/lib/plan/generate';
+import { dayKey } from '@/lib/stats';
 import type { Plan, PlanDay, Profile, SetLog } from '@/lib/types';
 
 export async function getProfile(userId: string): Promise<Profile | null> {
@@ -47,74 +48,10 @@ export async function uploadAvatar(userId: string, uri: string): Promise<string>
  * just produced.
  */
 export async function savePlan(userId: string, generated: GeneratedPlan): Promise<string> {
-  await supabase.from('plans').update({ is_active: false }).eq('user_id', userId);
-
-  const { data: plan, error: planError } = await supabase
-    .from('plans')
-    .insert({
-      user_id: userId,
-      name: generated.name,
-      split: generated.split,
-      weeks: generated.weeks,
-    })
-    .select('id')
-    .single();
-  if (planError) throw planError;
-
-  const { data: days, error: dayError } = await supabase
-    .from('plan_days')
-    .insert(
-      generated.days.map((day, index) => ({
-        plan_id: plan.id,
-        day_index: index,
-        name: day.name,
-        focus: day.focus,
-      })),
-    )
-    .select('id, day_index');
-  if (dayError) throw dayError;
-
-  const dayIdByIndex = new Map(days.map((d) => [d.day_index, d.id]));
-
-  const blockRows = generated.days.flatMap((day, dayIndex) =>
-    day.blocks.map((block, blockIndex) => ({
-      plan_day_id: dayIdByIndex.get(dayIndex)!,
-      block_index: blockIndex,
-      kind: block.kind,
-      title: block.title,
-      rounds: block.rounds,
-      rest_seconds: block.rest_seconds,
-    })),
-  );
-  const { data: blocks, error: blockError } = await supabase
-    .from('plan_blocks')
-    .insert(blockRows)
-    .select('id, plan_day_id, block_index');
-  if (blockError) throw blockError;
-
-  const blockId = new Map(
-    blocks.map((b) => [`${b.plan_day_id}:${b.block_index}`, b.id]),
-  );
-
-  const itemRows = generated.days.flatMap((day, dayIndex) =>
-    day.blocks.flatMap((block, blockIndex) =>
-      block.items.map((item, itemIndex) => ({
-        block_id: blockId.get(`${dayIdByIndex.get(dayIndex)}:${blockIndex}`)!,
-        item_index: itemIndex,
-        exercise_id: item.exercise_id,
-        sets: item.sets,
-        reps_low: item.reps_low,
-        reps_high: item.reps_high,
-        seconds: item.seconds,
-        tempo: item.tempo,
-        notes: item.notes,
-      })),
-    ),
-  );
-  const { error: itemError } = await supabase.from('plan_items').insert(itemRows);
-  if (itemError) throw itemError;
-
-  return plan.id as string;
+  void userId; // The RPC derives ownership from auth.uid(), never caller input.
+  const { data, error } = await supabase.rpc('save_plan', { plan: generated });
+  if (error) throw error;
+  return data as string;
 }
 
 const PLAN_SELECT = `
@@ -176,13 +113,46 @@ export async function getActivePlan(userId: string): Promise<Plan | null> {
 }
 
 export async function startSession(userId: string, planDayId: string): Promise<string> {
+  const now = new Date();
   const { data, error } = await supabase
     .from('sessions')
-    .insert({ user_id: userId, plan_day_id: planDayId })
+    .insert({
+      user_id: userId,
+      plan_day_id: planDayId,
+      local_day: dayKey(now),
+      tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    })
     .select('id')
     .single();
   if (error) throw error;
   return data.id as string;
+}
+
+/** The rotation is derived from the last completed day in this exact plan. */
+export async function getLastCompletedPlanDayIndex(userId: string, planId: string): Promise<number | null> {
+  const { data, error } = await supabase
+    .from('sessions')
+    .select('plan_days!inner(day_index, plan_id)')
+    .eq('user_id', userId)
+    .eq('plan_days.plan_id', planId)
+    .not('completed_at', 'is', null)
+    .order('completed_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  const row = data as { plan_days: { day_index: number } | null } | null;
+  return row?.plan_days?.day_index ?? null;
+}
+
+/** Unlimited, small rows: calendar history must not inherit the recent-list cap. */
+export async function getTrainedDayKeys(userId: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('sessions')
+    .select('local_day')
+    .eq('user_id', userId)
+    .not('completed_at', 'is', null);
+  if (error) throw error;
+  return (data ?? []).flatMap((row) => typeof row.local_day === 'string' ? [row.local_day] : []);
 }
 
 export async function logSet(sessionId: string, set: SetLog) {
@@ -202,7 +172,8 @@ export async function finishSession(
   const { error } = await supabase
     .from('sessions')
     .update({ completed_at: new Date().toISOString(), ...patch })
-    .eq('id', sessionId);
+    .eq('id', sessionId)
+    .is('completed_at', null);
   if (error) throw error;
 }
 
@@ -247,11 +218,25 @@ export async function upsertProgress(userId: string, rows: (ProgressRow & { exer
 export async function getRecentSessions(userId: string, limit = 30) {
   const { data, error } = await supabase
     .from('sessions')
-    .select('id, plan_day_id, started_at, completed_at, duration_s, rpe, plan_days ( name, focus )')
+    .select('id, plan_day_id, started_at, local_day, completed_at, duration_s, rpe, plan_days ( name, focus )')
     .eq('user_id', userId)
     .not('completed_at', 'is', null)
     .order('started_at', { ascending: false })
     .limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+/**
+ * Set logs for several sessions at once. Home needs today's tonnage and Plan
+ * needs a picked day's; one round trip beats one per session.
+ */
+export async function getSetLogsForSessions(sessionIds: string[]) {
+  if (sessionIds.length === 0) return [];
+  const { data, error } = await supabase
+    .from('set_logs')
+    .select('session_id, exercise_id, reps, weight_kg, is_bodyweight, added_load_kg')
+    .in('session_id', sessionIds);
   if (error) throw error;
   return data ?? [];
 }

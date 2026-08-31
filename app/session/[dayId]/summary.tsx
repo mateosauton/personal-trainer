@@ -1,18 +1,23 @@
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import Animated, { FadeIn, ReduceMotion } from 'react-native-reanimated';
 
+import { DoodlePop } from '@/components/Doodle';
 import { Body, Button, Card, Chip, Display, Heading, Muted, Overline, Screen } from '@/components/ui';
+import { notify } from '@/lib/alerts';
 import { useAuth, useUserId } from '@/lib/auth';
 import { getExercise } from '@/lib/catalog';
 import {
-  finishSession, getActivePlan, getProgress, getSetLogs, upsertProgress, type ProgressRow,
+  getActivePlan, getProgress, getSetLogs, type ProgressRow,
 } from '@/lib/db/queries';
+import { queueProgress } from '@/lib/session/sync';
 import { nextLoad } from '@/lib/progression';
 import { colors, space, type } from '@/lib/theme';
+import { motion } from '@/lib/motion';
 import { effectiveLoadKg, estimateOneRepMax, formatWeight } from '@/lib/units';
-import type { PlanDay } from '@/lib/types';
+import type { PlanDay, Units } from '@/lib/types';
 
 interface Line {
   exerciseId: string;
@@ -35,6 +40,7 @@ export default function SessionSummary() {
   const [lines, setLines] = useState<Line[]>([]);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const pendingProgress = useRef<ProgressRow[]>([]);
 
   const durationS = Number.parseInt(elapsed ?? '0', 10) || 0;
   const units = profile?.units ?? 'kg';
@@ -121,6 +127,7 @@ export default function SessionSummary() {
 
       if (!cancelled) {
         pendingProgress.current = updates;
+        await queueProgress(userId, updates);
         setLines(built);
         setLoading(false);
         if (built.some((l) => l.isPr)) {
@@ -140,10 +147,9 @@ export default function SessionSummary() {
     setSaving(true);
     try {
       // The effort scale is gone from the UI; the column stays nullable.
-      await finishSession(sessionId, { duration_s: durationS, rpe: null });
       router.replace('/(tabs)');
     } catch (e) {
-      Alert.alert('Could not save', e instanceof Error ? e.message : 'Try again.');
+      notify('Could not save', e instanceof Error ? e.message : 'Try again.');
     } finally {
       setSaving(false);
     }
@@ -165,6 +171,7 @@ export default function SessionSummary() {
       <Overline>Session complete</Overline>
       <Display style={{ marginTop: space.sm }}>Nice work.</Display>
 
+      <Animated.View entering={FadeIn.duration(motion.base).reduceMotion(ReduceMotion.System)}>
       <Card style={{ marginTop: space.xl }}>
         <View style={styles.stats}>
           <Stat label="Minutes" value={`${Math.max(1, Math.round(durationS / 60))}`} />
@@ -172,10 +179,15 @@ export default function SessionSummary() {
           <Stat label="Volume" value={formatWeight(totalVolume, units)} />
         </View>
       </Card>
+      </Animated.View>
 
       <View style={{ gap: space.md, marginTop: space.xl }}>
-        {lines.map((line) => (
-          <View key={line.exerciseId} style={styles.line}>
+        {lines.map((line, index) => (
+          <Animated.View
+            key={line.exerciseId}
+            entering={FadeIn.delay(index * 55).duration(motion.base).reduceMotion(ReduceMotion.System)}
+            style={styles.line}
+          >
             <View style={{ flex: 1, gap: 2 }}>
               <Body style={styles.lineName} numberOfLines={1}>
                 {line.name}
@@ -184,17 +196,27 @@ export default function SessionSummary() {
                 {line.sets} sets · top {formatWeight(line.topLoadKg, units)}
               </Muted>
             </View>
-            {line.isPr ? <Chip label="PR" selected /> : null}
+            {line.isPr ? (
+              <DoodlePop>
+                {/* The badge carries the number that earned it: a bare "PR" makes
+                    you go looking for the weight it is talking about. */}
+                <Chip label={prLabel(line.topLoadKg, units)} selected />
+              </DoodlePop>
+            ) : null}
             {!line.isPr && line.verdict === 'progress' ? <Chip label="↑ next" /> : null}
             {!line.isPr && line.verdict === 'deload' ? <Chip label="↓ next" /> : null}
-          </View>
+          </Animated.View>
         ))}
       </View>
 
-      <Button title="Save & finish" onPress={save} loading={saving} style={{ marginTop: space.xl }} />
+      <Button title="Done" onPress={save} loading={saving} style={{ marginTop: space.xl }} />
     </Screen>
   );
 }
+
+/** Bodyweight work with nothing added has no weight worth printing. */
+const prLabel = (topLoadKg: number | null, units: Units) =>
+  topLoadKg ? `PR ${formatWeight(topLoadKg, units)}` : 'PR';
 
 const Stat = ({ label, value }: { label: string; value: string }) => (
   <View style={{ gap: 2 }}>
