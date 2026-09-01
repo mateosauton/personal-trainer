@@ -6,6 +6,7 @@ name: Publish EAS Update
 on:
   push:
     branches: [master]
+  workflow_dispatch: {}
 
 concurrency:
   group: eas-update
