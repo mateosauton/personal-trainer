@@ -2,7 +2,7 @@ import { Tabs } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { Icon, type IconName } from '@/components/Icon';
-import { colors, space, type } from '@/lib/theme';
+import { colors, radius, space, type } from '@/lib/theme';
 
 /**
  * Two tabs only. Profile moved to its own modal behind the avatar on Home, and
@@ -49,13 +49,23 @@ export default function TabsLayout() {
 
 const styles = StyleSheet.create({
   bar: {
-    backgroundColor: colors.surface,
-    borderTopColor: colors.border,
-    borderTopWidth: 1,
-    height: 88,
-    paddingTop: space.sm,
+    position: 'absolute',
+    left: space.lg,
+    right: space.lg,
+    bottom: space.lg,
+    height: 64,
+    paddingTop: space.xs,
+    backgroundColor: colors.overlay,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: radius.lg,
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.32,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
   },
-  tab: { alignItems: 'center', gap: 5, width: 96 },
+  tab: { alignItems: 'center', gap: 3, width: 96 },
   label: { ...type.overline, color: colors.faint },
   labelActive: { color: colors.text },
   dot: { width: 4, height: 4, borderRadius: 2, backgroundColor: 'transparent' },
