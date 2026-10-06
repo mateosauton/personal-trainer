@@ -1,9 +1,9 @@
 import type { Session } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Linking from 'expo-linking';
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
-import { completeAuthFromUrl } from './deep-link';
+import { completeAuthFromUrl, isRecoveryLink } from './deep-link';
 import { getProfile } from './db/queries';
 import { supabase } from './db/supabase';
 import type { ProfileState } from './auth-gate';
@@ -15,6 +15,10 @@ interface AuthState {
   profile: Profile | null;
   profileState: ProfileState;
   loading: boolean;
+  recoveringPassword: boolean;
+  processingAuthLink: boolean;
+  authError: Error | null;
+  retrySession: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -32,39 +36,79 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profileState, setProfileState] = useState<ProfileState>({ status: 'loading' });
   const [loading, setLoading] = useState(true);
+  const [recoveringPassword, setRecoveringPassword] = useState(false);
+  const [processingAuthLink, setProcessingAuthLink] = useState(false);
+  const [authError, setAuthError] = useState<Error | null>(null);
+  const authEpoch = useRef(0);
+  const currentUser = useRef<string | null>(null);
 
-  useEffect(() => {
-    let authChanged = false;
-    supabase.auth.getSession().then(({ data }) => {
-      if (authChanged) return;
-      setSyncAccount(data.session?.user.id ?? null);
-      setSession(data.session);
-      if (!data.session) setLoading(false);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
-      authChanged = true;
-      setSyncAccount(next?.user.id ?? null);
-      setSession(next);
-      if (!next) {
-        setProfileState({ status: 'ready', profile: null });
+  const applySession = useCallback((next: Session | null) => {
+    const owner = next?.user.id ?? null;
+    setSyncAccount(owner);
+    if (owner !== currentUser.current) {
+      currentUser.current = owner;
+      setProfileState(owner ? { status: 'loading' } : { status: 'ready', profile: null });
+    }
+    setSession(next);
+    setLoading(false);
+  }, []);
+
+  const retrySession = useCallback(async () => {
+    const epoch = authEpoch.current;
+    setLoading(true);
+    setAuthError(null);
+    try {
+      const { data, error } = await supabase.auth.getSession();
+      if (error) throw error;
+      if (authEpoch.current === epoch) applySession(data.session);
+    } catch (error) {
+      if (authEpoch.current === epoch) {
+        setAuthError(error instanceof Error ? error : new Error('Could not restore your session.'));
         setLoading(false);
       }
+    }
+  }, [applySession]);
+
+  useEffect(() => {
+    void retrySession();
+    const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
+      authEpoch.current += 1;
+      setAuthError(null);
+      if (event === 'PASSWORD_RECOVERY') setRecoveringPassword(true);
+      if (!next) setRecoveringPassword(false);
+      applySession(next);
     });
 
-    // An email confirmation link opens the app with the tokens attached.
-    // onAuthStateChange picks the session up once completeAuthFromUrl sets it.
+    const handleLink = async (url: string) => {
+      setProcessingAuthLink(true);
+      try {
+        const recovery = isRecoveryLink(url);
+        const completed = await completeAuthFromUrl(url);
+        if (recovery && !completed) throw new Error('Open the password reset link from your email.');
+        if (completed) setRecoveringPassword(recovery);
+      } catch (error) {
+        setRecoveringPassword(false);
+        setAuthError(error instanceof Error ? error : new Error('Could not open the sign-in link.'));
+        setLoading(false);
+      } finally { setProcessingAuthLink(false); }
+    };
+    let linkWork = Promise.resolve();
+    let receivedLiveLink = false;
+    const queueLink = (url: string) => { linkWork = linkWork.then(() => handleLink(url)); };
     Linking.getInitialURL().then((url) => {
-      if (url) completeAuthFromUrl(url);
+      if (url && !receivedLiveLink) queueLink(url);
+    }).catch((error) => {
+      setAuthError(error instanceof Error ? error : new Error('Could not open the sign-in link.'));
+      setLoading(false);
     });
-    const linkSub = Linking.addEventListener('url', ({ url }) => {
-      completeAuthFromUrl(url);
-    });
+    const linkSub = Linking.addEventListener('url', ({ url }) => { receivedLiveLink = true; queueLink(url); });
 
     return () => {
+      authEpoch.current += 1;
       sub.subscription.unsubscribe();
       linkSub.remove();
     };
-  }, []);
+  }, [applySession, retrySession]);
 
   const userId = session?.user.id;
 
@@ -82,11 +126,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .then((p) => {
         if (!cancelled) {
           setProfileState({ status: 'ready', profile: p });
-          if (p) void AsyncStorage.setItem(profileCacheKey(userId), JSON.stringify(p));
+          if (p) void AsyncStorage.setItem(profileCacheKey(userId), JSON.stringify(p)).catch(() => undefined);
         }
       })
       .catch(async (error: unknown) => {
-        const cached = await cachedProfile(userId);
+        let cached: Profile | null = null;
+        try { cached = await cachedProfile(userId); } catch { /* Keep the server error recoverable. */ }
         if (!cancelled) setProfileState(cached
           ? { status: 'ready', profile: cached }
           : { status: 'error', error: error instanceof Error ? error : new Error('Could not load profile') });
@@ -105,15 +150,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       profile: profileState.status === 'ready' ? profileState.profile : null,
       profileState,
       loading,
+      recoveringPassword,
+      processingAuthLink,
+      authError,
+      retrySession,
       refreshProfile: async () => {
-        if (!userId) return;
+        if (!userId || currentUser.current !== userId) return;
         setProfileState({ status: 'loading' });
         try {
           const profile = await getProfile(userId);
+          if (currentUser.current !== userId) return;
           setProfileState({ status: 'ready', profile });
           if (profile) await AsyncStorage.setItem(profileCacheKey(userId), JSON.stringify(profile));
         } catch (error) {
-          setProfileState({ status: 'error', error: error instanceof Error ? error : new Error('Could not load profile') });
+          if (currentUser.current === userId) setProfileState({ status: 'error', error: error instanceof Error ? error : new Error('Could not load profile') });
           throw error;
         }
       },
@@ -127,7 +177,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       },
     }),
-    [session, profileState, loading, userId],
+    [session, profileState, loading, userId, recoveringPassword, processingAuthLink, authError, retrySession],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
