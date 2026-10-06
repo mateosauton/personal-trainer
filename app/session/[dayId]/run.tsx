@@ -1,192 +1,401 @@
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
-import Animated, { ReduceMotion, SlideInRight, SlideOutLeft } from 'react-native-reanimated';
+import Animated, {
+  ReduceMotion,
+  SlideInRight,
+  SlideOutLeft,
+} from 'react-native-reanimated';
 
 import { ExerciseMedia } from '@/components/ExerciseMedia';
 import { Icon } from '@/components/Icon';
 import { RestPage, type SetDraft, type UpNext } from '@/components/RestPage';
 import {
-  Body, Button, Display, Heading, Muted, Overline, ProgressBar, Screen,
+  Body,
+  Button,
+  Display,
+  Heading,
+  Muted,
+  Overline,
+  ProgressBar,
+  Screen,
 } from '@/components/ui';
 import { confirm, notify } from '@/lib/alerts';
 import { useAuth, useUserId } from '@/lib/auth';
 import { getExercise } from '@/lib/catalog';
-import { getActivePlan, getProgress, type ProgressRow } from '@/lib/db/queries';
-import { flushOutbox, pendingSyncCount, queueCompletion, queueSet } from '@/lib/session/sync';
+import {
+  getSessionResumeDetails,
+  getSessionPlanDay,
+  getProgress,
+  type ProgressRow,
+} from '@/lib/db/queries';
+import {
+  flushOutbox,
+  pendingSyncCount,
+  queueCompletion,
+  queueSet,
+} from '@/lib/session/sync';
 import { buildQueue, partnerOf, type QueueEntry } from '@/lib/session/queue';
 import { colors, radius, space, type } from '@/lib/theme';
 import { motion } from '@/lib/motion';
 import { displayToKg, formatWeight, kgToDisplay } from '@/lib/units';
-import type { PlanDay, SetLog } from '@/lib/types';
-
-type Phase = 'work' | 'resting';
+import { workouts } from '@/lib/session/workout';
+import type { SavedWorkout } from '@/lib/session/workout-store';
+import type { SetLog } from '@/lib/types';
 
 const sameDraft = (a: SetDraft | null, b: SetDraft | null) =>
-  a != null && b != null
-  && a.reps === b.reps && a.weight === b.weight && a.asBodyweight === b.asBodyweight;
+  a != null &&
+  b != null &&
+  a.reps === b.reps &&
+  a.weight === b.weight &&
+  a.asBodyweight === b.asBodyweight;
 
 export default function SessionRun() {
-  const { dayId, sessionId } = useLocalSearchParams<{ dayId: string; sessionId: string }>();
+  const { dayId, sessionId } = useLocalSearchParams<{
+    dayId: string;
+    sessionId: string;
+  }>();
   const userId = useUserId();
   const { profile } = useAuth();
   const router = useRouter();
-
-  const [day, setDay] = useState<PlanDay | null>(null);
-  const [progress, setProgress] = useState<Map<string, ProgressRow>>(new Map());
-  const [cursor, setCursor] = useState(0);
-  const [phase, setPhase] = useState<Phase>('work');
+  const [workout, setWorkout] = useState<SavedWorkout | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [busy, setBusy] = useState(false);
   const [finishError, setFinishError] = useState<string | null>(null);
   const [finishAttempt, setFinishAttempt] = useState(0);
-  const [draft, setDraft] = useState<SetDraft | null>(null);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [pendingSync, setPendingSync] = useState(0);
-  /** What is actually in set_logs for the set being rested on. */
-  const savedRef = useRef<SetDraft | null>(null);
-  const startedAt = useRef(Date.now());
+  const identity = useRef({ userId, sessionId });
+  identity.current = { userId, sessionId };
+  const isCurrent = () =>
+    identity.current.userId === userId &&
+    identity.current.sessionId === sessionId;
   const completionStarted = useRef(false);
-  const completedDuration = useRef<number | null>(null);
+  const draftAttempt = useRef(0);
+  const active =
+    workout?.ownerId === userId && workout.sessionId === sessionId
+      ? workout
+      : null;
+  const day = active?.day ?? null;
+  const cursor = active?.cursor ?? 0;
+  const phase = active?.phase ?? 'work';
+  const draft = active?.draft ?? null;
+  const units = active?.units ?? profile?.units ?? 'kg';
+  const progress = useMemo(
+    () =>
+      new Map((active?.progress ?? []).map((row) => [row.exercise_id, row])),
+    [active?.progress],
+  );
+  const queue = useMemo(() => (day ? buildQueue(day) : []), [day]);
+  const entry: QueueEntry | undefined = queue[cursor];
+  const finished =
+    !loading && active != null && queue.length > 0 && cursor >= queue.length;
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
-    Promise.all([getActivePlan(userId), getProgress(userId)])
-      .then(([plan, rows]) => {
+    setBusy(false);
+    completionStarted.current = false;
+    (async () => {
+      let saved = await workouts.read(userId);
+      if (saved && (saved.sessionId !== sessionId || saved.day.id !== dayId))
+        throw new Error(
+          'Resume your unfinished workout from Home before starting another.',
+        );
+      if (!saved) {
+        const details = await getSessionResumeDetails(sessionId, userId);
         if (cancelled) return;
-        setDay(plan?.days.find((d) => d.id === dayId) ?? null);
-        setProgress(rows);
+        if (details.completed_at != null) {
+          router.replace({
+            pathname: '/session/[dayId]/summary',
+            params: {
+              dayId,
+              sessionId,
+              elapsed: String(details.duration_s ?? 1),
+            },
+          });
+          return;
+        }
+        const startTime = Date.parse(details.started_at);
+        if (!Number.isFinite(startTime))
+          throw new Error('Could not read workout start time.');
+        const [originalDay, rows] = await Promise.all([
+          getSessionPlanDay(sessionId, userId),
+          getProgress(userId),
+        ]);
+        if (!originalDay || originalDay.id !== dayId)
+          throw new Error('Could not load the original workout day.');
+        if (cancelled) return;
+        saved = await workouts.create({
+          version: 1,
+          ownerId: userId,
+          sessionId,
+          day: originalDay,
+          units: profile?.units ?? 'kg',
+          progress: [...rows.values()],
+          cursor: 0,
+          phase: 'work',
+          draft: null,
+          savedDraft: null,
+          restUntilMs: null,
+          startedAtMs: startTime,
+          endedAtMs: null,
+        });
+      }
+      if (!cancelled) setWorkout(saved);
+    })()
+      .catch((error) => {
+        if (!cancelled)
+          setLoadError(
+            error instanceof Error
+              ? error.message
+              : 'Could not load your workout.',
+          );
       })
-      .catch((error: unknown) => {
-        if (!cancelled) setLoadError(error instanceof Error ? error.message : 'Could not load your workout.');
-      })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [userId, dayId, loadAttempt]);
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, dayId, sessionId, loadAttempt]);
 
-  const queue = useMemo(() => (day ? buildQueue(day) : []), [day]);
-  const entry: QueueEntry | undefined = queue[cursor];
-  const finished = !loading && queue.length > 0 && cursor >= queue.length;
-
-  // Running off the end means everything is logged. Navigating is a side
-  // effect, so it belongs here and not in the render pass.
   useEffect(() => {
-    if (!finished || completionStarted.current) return;
+    if (!finished || !active || completionStarted.current) return;
     completionStarted.current = true;
+    let cancelled = false;
     setFinishError(null);
-    completedDuration.current ??= Math.max(1, Math.round((Date.now() - startedAt.current) / 1000));
-    const elapsed = completedDuration.current;
+    const elapsed = Math.max(
+      1,
+      Math.round(
+        ((active.endedAtMs ?? Date.now()) - active.startedAtMs) / 1000,
+      ),
+    );
     void queueCompletion(userId, sessionId, elapsed)
       .then(() => flushOutbox())
       .then(() => {
-        router.replace({ pathname: '/session/[dayId]/summary', params: { dayId, sessionId, elapsed: String(elapsed) } });
+        if (!cancelled)
+          router.replace({
+            pathname: '/session/[dayId]/summary',
+            params: { dayId, sessionId, elapsed: String(elapsed) },
+          });
       })
-      .catch((error: unknown) => {
-        completionStarted.current = false;
-        setFinishError(error instanceof Error ? error.message : 'Could not finish your workout. Please retry.');
+      .catch((error) => {
+        if (!cancelled) {
+          completionStarted.current = false;
+          setFinishError(
+            error instanceof Error
+              ? error.message
+              : 'Could not finish your workout. Please retry.',
+          );
+        }
       });
-  }, [finished, userId, dayId, sessionId, router, finishAttempt]);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    finished,
+    userId,
+    dayId,
+    sessionId,
+    active?.endedAtMs,
+    router,
+    finishAttempt,
+  ]);
 
-  const units = profile?.units ?? 'kg';
   const exercise = entry ? getExercise(entry.item.exercise_id) : null;
   const known = entry ? progress.get(entry.item.exercise_id) : undefined;
-
-  /**
-   * Writes the set. Upserting on (session, item, set index) means the first
-   * write on entering rest and any later correction land on the same row.
-   */
-  const save = useCallback(
-    async (target: QueueEntry, value: SetDraft): Promise<boolean> => {
-      const kg = displayToKg(value.weight, units);
-      const set: SetLog = {
-        plan_item_id: target.item.id,
-        exercise_id: target.item.exercise_id,
-        set_index: target.set,
-        reps: value.reps,
-        weight_kg: value.asBodyweight ? null : kg,
-        is_bodyweight: value.asBodyweight,
-        added_load_kg: value.asBodyweight ? kg : 0,
-        // The effort scale is gone; progression treats a null as manageable.
-        rpe: null,
-      };
-      try {
-        await queueSet(userId, sessionId, set);
-        setPendingSync(await pendingSyncCount());
-      } catch (e) {
-        notify('Could not save that set', e instanceof Error ? e.message : 'Try again.');
-        return false;
-      }
-      // Keep the prefill fresh so later sets of the same exercise suggest what
-      // was actually just lifted, not what the previous session did.
-      setProgress((prev) => {
-        const map = new Map(prev);
-        const existing = map.get(target.item.exercise_id);
-        map.set(target.item.exercise_id, {
-          exercise_id: target.item.exercise_id,
-          last_weight_kg: kg,
-          last_reps: value.reps,
-          best_weight_kg: existing?.best_weight_kg ?? null,
-          best_e1rm: existing?.best_e1rm ?? null,
-          miss_streak: existing?.miss_streak ?? 0,
-        });
-        return map;
+  const commit = async (patch: Parameters<typeof workouts.update>[3]) => {
+    if (!active) throw new Error('Workout unavailable.');
+    const saved = await workouts.update(
+      userId,
+      sessionId,
+      { cursor, phase },
+      patch,
+    );
+    if (isCurrent()) {
+      setWorkout(saved);
+      setSnapshotError(null);
+    }
+    return saved;
+  };
+  const logDraft = async (
+    target: QueueEntry,
+    value: SetDraft,
+  ): Promise<ProgressRow[]> => {
+    const kg = displayToKg(value.weight, units);
+    const set: SetLog = {
+      plan_item_id: target.item.id,
+      exercise_id: target.item.exercise_id,
+      set_index: target.set,
+      reps: value.reps,
+      weight_kg: value.asBodyweight ? null : kg,
+      is_bodyweight: value.asBodyweight,
+      added_load_kg: value.asBodyweight ? kg : 0,
+      rpe: null,
+    };
+    await queueSet(userId, sessionId, set);
+    if (isCurrent()) setPendingSync(await pendingSyncCount());
+    const next = new Map(progress),
+      previous = next.get(target.item.exercise_id);
+    next.set(target.item.exercise_id, {
+      exercise_id: target.item.exercise_id,
+      last_weight_kg: kg,
+      last_reps: value.reps,
+      best_weight_kg: previous?.best_weight_kg ?? null,
+      best_e1rm: previous?.best_e1rm ?? null,
+      miss_streak: previous?.miss_streak ?? 0,
+    });
+    return [...next.values()];
+  };
+  const completeSet = async () => {
+    if (!entry || !active || busy) return;
+    const seed: SetDraft = {
+      reps: known?.last_reps ?? entry.item.reps_high ?? 10,
+      weight:
+        known?.last_weight_kg != null
+          ? Math.round(kgToDisplay(known.last_weight_kg, units) * 10) / 10
+          : 0,
+      asBodyweight: exercise?.is_bodyweight ?? false,
+    };
+    setBusy(true);
+    try {
+      const rows = await logDraft(entry, seed);
+      await commit({
+        progress: rows,
+        phase: 'resting',
+        draft: seed,
+        savedDraft: seed,
+        restUntilMs: Date.now() + entry.block.rest_seconds * 1000,
       });
-      return true;
-    },
-    [userId, sessionId, units],
-  );
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch (error) {
+      notify(
+        'Could not save workout',
+        error instanceof Error ? error.message : 'Try again.',
+      );
+    } finally {
+      if (isCurrent()) setBusy(false);
+    }
+  };
+  const nextPatch = () => ({
+    cursor: cursor + 1,
+    phase: 'work' as const,
+    draft: null,
+    savedDraft: null,
+    restUntilMs: null,
+    endedAtMs:
+      cursor + 1 >= queue.length
+        ? Math.max(active?.startedAtMs ?? 0, Date.now())
+        : null,
+  });
+  const leaveRest = async () => {
+    if (!active || !entry || !draft || busy) return;
+    setBusy(true);
+    try {
+      const rows = sameDraft(draft, active.savedDraft)
+        ? active.progress
+        : await logDraft(entry, draft);
+      await commit({ ...nextPatch(), progress: rows });
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch (error) {
+      notify(
+        'Could not save workout',
+        error instanceof Error ? error.message : 'Try again.',
+      );
+    } finally {
+      if (isCurrent()) setBusy(false);
+    }
+  };
+  const advanceWarmup = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await commit(nextPatch());
+    } catch (error) {
+      notify(
+        'Could not save workout',
+        error instanceof Error ? error.message : 'Try again.',
+      );
+    } finally {
+      if (isCurrent()) setBusy(false);
+    }
+  };
+  const changeDraft = (value: SetDraft) => {
+    if (!active || busy) return;
+    const attempt = ++draftAttempt.current;
+    setWorkout({ ...active, draft: value });
+    void workouts
+      .update(userId, sessionId, { cursor, phase }, { draft: value })
+      .then(() => {
+        if (isCurrent() && attempt === draftAttempt.current)
+          setSnapshotError(null);
+      })
+      .catch((error) => {
+        if (isCurrent() && attempt === draftAttempt.current)
+          setSnapshotError(
+            error instanceof Error
+              ? error.message
+              : 'Could not save your changes. Retry before leaving.',
+          );
+      });
+  };
 
-  if (loading) {
+  if (loading)
     return (
       <Screen scroll={false} style={styles.center}>
         <ActivityIndicator color={colors.accent} />
       </Screen>
     );
-  }
-
-  if (loadError) {
+  if (loadError)
     return (
       <Screen>
         <Display>Workout unavailable</Display>
         <Body style={{ marginTop: space.md }}>{loadError}</Body>
-        <Button title="Retry" onPress={() => setLoadAttempt((value) => value + 1)} style={{ marginTop: space.lg }} />
-        <Button title="Back to home" variant="ghost" onPress={() => router.replace('/(tabs)')} />
+        <Button
+          title="Retry"
+          onPress={() => setLoadAttempt((n) => n + 1)}
+          style={{ marginTop: space.lg }}
+        />
+        <Button
+          title="Back to home"
+          variant="ghost"
+          onPress={() => router.replace('/(tabs)')}
+        />
       </Screen>
     );
-  }
-
-  if (!day || queue.length === 0) {
+  if (!active || !day || queue.length === 0)
     return (
       <Screen>
         <Display>Session unavailable.</Display>
-        <Button title="Back" variant="surface" onPress={() => router.back()} style={{ marginTop: space.xl }} />
+        <Button title="Back" variant="surface" onPress={() => router.back()} />
       </Screen>
     );
-  }
-
-  if (finishError) {
+  if (finishError)
     return (
       <Screen>
         <Display>Finish your workout</Display>
         <Body style={{ marginTop: space.md }}>{finishError}</Body>
-        <Muted style={{ marginTop: space.md }}>Your logged sets are saved on this device.</Muted>
-        <Button title="Retry finish" onPress={() => setFinishAttempt((value) => value + 1)} style={{ marginTop: space.lg }} />
+        <Muted style={{ marginTop: space.md }}>
+          Your logged sets are saved on this device.
+        </Muted>
+        <Button
+          title="Retry finish"
+          onPress={() => setFinishAttempt((n) => n + 1)}
+          style={{ marginTop: space.lg }}
+        />
       </Screen>
     );
-  }
-
-  if (!entry) {
-    // The effect above is on its way to the summary.
+  if (!entry)
     return (
       <Screen scroll={false} style={styles.center}>
         <ActivityIndicator color={colors.accent} />
       </Screen>
     );
-  }
 
   const partner = partnerOf(entry);
   const partnerExercise = partner ? getExercise(partner.exercise_id) : null;
@@ -196,64 +405,36 @@ export default function SessionRun() {
     ? `${entry.item.seconds}s`
     : `${entry.item.reps_low}–${entry.item.reps_high} reps`;
 
-  const advance = () => {
-    setDraft(null);
-    savedRef.current = null;
-    setPhase('work');
-    setCursor((c) => c + 1);
-  };
-
   const nextEntry = queue[cursor + 1];
   const upNext: UpNext | null = nextEntry
     ? {
         exercise: getExercise(nextEntry.item.exercise_id) ?? null,
-        name: getExercise(nextEntry.item.exercise_id)?.name ?? nextEntry.item.exercise_id,
+        name:
+          getExercise(nextEntry.item.exercise_id)?.name ??
+          nextEntry.item.exercise_id,
         set: nextEntry.set,
         setsTotal: nextEntry.setsTotal,
       }
     : null;
 
-  /** Complete set: log what we already know, then hand over to the rest page. */
-  const completeSet = async () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const seed: SetDraft = {
-      reps: known?.last_reps ?? entry.item.reps_high ?? 10,
-      weight: known?.last_weight_kg != null
-        ? Math.round(kgToDisplay(known.last_weight_kg, units) * 10) / 10
-        : 0,
-      asBodyweight: exercise?.is_bodyweight ?? false,
-    };
-    setBusy(true);
-    const ok = await save(entry, seed);
-    setBusy(false);
-    if (!ok) return;
-    setDraft(seed);
-    savedRef.current = seed;
-    setPhase('resting');
-  };
-
-  /** Leaving rest: flush any correction the user made before moving on. */
-  const leaveRest = async () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (draft && !sameDraft(draft, savedRef.current)) {
-      setBusy(true);
-      const ok = await save(entry, draft);
-      setBusy(false);
-      if (!ok) return;
-      savedRef.current = draft;
-    }
-    advance();
-  };
-
   const quit = async () => {
     const leaving = await confirm({
-      title: 'Leave this session?',
-      message: 'Sets you already logged are saved.',
-      confirmLabel: 'Leave',
+      title: 'Pause this workout?',
+      message: 'You can resume it from Home.',
+      confirmLabel: 'Pause',
       cancelLabel: 'Stay',
-      destructive: true,
     });
-    if (leaving) router.replace('/(tabs)');
+    if (!leaving || !active) return;
+    try {
+      if (active.phase === 'resting' && active.draft)
+        await commit({ draft: active.draft });
+      if (isCurrent()) router.replace('/(tabs)');
+    } catch (error) {
+      notify(
+        'Could not pause workout',
+        error instanceof Error ? error.message : 'Try again.',
+      );
+    }
   };
 
   const resting = phase === 'resting' && draft != null;
@@ -271,15 +452,23 @@ export default function SessionRun() {
           </Overline>
           <ProgressBar value={(cursor + (resting ? 1 : 0)) / queue.length} />
         </View>
-        <Pressable onPress={quit} hitSlop={12} accessibilityLabel="Leave session">
+        <Pressable
+          onPress={quit}
+          hitSlop={12}
+          accessibilityLabel="Leave session"
+        >
           <Icon name="close" size={22} color={colors.muted} />
         </Pressable>
       </View>
 
+      {snapshotError ? <Muted>{snapshotError}</Muted> : null}
       {resting ? (
         <Animated.View
           key={`rest:${entry.key}`}
-          entering={SlideInRight.duration(motion.base).springify().damping(motion.settle.damping).reduceMotion(ReduceMotion.System)}
+          entering={SlideInRight.duration(motion.base)
+            .springify()
+            .damping(motion.settle.damping)
+            .reduceMotion(ReduceMotion.System)}
           style={styles.flex}
         >
           <RestPage
@@ -289,8 +478,9 @@ export default function SessionRun() {
             units={units}
             bodyweightKg={profile?.bodyweight_kg ?? null}
             restSeconds={entry.block.rest_seconds}
+            restUntilMs={active?.restUntilMs}
             draft={draft}
-            onChange={setDraft}
+            onChange={changeDraft}
             next={upNext}
             onAdvance={leaveRest}
             advancing={busy}
@@ -300,18 +490,29 @@ export default function SessionRun() {
         <>
           <Animated.View
             key={entry.key}
-            entering={SlideInRight.duration(motion.base).springify().damping(motion.settle.damping).reduceMotion(ReduceMotion.System)}
-            exiting={SlideOutLeft.duration(motion.fast).reduceMotion(ReduceMotion.System)}
+            entering={SlideInRight.duration(motion.base)
+              .springify()
+              .damping(motion.settle.damping)
+              .reduceMotion(ReduceMotion.System)}
+            exiting={SlideOutLeft.duration(motion.fast).reduceMotion(
+              ReduceMotion.System,
+            )}
             style={styles.body}
           >
-            {exercise ? <ExerciseMedia exercise={exercise} style={styles.media} /> : null}
+            {exercise ? (
+              <ExerciseMedia exercise={exercise} style={styles.media} />
+            ) : null}
 
             <View style={{ gap: space.xs, marginTop: space.lg }}>
-              <Heading numberOfLines={2}>{exercise?.name ?? entry.item.exercise_id}</Heading>
+              <Heading numberOfLines={2}>
+                {exercise?.name ?? entry.item.exercise_id}
+              </Heading>
               <Body style={styles.target}>{targetReps}</Body>
               {entry.item.notes ? <Muted>{entry.item.notes}</Muted> : null}
               {known?.last_weight_kg != null ? (
-                <Muted>Last time · {formatWeight(known.last_weight_kg, units)}</Muted>
+                <Muted>
+                  Last time · {formatWeight(known.last_weight_kg, units)}
+                </Muted>
               ) : null}
             </View>
 
@@ -327,22 +528,27 @@ export default function SessionRun() {
 
           <View style={styles.footer}>
             <Overline style={{ textAlign: 'center' }}>
-              {isWarmup ? 'Move through it' : `Set ${entry.set} of ${entry.setsTotal}`}
+              {isWarmup
+                ? 'Move through it'
+                : `Set ${entry.set} of ${entry.setsTotal}`}
             </Overline>
             <Button
               title={isWarmup ? 'Done' : 'Complete set'}
               loading={busy}
               onPress={() => {
                 if (isWarmup) {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  advance();
+                  advanceWarmup();
                   return;
                 }
                 completeSet();
               }}
               style={{ marginTop: space.md }}
             />
-            {pendingSync > 0 ? <Muted style={{ textAlign: 'center', marginTop: space.sm }}>{pendingSync} set{pendingSync === 1 ? '' : 's'} syncing</Muted> : null}
+            {pendingSync > 0 ? (
+              <Muted style={{ textAlign: 'center', marginTop: space.sm }}>
+                {pendingSync} set{pendingSync === 1 ? '' : 's'} syncing
+              </Muted>
+            ) : null}
           </View>
         </>
       )}

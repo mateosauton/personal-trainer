@@ -1,13 +1,22 @@
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { ExerciseMedia } from '@/components/ExerciseMedia';
-import { Body, Button, Card, Display, Muted, Overline, Screen } from '@/components/ui';
+import {
+  Body,
+  Button,
+  Card,
+  Display,
+  Muted,
+  Overline,
+  Screen,
+} from '@/components/ui';
 import { useUserId } from '@/lib/auth';
 import { getExercise } from '@/lib/catalog';
 import { getActivePlan, startSession } from '@/lib/db/queries';
+import { workouts } from '@/lib/session/workout';
 import { prefetchUrls } from '@/lib/media/provider';
 import { colors, space, type } from '@/lib/theme';
 import type { PlanDay } from '@/lib/types';
@@ -17,6 +26,16 @@ export default function SessionOverview() {
   const { dayId } = useLocalSearchParams<{ dayId: string }>();
   const userId = useUserId();
   const router = useRouter();
+  const identity = `${userId}:${dayId}`;
+  const currentIdentity = useRef(identity);
+  currentIdentity.current = identity;
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const [day, setDay] = useState<PlanDay | null>(null);
   const [loading, setLoading] = useState(true);
@@ -24,8 +43,13 @@ export default function SessionOverview() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setStarting(false);
     getActivePlan(userId)
       .then((plan) => {
+        if (cancelled) return;
         const found = plan?.days.find((d) => d.id === dayId) ?? null;
         setDay(found);
         if (found) {
@@ -37,8 +61,18 @@ export default function SessionOverview() {
           Image.prefetch(prefetchUrls(exercises)).catch(() => {});
         }
       })
-      .catch((e) => setError(e instanceof Error ? e.message : 'Could not load the session'))
-      .finally(() => setLoading(false));
+      .catch((e) => {
+        if (!cancelled)
+          setError(
+            e instanceof Error ? e.message : 'Could not load the session',
+          );
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [userId, dayId]);
 
   if (loading) {
@@ -53,18 +87,41 @@ export default function SessionOverview() {
     return (
       <Screen>
         <Display>Not found.</Display>
-        <Muted style={{ marginTop: space.md }}>{error ?? 'That session is no longer in your plan.'}</Muted>
-        <Button title="Back" variant="surface" onPress={() => router.back()} style={{ marginTop: space.xl }} />
+        <Muted style={{ marginTop: space.md }}>
+          {error ?? 'That session is no longer in your plan.'}
+        </Muted>
+        <Button
+          title="Back"
+          variant="surface"
+          onPress={() => router.back()}
+          style={{ marginTop: space.xl }}
+        />
       </Screen>
     );
   }
 
   const begin = async () => {
+    const isCurrent = () =>
+      mounted.current && currentIdentity.current === identity;
     setStarting(true);
     try {
+      const saved = await workouts.read(userId);
+      if (!isCurrent()) return;
+      if (saved) {
+        router.replace({
+          pathname: '/session/[dayId]/run',
+          params: { dayId: saved.day.id, sessionId: saved.sessionId },
+        });
+        return;
+      }
       const sessionId = await startSession(userId, day.id);
-      router.replace({ pathname: '/session/[dayId]/run', params: { dayId: day.id, sessionId } });
+      if (!isCurrent()) return;
+      router.replace({
+        pathname: '/session/[dayId]/run',
+        params: { dayId: day.id, sessionId },
+      });
     } catch (e) {
+      if (!isCurrent()) return;
       setError(e instanceof Error ? e.message : 'Could not start the session');
       setStarting(false);
     }
@@ -99,7 +156,11 @@ export default function SessionOverview() {
                     : `${item.reps_low}–${item.reps_high}`;
                 return (
                   <View key={item.id} style={styles.itemRow}>
-                    <ExerciseMedia exercise={exercise} style={styles.thumb} paused />
+                    <ExerciseMedia
+                      exercise={exercise}
+                      style={styles.thumb}
+                      paused
+                    />
                     <View style={{ flex: 1, gap: 2 }}>
                       <Body style={styles.itemName} numberOfLines={2}>
                         {exercise.name}
@@ -117,7 +178,12 @@ export default function SessionOverview() {
         ))}
       </View>
 
-      <Button title="Begin" onPress={begin} loading={starting} style={{ marginTop: space.xl }} />
+      <Button
+        title="Begin"
+        onPress={begin}
+        loading={starting}
+        style={{ marginTop: space.xl }}
+      />
       <Button variant="ghost" title="Not now" onPress={() => router.back()} />
     </Screen>
   );
