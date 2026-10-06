@@ -210,16 +210,6 @@ export async function getProgress(userId: string): Promise<Map<string, ProgressR
   return new Map((data ?? []).map((row) => [row.exercise_id, row as ProgressRow]));
 }
 
-export async function upsertProgress(userId: string, rows: (ProgressRow & { exercise_id: string })[], client = supabase, signal?: AbortSignal) {
-  if (rows.length === 0) return;
-  const request = client.from('exercise_progress').upsert(
-    rows.map((r) => ({ user_id: userId, ...r, updated_at: new Date().toISOString() })),
-    { onConflict: 'user_id,exercise_id' },
-  );
-  const { error } = await (signal ? request.abortSignal(signal) : request);
-  if (error) throw error;
-}
-
 export async function getRecentSessions(userId: string, limit = 30) {
   const { data, error } = await supabase
     .from('sessions')
@@ -244,4 +234,53 @@ export async function getSetLogsForSessions(sessionIds: string[]) {
     .in('session_id', sessionIds);
   if (error) throw error;
   return data ?? [];
+}
+
+
+/** The session's original day remains valid after the active plan changes. */
+export async function getSessionPlanDay(sessionId: string, userId: string): Promise<PlanDay | null> {
+  const { data, error } = await supabase.from('sessions').select(`
+    plan_days (id, day_index, name, focus,
+      plan_blocks (id, block_index, kind, title, rounds, rest_seconds,
+        plan_items (id, item_index, exercise_id, sets, reps_low, reps_high, seconds, tempo, notes)))
+  `).eq('id', sessionId).eq('user_id', userId).maybeSingle();
+  if (error) throw error;
+  if (!data?.plan_days) return null;
+  const raw = data.plan_days as unknown as Omit<PlanDay, 'blocks'> & {
+    plan_blocks: (Omit<PlanDay['blocks'][number], 'items'> & { plan_items: PlanDay['blocks'][number]['items'] })[];
+  };
+  const { plan_blocks, ...day } = raw;
+  return { ...day, blocks: plan_blocks.map(({ plan_items, ...block }) => ({
+    ...block, items: plan_items.slice().sort((a, b) => a.item_index - b.item_index),
+  })).sort((a, b) => a.block_index - b.block_index) };
+}
+
+export interface SessionSummaryLine {
+  exerciseId: string;
+  name: string;
+  sets: number;
+  volumeKg: number;
+  topLoadKg: number | null;
+  verdict: 'progress' | 'hold' | 'deload' | null;
+  isPr: boolean;
+}
+
+export async function getSessionProgressResult(sessionId: string): Promise<SessionSummaryLine[] | null> {
+  const { data, error } = await supabase.from('session_progress_results')
+    .select('result').eq('session_id', sessionId).maybeSingle();
+  if (error) throw error;
+  return data?.result as SessionSummaryLine[] | null ?? null;
+}
+
+export async function applySessionProgress(
+  sessionId: string,
+  expected: { exercise_id: string; state: ProgressRow | null }[],
+  updates: ProgressRow[],
+  result: SessionSummaryLine[],
+): Promise<SessionSummaryLine[]> {
+  const { data, error } = await supabase.rpc('apply_session_progress', {
+    p_session_id: sessionId, p_expected: expected, p_updates: updates, p_result: result,
+  });
+  if (error) throw error;
+  return data as SessionSummaryLine[];
 }

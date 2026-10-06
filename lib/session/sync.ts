@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 
-import { finishSession, logSet, upsertProgress, type ProgressRow } from '@/lib/db/queries';
+import { finishSession, logSet } from '@/lib/db/queries';
 import { clientForAccessToken, supabase } from '@/lib/db/supabase';
 import type { SetLog } from '@/lib/types';
 import { Outbox, type OutboxOperation } from './outbox';
@@ -36,9 +36,17 @@ function queueFor(userId: string): Outbox {
         const { sessionId, set } = operation.payload as { sessionId: string; set: SetLog };
         await logSet(sessionId, set, client, signal);
       } else if (operation.kind === 'progress') {
-        const { userId: owner, rows } = operation.payload as { userId: string; rows: ProgressRow[] };
+        const { userId: owner } = operation.payload as { userId: string };
         if (owner !== userId) throw new Error('Queued progress belongs to another account.');
-        await upsertProgress(userId, rows, client, signal);
+        // Old summaries queued non-idempotent progress patches. Preserve them
+        // for recovery, but do not replay them over newer server receipts.
+        const archiveKey = `office-gym.legacy-progress.v1.${userId}`;
+        const raw = await AsyncStorage.getItem(archiveKey);
+        const archive: unknown = raw ? JSON.parse(raw) : [];
+        if (!Array.isArray(archive)) throw new Error('Legacy progress archive is invalid.');
+        if (!archive.some((entry) => JSON.stringify(entry) === JSON.stringify(operation))) {
+          await AsyncStorage.setItem(archiveKey, JSON.stringify([...archive, operation]));
+        }
       } else {
         const { sessionId, durationS } = operation.payload as { sessionId: string; durationS: number };
         await finishSession(sessionId, { duration_s: durationS, rpe: null }, client, signal);
@@ -59,11 +67,6 @@ const enqueue = async (userId: string, operation: OutboxOperation) => {
 export const queueSet = (userId: string, sessionId: string, set: SetLog) => enqueue(userId, {
   id: `set:${sessionId}:${set.plan_item_id}:${set.set_index}`,
   kind: 'set', payload: { sessionId, set },
-});
-
-export const queueProgress = (userId: string, rows: ProgressRow[]) => enqueue(userId, {
-  id: `progress:${userId}:${rows.map((row) => row.exercise_id).sort().join(',')}`,
-  kind: 'progress', payload: { userId, rows },
 });
 
 export const queueCompletion = (userId: string, sessionId: string, durationS: number) => enqueue(userId, {
