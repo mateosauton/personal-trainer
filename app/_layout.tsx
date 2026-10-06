@@ -1,6 +1,5 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -9,7 +8,6 @@ import { AuthProvider, useAuth } from '@/lib/auth';
 import { profileGate } from '@/lib/auth-gate';
 import { Button, Body, Screen } from '@/components/ui';
 import { colors } from '@/lib/theme';
-import { startOutboxSync } from '@/lib/session/sync';
 
 const Splash = () => (
   <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
@@ -83,7 +81,6 @@ function Routes() {
 }
 
 export default function RootLayout() {
-  useEffect(() => startOutboxSync(), []);
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>

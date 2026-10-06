@@ -65,7 +65,7 @@ export default function SessionRun() {
     if (!finished || completionStarted.current) return;
     completionStarted.current = true;
     const elapsed = Math.max(1, Math.round((Date.now() - startedAt.current) / 1000));
-    void queueCompletion(sessionId, elapsed)
+    void queueCompletion(userId, sessionId, elapsed)
       .then(() => flushOutbox())
       .then(() => {
         router.replace({ pathname: '/session/[dayId]/summary', params: { dayId, sessionId, elapsed: String(elapsed) } });
@@ -74,7 +74,7 @@ export default function SessionRun() {
         completionStarted.current = false;
         notify('Could not finish session', error instanceof Error ? error.message : 'Try again.');
       });
-  }, [finished, dayId, sessionId, router]);
+  }, [finished, userId, dayId, sessionId, router]);
 
   const units = profile?.units ?? 'kg';
   const exercise = entry ? getExercise(entry.item.exercise_id) : null;
@@ -99,7 +99,7 @@ export default function SessionRun() {
         rpe: null,
       };
       try {
-        await queueSet(sessionId, set);
+        await queueSet(userId, sessionId, set);
         setPendingSync(await pendingSyncCount());
       } catch (e) {
         notify('Could not save that set', e instanceof Error ? e.message : 'Try again.');
@@ -122,7 +122,7 @@ export default function SessionRun() {
       });
       return true;
     },
-    [sessionId, units],
+    [userId, sessionId, units],
   );
 
   if (loading) {

@@ -20,3 +20,8 @@ export const supabase = createClient(url, key, {
     detectSessionInUrl: false,
   },
 });
+
+/** A write client with a fixed token, independent of shared auth state changes. */
+export const clientForAccessToken = (accessToken: string) => createClient(url!, key!, {
+  accessToken: async () => accessToken,
+});
