@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { LegacySetRecovery } from './LegacySetRecovery';
+import type { RejectedOperation } from '@/lib/session/outbox';
 import { Body, Button, Card, Overline } from '@/components/ui';
-import { getSyncStatus, retrySync, getSetConflicts, reviewSetConflict, resolveSetConflict, type SetConflictReview } from '@/lib/session/sync';
+import { getSyncStatus, retrySync, getSetConflicts, getLegacySetConflicts, reviewSetConflict, resolveSetConflict, type SetConflictReview } from '@/lib/session/sync';
 import type { BlockedWrite } from '@/lib/session/set-journal';
 import type { SetLog } from '@/lib/types';
 import { exerciseName } from '@/lib/catalog';
@@ -13,6 +15,7 @@ type State = {
   rejected: number;
   error?: boolean;
   conflicts?: BlockedWrite[];
+  legacy?: RejectedOperation[];
 };
 
 /** Recovery is account-scoped; prior account results never appear on Home. */
@@ -46,9 +49,9 @@ function AccountSyncRecovery({ userId }: { userId: string }) {
     const attempt = ++request.current;
     const latest = () => current() && request.current === attempt;
     try {
-      const [next, conflicts] = await Promise.all([getSyncStatus(userId), getSetConflicts(userId)]);
+      const [next, conflicts, legacy] = await Promise.all([getSyncStatus(userId), getSetConflicts(userId), getLegacySetConflicts(userId)]);
       if (latest()) {
-        setState({ ...next, conflicts });
+        setState({ ...next, conflicts, legacy });
         setReview(previous => previous && conflicts.some(entry =>
           entry.code === previous.code && JSON.stringify(entry.write) === JSON.stringify(previous.write)) ? previous : null);
       }
@@ -151,6 +154,8 @@ function AccountSyncRecovery({ userId }: { userId: string }) {
         <Button key={entry.write.id} title={`Review ${exerciseName(entry.write.set.exercise_id)} set ${entry.write.set.set_index}`}
           variant="surface" disabled={busyOwner === userId} onPress={() => { void openReview(entry); }} />
       ))}
+      {(own.legacy ?? []).map(captured => <LegacySetRecovery key={JSON.stringify(captured)}
+        userId={userId} captured={captured} onResolved={refresh} />)}
       <Button
         title="Retry workout sync"
         disabled={busyOwner === userId}

@@ -610,3 +610,92 @@ it('does not mark a reviewed draft saved when a queued correction invalidates it
   await expect(api.resolveSetConflict(conflictOwner, review, 'server')).rejects.toThrow(/changed/);
   expect(values.get(key)).toBe(original);
 });
+
+async function legacyConflict() {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner);
+  const operation = { id: `set:${conflictSession}:${set.plan_item_id}:1`, kind: 'set', payload: { sessionId: conflictSession, set } };
+  values.set(`office-gym.session-outbox.v2.${conflictOwner}`, JSON.stringify([operation]));
+  mockLegacy.mockResolvedValue({ status: 'conflict', serverVersion: 4 });
+  await flushOutbox();
+  const api = require('@/lib/session/sync');
+  const [capture] = await api.getLegacySetConflicts(conflictOwner);
+  return { api, capture, operation };
+}
+it('converts the explicit legacy server choice with its displayed version and real server time', async () => {
+  const { api, capture, operation } = await legacyConflict(); mockServerState.mockResolvedValue(serverSet());
+  const review = await api.reviewLegacySetConflict(conflictOwner, capture);
+  mockLogSet.mockResolvedValue({ status: 'applied', serverVersion: 5 });
+  await api.resolveLegacySetConflict(conflictOwner, review, 'server'); await flushOutbox();
+  expect(mockLogSet).toHaveBeenCalledWith(expect.objectContaining({ set: serverSet().set,
+    expectedVersion: 4, eventAt: serverSet().eventAt, revision: 1 }), expect.anything(), expect.any(AbortSignal));
+  expect(await api.getSyncStatus(conflictOwner)).toMatchObject({ pending: 0, rejected: 0 });
+  const archive = JSON.parse(values.get(`office-gym.session-outbox.v2.${conflictOwner}.rejected`)!);
+  expect(archive[0]).toEqual({ operation, code: 'PT409', resolved: true });
+  const journal = JSON.parse(values.get(`office-gym.set-journal.v1.${conflictOwner}`)!);
+  expect(journal.legacyComparisons[0].saved.set).toEqual(set);
+  expect(journal.legacyComparisons[0].saved).not.toHaveProperty('eventAt');
+});
+it('does not invent a legacy completion time when choosing saved values', async () => {
+  const { api, capture } = await legacyConflict(); mockServerState.mockResolvedValue(null);
+  const review = await api.reviewLegacySetConflict(conflictOwner, capture);
+  await expect(api.resolveLegacySetConflict(conflictOwner, review, 'saved')).rejects.toThrow(/completion time/);
+  expect(values.has(`office-gym.set-journal.v1.${conflictOwner}`)).toBe(false);
+  expect(mockLogSet).not.toHaveBeenCalled();
+});
+it('uses the explicitly confirmed legacy completion time instead of today', async () => {
+  const { api, capture } = await legacyConflict(); mockServerState.mockResolvedValue(null);
+  const review = await api.reviewLegacySetConflict(conflictOwner, capture);
+  const originalTime = '2026-09-01T10:30:00.000Z';
+  await api.resolveLegacySetConflict(conflictOwner, review, 'saved', originalTime); await flushOutbox();
+  expect(mockLogSet).toHaveBeenCalledWith(expect.objectContaining({ set, expectedVersion: 0, eventAt: originalTime }), expect.anything(), expect.any(AbortSignal));
+});
+it.each(['2026', '2026-02-31T10:30:00Z', '2026-09-01T10:30:00', 'invalid'])('preserves a legacy edit if the confirmed time is invalid: %s', async time => {
+  const { api, capture } = await legacyConflict(); mockServerState.mockResolvedValue(null);
+  const review = await api.reviewLegacySetConflict(conflictOwner, capture);
+  await expect(api.resolveLegacySetConflict(conflictOwner, review, 'saved', time)).rejects.toThrow(/completion time/);
+  expect(mockLogSet).not.toHaveBeenCalled();
+});
+it('rejects a stale legacy comparison when a newer journal correction exists', async () => {
+  const { api, capture } = await legacyConflict(); mockServerState.mockResolvedValue(serverSet());
+  const review = await api.reviewLegacySetConflict(conflictOwner, capture);
+  mockLogSet.mockRejectedValue({ code: 'PT409' });
+  await queueSet(conflictOwner, conflictSession, { ...set, reps: 10 }); await flushOutbox();
+  await expect(api.resolveLegacySetConflict(conflictOwner, review, 'server')).rejects.toThrow(/changed/);
+});
+it('keeps an interrupted legacy publication reconstructable with its exact time and comparison', async () => {
+  const { api, capture } = await legacyConflict(); mockServerState.mockResolvedValue(serverSet());
+  const review = await api.reviewLegacySetConflict(conflictOwner, capture);
+  const queueKey = `office-gym.session-outbox.v2.${conflictOwner}`;
+  jest.mocked(AsyncStorage.setItem).mockImplementation(async (key, value) => {
+    if (key === queueKey) throw new Error('queue full'); values.set(key, value);
+  });
+  await expect(api.resolveLegacySetConflict(conflictOwner, review, 'server')).rejects.toThrow('queue full');
+  expect(await api.getSyncStatus(conflictOwner)).toMatchObject({ pending: 1, rejected: 1 });
+  jest.mocked(AsyncStorage.setItem).mockImplementation(async (key, value) => { values.set(key, value); });
+  await flushOutbox();
+  expect(mockLogSet).toHaveBeenCalledWith(expect.objectContaining({ eventAt: serverSet().eventAt, revision: 1, expectedVersion: 4 }), expect.anything(), expect.any(AbortSignal));
+  expect(await api.getSyncStatus(conflictOwner)).toMatchObject({ pending: 0, rejected: 0 });
+});
+it('does not expose an older set review after the account switches during its server read', async () => {
+  const { api, capture } = await legacyConflict(); let release!: (value: unknown) => void;
+  mockServerState.mockImplementation(() => new Promise(done => { release = done; }));
+  const pending = api.reviewLegacySetConflict(conflictOwner, capture);
+  while (!release) await Promise.resolve(); setSyncAccount(null); release(serverSet());
+  await expect(pending).rejects.toThrow(/account/);
+});
+it('expires an older set review without replacing its saved archive', async () => {
+  const { api, capture } = await legacyConflict(); jest.useFakeTimers();
+  try {
+    mockServerState.mockImplementation(() => new Promise(() => {}));
+    const assertion = expect(api.reviewLegacySetConflict(conflictOwner, capture)).rejects.toThrow(/timed out/);
+    await jest.advanceTimersByTimeAsync(15000); await assertion;
+    expect(await api.getLegacySetConflicts(conflictOwner)).toEqual([capture]);
+  } finally { jest.useRealTimers(); }
+});
+it('invalidates an older set choice across sign-out and return to the same account', async () => {
+  const { api, capture } = await legacyConflict(); mockServerState.mockResolvedValue(serverSet());
+  const review = await api.reviewLegacySetConflict(conflictOwner, capture);
+  setSyncAccount(null); setSyncAccount(conflictOwner);
+  await expect(api.resolveLegacySetConflict(conflictOwner, review, 'server')).rejects.toThrow(/account/);
+  expect(mockLogSet).not.toHaveBeenCalled();
+});

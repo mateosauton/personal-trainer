@@ -22,6 +22,14 @@ export interface SetComparison {
   choice: 'saved' | 'server';
   draftCopy?: { units: 'kg' | 'lb'; draft: WorkoutDraft | null; savedDraft: WorkoutDraft | null; bodyweightKg?: number | null };
 }
+export interface LegacySetCapture { id: string; sessionId: string; set: SetLog }
+export interface LegacySetComparison {
+  saved: LegacySetCapture;
+  server: SetComparison['server'];
+  choice: 'saved' | 'server';
+  eventAt: string;
+  draftCopy?: SetComparison['draftCopy'];
+}
 interface Entry {
   write: JournalWrite;
   status: 'pending' | 'blocked' | 'synced';
@@ -35,6 +43,7 @@ interface SavedJournal {
   entries: Entry[];
   recovery: BlockedWrite[];
   comparisons?: SetComparison[];
+  legacyComparisons?: LegacySetComparison[];
 }
 export type JournalLock = <T>(
   key: string,
@@ -130,6 +139,19 @@ const validComparison = (value: unknown, owner: string): value is SetComparison 
       || (typeof value.draftCopy.bodyweightKg === 'number' && Number.isFinite(value.draftCopy.bodyweightKg)
         && value.draftCopy.bodyweightKg >= 0))));
 
+export const validLegacyCapture = (value: unknown): value is LegacySetCapture => object(value)
+  && uuid(value.sessionId) && value.sessionId === value.sessionId.toLowerCase()
+  && validSet(value.set) && value.set.plan_item_id === value.set.plan_item_id.toLowerCase()
+  && value.id === idFor(value.sessionId, value.set);
+const validLegacyComparison = (value: unknown, owner: string): value is LegacySetComparison => {
+  if (!object(value) || !validLegacyCapture(value.saved) || !time(value.eventAt)) return false;
+  // Reuse payload/context validation with a temporary validation-only shape.
+  // The original capture is stored as-is without invented origin/revision/time metadata.
+  const saved = { ...value.saved, ownerId: owner, origin: owner, revision: 1, expectedVersion: 0, eventAt: value.eventAt };
+  return validComparison({ saved, server: value.server, choice: value.choice, draftCopy: value.draftCopy }, owner)
+    && (value.choice !== 'server' || value.eventAt === value.server.eventAt);
+};
+
 /** Write-ahead recovery record: saving never depends on a network response. */
 export class SetJournal {
   private readonly owner: string;
@@ -182,6 +204,8 @@ export class SetJournal {
         value.entries.length ||
       (value.comparisons !== undefined && (!Array.isArray(value.comparisons)
         || !value.comparisons.every((entry: unknown) => validComparison(entry, this.owner)))) ||
+      (value.legacyComparisons !== undefined && (!Array.isArray(value.legacyComparisons)
+        || !value.legacyComparisons.every((entry: unknown) => validLegacyComparison(entry, this.owner)))) ||
       !value.recovery.every(
         (e: unknown) =>
           object(e) &&
@@ -272,6 +296,9 @@ export class SetJournal {
         .map((e) => ({ write: e.write, code: e.code! })),
     );
   }
+  writes() {
+    return this.lock(this.key, async () => ((await this.read())?.entries ?? []).map(entry => entry.write));
+  }
   recoveryCopies() {
     return this.lock(this.key, async () => (await this.read())?.recovery ?? []);
   }
@@ -313,6 +340,41 @@ export class SetJournal {
       entry.status = 'blocked';
       entry.code = code;
       await this.persist(journal);
+    });
+  }
+  /** Convert only an explicit legacy choice; publication must validate its outbox capture. */
+  async importLegacy(
+    captured: LegacySetCapture, set: SetLog, serverVersion: number, eventAt: string,
+    publish: (write: JournalWrite, persist: () => Promise<void>) => Promise<void>,
+    beforePersist: () => void | Promise<void>, comparison: LegacySetComparison,
+  ) {
+    const input = this.prepare(captured.sessionId, set, eventAt);
+    if (!validLegacyCapture(captured) || !safe(serverVersion) || idFor(input.sessionId, input.set) !== captured.id
+      || !validLegacyComparison(comparison, this.owner)
+      || JSON.stringify(comparison.saved) !== JSON.stringify(captured)
+      || (comparison.server?.serverVersion ?? 0) !== serverVersion || comparison.eventAt !== eventAt
+      || JSON.stringify(canonicalSet(comparison.choice === 'server' ? comparison.server!.set : captured.set)) !== JSON.stringify(input.set))
+      throw new Error('Invalid legacy conflict choice.');
+    const copy = JSON.parse(JSON.stringify(comparison)) as LegacySetComparison;
+    return this.lock(this.key, async () => {
+      const journal: SavedJournal = (await this.read()) ?? {
+        version: 1, ownerId: this.owner, origin: this.freshOrigin(), entries: [], recovery: [],
+      };
+      if (journal.entries.some(entry => entry.write.id === copy.saved.id))
+        throw new Error('The saved set changed. Review the latest value.');
+      const write: JournalWrite = { id: copy.saved.id, ownerId: this.owner, ...input,
+        origin: this.freshOrigin(), revision: 1, expectedVersion: serverVersion };
+      journal.entries.push({ write, status: 'pending', acknowledgedVersion: 0 });
+      (journal.legacyComparisons ??= []).push(copy);
+      let persisted = false;
+      await publish(write, async () => {
+        if (persisted) return;
+        await beforePersist();
+        await this.persist(journal);
+        persisted = true;
+      });
+      if (!persisted) throw new Error('The legacy choice was not saved. Its original data is preserved.');
+      return write;
     });
   }
   async resolve(

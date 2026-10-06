@@ -1,4 +1,4 @@
-import { SetJournal } from '@/lib/session/set-journal';
+import { SetJournal, type JournalWrite } from '@/lib/session/set-journal';
 import type { SetLog } from '@/lib/types';
 const owner = '11111111-1111-4111-8111-111111111111';
 const session = '22222222-2222-4222-8222-222222222222';
@@ -288,4 +288,65 @@ it('preserves the original completion event when correcting a set later', async 
   clock = '2026-10-06T10:15:00.000Z';
   const corrected = await journal.save(session, set(12), async () => {});
   expect(corrected.eventAt).toBe(first.eventAt);
+});
+
+const legacy = () => ({ id: `set:${session}:${item}:1`, sessionId: session, set: set() });
+it('imports an explicit legacy choice against its displayed baseline without fabricating legacy metadata', async () => {
+  const storage = disk();
+  const journal = make(storage, owner, () => freshOrigin);
+  const captured = legacy();
+  const server = { set: set(12), serverVersion: 4, eventAt: '2026-10-06T11:00:00Z' };
+  const publish = jest.fn(async (_write: JournalWrite, persist: () => Promise<void>) => { await persist(); });
+  const chosen = await journal.importLegacy(captured, set(12), 4, server.eventAt, publish,
+    async () => {}, { saved: captured, server, choice: 'server', eventAt: server.eventAt });
+  expect(chosen).toMatchObject({ revision: 1, expectedVersion: 4, eventAt: server.eventAt, set: set(12), ownerId: owner });
+  expect((await journal.pending())[0]).toEqual(chosen);
+  const stored = JSON.parse(storage.values.get(`office-gym.set-journal.v1.${owner}`)!);
+  expect(stored.legacyComparisons).toEqual([{ saved: captured, server, choice: 'server', eventAt: server.eventAt }]);
+  expect(stored.legacyComparisons[0].saved).not.toHaveProperty('origin');
+  expect(stored.legacyComparisons[0].saved).not.toHaveProperty('eventAt');
+});
+it('requires an explicit completion time for a missing legacy server set', async () => {
+  const storage = disk(), journal = make(storage);
+  await expect(journal.importLegacy(legacy(), set(), 0, undefined as never, async (_w, persist) => persist(),
+    async () => {}, { saved: legacy(), server: null, choice: 'saved', eventAt: undefined as never })).rejects.toThrow(/event time/);
+  expect(storage.values.size).toBe(0);
+});
+it('cannot import a legacy choice over a newer journal edit', async () => {
+  const storage = disk(), journal = make(storage);
+  const newer = await journal.save(session, set(10), async () => {});
+  const publish = jest.fn();
+  await expect(journal.importLegacy(legacy(), set(12), 4, event, publish, async () => {},
+    { saved: legacy(), server: { set: set(12), serverVersion: 4, eventAt: event }, choice: 'server', eventAt: event })).rejects.toThrow(/changed/);
+  expect(publish).not.toHaveBeenCalled();
+  expect(await journal.pending()).toEqual([newer]);
+});
+it('recovers a legacy conversion interrupted after journal persistence but before queue publication', async () => {
+  const storage = disk(), journal = make(storage);
+  await expect(journal.importLegacy(legacy(), set(), 0, event,
+    async (_write, persist) => { await persist(); throw new Error('queue full'); }, async () => {},
+    { saved: legacy(), server: null, choice: 'saved', eventAt: event })).rejects.toThrow('queue full');
+  const replay = jest.fn(async () => {});
+  await make(storage).recover(replay);
+  expect(replay).toHaveBeenCalledWith(expect.objectContaining({ set: set(), expectedVersion: 0, eventAt: event, revision: 1 }));
+  expect(JSON.parse(storage.values.get(`office-gym.set-journal.v1.${owner}`)!).legacyComparisons[0].saved).toEqual(legacy());
+});
+it('does not persist a legacy conversion if queue validation rejects its capture', async () => {
+  const storage = disk(), journal = make(storage);
+  const before = jest.fn(async () => {});
+  await expect(journal.importLegacy(legacy(), set(), 0, event,
+    async () => { throw new Error('capture changed'); }, before,
+    { saved: legacy(), server: null, choice: 'saved', eventAt: event })).rejects.toThrow('capture changed');
+  expect(before).not.toHaveBeenCalled();
+  expect(storage.values.size).toBe(0);
+});
+it('captures legacy identity and payload before a caller can mutate its input', async () => {
+  const storage = disk(), journal = make(storage); const captured = legacy();
+  const original = legacy();
+  const pending = journal.importLegacy(captured, captured.set, 0, event,
+    async (_write, persist) => { await persist(); }, async () => {},
+    { saved: captured, server: null, choice: 'saved', eventAt: event });
+  captured.id = 'changed'; captured.set.reps = 99;
+  await pending;
+  expect((await journal.pending())[0]).toMatchObject({ id: original.id, set: original.set });
 });

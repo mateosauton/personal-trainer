@@ -12,8 +12,8 @@ import {
 } from '@/lib/db/queries';
 import { clientForAccessToken, supabase } from '@/lib/db/supabase';
 import type { SetLog } from '@/lib/types';
-import { Outbox, type OutboxOperation } from './outbox';
-import { SetJournal, type JournalWrite, type BlockedWrite } from './set-journal';
+import { Outbox, type OutboxOperation, type RejectedOperation } from './outbox';
+import { SetJournal, type JournalWrite, type BlockedWrite, type LegacySetCapture, validLegacyCapture } from './set-journal';
 import { storageLock } from './storage-lock';
 import { archiveLegacyProgress } from './legacy-progress';
 import { workouts } from './workout';
@@ -353,6 +353,124 @@ export async function resolveSetConflict(userId: string, review: SetConflictRevi
     { saved: review.write, server: review.server, choice,
       ...(patch && local ? { draftCopy: { units: local.units, draft: local.draft, savedDraft: local.savedDraft, bodyweightKg: local.bodyweightKg } } : {}) }), patch, guard, patch ? { savedDraft: patch.draft } : undefined);
   guard();
+}
+
+export interface LegacySetConflictReview {
+  ownerId: string;
+  captured: RejectedOperation;
+  saved: LegacySetCapture;
+  server: SetWriteState | null;
+  workout: SavedWorkout | null;
+  accountGeneration: number;
+}
+const legacyCapture = (operation: OutboxOperation): LegacySetCapture | null => {
+  if (operation.kind !== 'set' || operation.payload.write) return null;
+  const value = { id: operation.id, sessionId: operation.payload.sessionId, set: operation.payload.set };
+  return validLegacyCapture(value) ? value : null;
+};
+export async function getLegacySetConflicts(userId: string): Promise<RejectedOperation[]> {
+  requireAccount(userId);
+  const generation = accountGeneration;
+  const [archive, pending, writes] = await Promise.all([
+    queueFor(userId).rejected(), queueFor(userId).pending(), journalFor(userId).writes(),
+  ]);
+  requireAccount(userId);
+  if (generation !== accountGeneration) throw new Error('The workout account changed.');
+  const latest = new Map<string, RejectedOperation>();
+  for (const entry of archive) latest.set(entry.operation.id, entry);
+  const newer = new Set([...pending.map(operation => operation.id), ...writes.map(write => write.id)]);
+  return [...latest.values()].filter(entry => needsReview(entry.code)
+    && legacyCapture(entry.operation) !== null && !newer.has(entry.operation.id));
+}
+async function currentLegacyConflict(userId: string, captured: RejectedOperation) {
+  const found = (await getLegacySetConflicts(userId)).find(entry => JSON.stringify(entry) === JSON.stringify(captured));
+  if (!found) throw new Error('The saved set changed. Review the latest value.');
+  return found;
+}
+export async function reviewLegacySetConflict(userId: string, captured: RejectedOperation): Promise<LegacySetConflictReview> {
+  requireAccount(userId);
+  const generation = accountGeneration;
+  const controller = new AbortController();
+  const guard = () => {
+    requireAccount(userId);
+    if (generation !== accountGeneration) throw new Error('The workout account changed.');
+    if (controller.signal.aborted) throw new Error('Workout conflict review timed out.');
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      (async () => {
+        const current = await currentLegacyConflict(userId, captured);
+        const saved = legacyCapture(current.operation)!;
+        const { data, error } = await supabase.auth.getSession();
+        guard();
+        if (error) throw error;
+        if (data.session?.user.id !== userId) throw new Error('The workout account changed.');
+        const client = clientForAccessToken(data.session.access_token);
+        const server = await getSetWriteState(saved.sessionId, saved.set.plan_item_id, saved.set.set_index, client, controller.signal);
+        guard();
+        const workout = await workouts.read(userId);
+        await currentLegacyConflict(userId, captured);
+        guard();
+        return { ownerId: userId, captured: current, saved, server, workout, accountGeneration: generation };
+      })(),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => {
+        controller.abort(); reject(new Error('Workout conflict review timed out. Your saved data is preserved.'));
+      }, 15000); }),
+    ]);
+  } finally { if (timer !== undefined) clearTimeout(timer); }
+}
+const confirmedLegacyTime = (value?: string): value is string => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return false;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) && date.toISOString() === (value.includes('.') ? value : value.replace('Z', '.000Z'));
+};
+export async function resolveLegacySetConflict(userId: string, review: LegacySetConflictReview,
+  choice: 'saved' | 'server', completedAt?: string) {
+  requireAccount(userId);
+  const generation = accountGeneration;
+  const guard = () => {
+    requireAccount(userId);
+    if (generation !== accountGeneration || review.accountGeneration !== generation)
+      throw new Error('The workout account changed. Review this set again.');
+  };
+  guard();
+  if (review.ownerId !== userId || !['saved', 'server'].includes(choice)
+    || JSON.stringify(legacyCapture(review.captured.operation)) !== JSON.stringify(review.saved))
+    throw new Error('Invalid legacy conflict choice.');
+  const current = await currentLegacyConflict(userId, review.captured);
+  guard();
+  if (current.code === 'PT410') throw new Error('This workout is finalized. Your saved edit is preserved for review.');
+  if (choice === 'server' && !review.server) throw new Error('There is no server set to choose.');
+  if (choice === 'saved' && !confirmedLegacyTime(completedAt))
+    throw new Error('Confirm the original completion time in UTC before keeping this older set.');
+  const chosen = choice === 'server' ? review.server!.set : review.saved.set;
+  const eventAt = choice === 'server' ? review.server!.eventAt : completedAt!;
+  const local = review.workout;
+  const entry = local ? buildQueue(local.day)[local.cursor] : null;
+  let patch: WorkoutPatch | undefined;
+  if (local?.sessionId === review.saved.sessionId && local.phase === 'resting'
+    && entry?.item.id === chosen.plan_item_id && entry.set === chosen.set_index) {
+    const kg = chosen.is_bodyweight ? chosen.added_load_kg : chosen.weight_kg;
+    if (chosen.reps === null || kg === null) throw new Error('This set has incomplete reps or load. Your saved draft is preserved.');
+    const draft = { reps: chosen.reps, weight: kgToDisplay(kg, local.units), asBodyweight: chosen.is_bodyweight };
+    const previous = local.progress.find(row => row.exercise_id === chosen.exercise_id);
+    patch = { draft, progress: [...local.progress.filter(row => row.exercise_id !== chosen.exercise_id),
+      { exercise_id: chosen.exercise_id, last_weight_kg: kg, last_reps: chosen.reps,
+        best_weight_kg: previous?.best_weight_kg ?? null, best_e1rm: previous?.best_e1rm ?? null,
+        miss_streak: previous?.miss_streak ?? 0 }] };
+  }
+  await workouts.withSnapshot(userId, local, persistDraft => journalFor(userId).importLegacy(
+    review.saved, chosen, review.server?.serverVersion ?? 0, eventAt,
+    (write, persist) => queueFor(userId).replaceRejected(review.captured, async () => {
+      guard(); await persist(); guard();
+      return { id: write.id, kind: 'set', payload: { sessionId: write.sessionId, set: write.set, write } };
+    }), async () => { guard(); await persistDraft(); guard(); },
+    { saved: review.saved, server: review.server, choice, eventAt,
+      ...(patch && local ? { draftCopy: { units: local.units, draft: local.draft, savedDraft: local.savedDraft, bodyweightKg: local.bodyweightKg } } : {}) }),
+    patch, guard, patch ? { savedDraft: patch.draft } : undefined);
+  guard();
+  void flushAccount(userId).catch(() => undefined);
 }
 
 /** Install for the authenticated account only. Old callbacks cannot replay a new account. */

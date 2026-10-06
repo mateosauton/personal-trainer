@@ -1,4 +1,4 @@
-jest.mock('@/lib/session/sync', () => ({ getSyncStatus: async (ownerId: string) => ({ ownerId, pending: 0, rejected: 0 }), retrySync: jest.fn(), getSetConflicts: async () => [] }));
+jest.mock('@/lib/session/sync', () => ({ getSyncStatus: async (ownerId: string) => ({ ownerId, pending: 0, rejected: 0 }), retrySync: jest.fn(), getSetConflicts: async () => [], getLegacySetConflicts: async () => [] }));
 jest.mock('@/lib/session/workout', () => ({ workouts: { read: jest.fn(async () => null) } }));
 import { act, render } from '@testing-library/react-native';
 

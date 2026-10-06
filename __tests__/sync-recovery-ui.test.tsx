@@ -1,10 +1,11 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { SyncRecovery } from '@/components/SyncRecovery';
 const mockStatus = jest.fn(),
-  mockRetry = jest.fn(), mockConflicts = jest.fn(), mockReview = jest.fn(), mockResolve = jest.fn();
+  mockRetry = jest.fn(), mockConflicts = jest.fn(), mockLegacyConflicts = jest.fn(), mockReview = jest.fn(), mockResolve = jest.fn();
 jest.mock('@/lib/session/sync', () => ({
   getSyncStatus: (...args: unknown[]) => mockStatus(...args),
   retrySync: (...args: unknown[]) => mockRetry(...args),
+  getLegacySetConflicts: (...args: unknown[]) => mockLegacyConflicts(...args),
   getSetConflicts: (...args: unknown[]) => mockConflicts(...args),
   reviewSetConflict: (...args: unknown[]) => mockReview(...args),
   resolveSetConflict: (...args: unknown[]) => mockResolve(...args),
@@ -12,6 +13,7 @@ jest.mock('@/lib/session/sync', () => ({
 beforeEach(() => {
   jest.clearAllMocks();
   mockRetry.mockResolvedValue(undefined);
+  mockLegacyConflicts.mockReset().mockResolvedValue([]);
   mockConflicts.mockReset().mockResolvedValue([]);
   mockReview.mockReset(); mockResolve.mockReset().mockResolvedValue(undefined);
 });
@@ -125,4 +127,11 @@ it('shows an unsent rest edit that the choice will replace', async () => {
   const screen = render(<SyncRecovery userId="A" />);
   fireEvent.press(await screen.findByText('Review press set 1'));
   await screen.findByText('Unsent rest draft: 10 reps · 60 kg. Your choice will replace this draft; a recovery copy is kept.');
+});
+it('surfaces preserved older set conflicts on Home instead of only offering retry', async () => {
+  mockStatus.mockResolvedValue({ ownerId: 'A', pending: 0, rejected: 1 });
+  mockLegacyConflicts.mockResolvedValue([{ operation: { id: 'legacy', kind: 'set',
+    payload: { sessionId: 'session', set: write.set } }, code: 'PT409', resolved: false }]);
+  const screen = render(<SyncRecovery userId="A" />);
+  expect(await screen.findByText('Review older press set 1')).toBeTruthy();
 });

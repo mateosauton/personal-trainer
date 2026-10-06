@@ -225,3 +225,44 @@ it('does not replay an older retryable payload when the latest rejected value ne
   expect(await queue.pending()).toEqual([]);
   expect(await queue.rejected()).toHaveLength(2);
 });
+
+it('publishes a reviewed replacement only after preserving its exact rejected capture', async () => {
+  const storage = disk();
+  const queue = make(storage, jest.fn().mockRejectedValue({ code: '23503' }));
+  await queue.enqueue(op('legacy', 8)); await queue.flush();
+  const [capture] = await queue.rejected();
+  const replacement = op('legacy', 12);
+  await queue.replaceRejected(capture, async () => replacement);
+  expect(await queue.pending()).toEqual([replacement]);
+  expect(await queue.rejected()).toEqual([capture]); // A choice is not an acknowledgement.
+});
+it('rejects a legacy choice if a newer correction is queued before publication', async () => {
+  const storage = disk();
+  const queue = make(storage, jest.fn().mockRejectedValue({ code: '23503' }));
+  await queue.enqueue(op('legacy', 8)); await queue.flush();
+  const [capture] = await queue.rejected();
+  await queue.enqueue(op('legacy', 10));
+  const prepare = jest.fn(async () => op('legacy', 12));
+  await expect(queue.replaceRejected(capture, prepare)).rejects.toThrow(/changed/);
+  expect(prepare).not.toHaveBeenCalled();
+  expect(await queue.pending()).toEqual([op('legacy', 10)]);
+});
+it('rejects a legacy choice if a newer rejection replaced the reviewed value', async () => {
+  const storage = disk();
+  const queue = make(storage, jest.fn().mockRejectedValue({ code: '23503' }));
+  await queue.enqueue(op('legacy', 8)); await queue.flush();
+  const [capture] = await queue.rejected();
+  await queue.enqueue(op('legacy', 10)); await queue.flush();
+  const prepare = jest.fn(async () => op('legacy', 12));
+  await expect(queue.replaceRejected(capture, prepare)).rejects.toThrow(/changed/);
+  expect(prepare).not.toHaveBeenCalled();
+});
+it('retains a reviewed rejection if replacement preparation fails', async () => {
+  const storage = disk();
+  const queue = make(storage, jest.fn().mockRejectedValue({ code: '23503' }));
+  await queue.enqueue(op('legacy')); await queue.flush();
+  const [capture] = await queue.rejected();
+  await expect(queue.replaceRejected(capture, async () => { throw new Error('journal full'); })).rejects.toThrow('journal full');
+  expect(await queue.rejected()).toEqual([capture]);
+  expect(await queue.pending()).toEqual([]);
+});

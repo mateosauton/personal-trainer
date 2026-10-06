@@ -112,6 +112,25 @@ export class Outbox {
     });
   }
 
+  /** Prepare a replacement under the same lock that checks the reviewed archive. */
+  replaceRejected(captured: RejectedOperation, prepare: () => Promise<OutboxOperation>) {
+    return this.exclusive(async () => {
+      const items = await this.read();
+      const latest = [...await this.readRejected()].reverse().find(entry =>
+        !entry.resolved && entry.operation.id === captured.operation.id);
+      if (!latest || JSON.stringify(latest) !== JSON.stringify(captured)
+        || items.some(item => item.id === captured.operation.id))
+        throw new Error('The saved set changed. Review the latest value.');
+      const replacement = await prepare();
+      if (!validOperation(replacement) || replacement.id !== captured.operation.id
+        || replacement.kind !== captured.operation.kind)
+        throw new Error('Invalid workout recovery replacement.');
+      items.push(replacement);
+      // Rejections remain unresolved until this exact replacement is acknowledged.
+      await this.write(items);
+    });
+  }
+
   private async quarantine(operation: OutboxOperation, error: unknown) {
     return this.exclusive(async () => {
       const items = await this.read();
