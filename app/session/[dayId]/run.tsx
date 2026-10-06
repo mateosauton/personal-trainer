@@ -136,6 +136,7 @@ export default function SessionRun() {
           sessionId,
           day: originalDay,
           units: profile?.units ?? 'kg',
+          bodyweightKg: profile?.bodyweight_kg ?? null,
           progress: [...rows.values()],
           cursor: 0,
           phase: 'work',
@@ -476,7 +477,8 @@ export default function SessionRun() {
             setLabel={`Set ${entry.set} of ${entry.setsTotal}`}
             targetReps={targetReps}
             units={units}
-            bodyweightKg={profile?.bodyweight_kg ?? null}
+            bodyweightCaptured={workout?.bodyweightKg !== undefined}
+            bodyweightKg={workout?.bodyweightKg !== undefined ? workout.bodyweightKg : profile?.bodyweight_kg ?? null}
             restSeconds={entry.block.rest_seconds}
             restUntilMs={active?.restUntilMs}
             draft={draft}

@@ -22,7 +22,7 @@ jest.mock('@/lib/session/workout', () => ({
 }));
 jest.mock('@/lib/auth', () => ({
   useUserId: () => 'A',
-  useAuth: () => ({ profile: { units: 'lb' } }),
+  useAuth: () => ({ profile: { units: 'lb', bodyweight_kg: 100 } }),
 }));
 jest.mock('expo-router', () => ({
   useLocalSearchParams: () => ({ dayId: 'day', sessionId: 'session-A' }),
@@ -162,4 +162,37 @@ it('opens the saved summary instead of logging again through a completed-session
   );
   expect(mockSet).not.toHaveBeenCalled();
   expect(mockDay).not.toHaveBeenCalled();
+});
+it('shows captured bodyweight on the restored rest screen', async () => {
+  saved = {
+    ...saved,
+    bodyweightKg: 80,
+    draft: { reps: 7, weight: 0, asBodyweight: true },
+    savedDraft: { reps: 8, weight: 0, asBodyweight: true },
+  };
+  const screen = render(<Run />);
+  await waitFor(() =>
+    expect(
+      screen.getByText('Effective load 80 kg (bodyweight + added)'),
+    ).toBeTruthy(),
+  );
+});
+it('preserves unknown captured bodyweight on the restored rest screen', async () => {
+  saved = {
+    ...saved,
+    bodyweightKg: null,
+    draft: { reps: 7, weight: 0, asBodyweight: true },
+    savedDraft: { reps: 8, weight: 0, asBodyweight: true },
+  };
+  const screen = render(<Run />);
+  await waitFor(() =>
+    expect(
+      screen.getByText(
+        'No bodyweight saved for this workout. Add it in Profile for future workouts.',
+      ),
+    ).toBeTruthy(),
+  );
+  expect(
+    screen.queryByText('Effective load 100 kg (bodyweight + added)'),
+  ).toBeNull();
 });

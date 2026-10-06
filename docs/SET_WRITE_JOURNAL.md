@@ -1,6 +1,6 @@
 # Durable set-write journal
 
-`SetJournal` is the write-ahead portion of the ordered workout protocol in migration 0007. It is wired to the app transport for ordinary sets and legacy comparison. The matching-client PR remains a draft until summary and conflict UI integration and native verification are complete.
+`SetJournal` is the write-ahead portion of the ordered workout protocol in migration 0007. It is wired to the app transport for ordinary sets and legacy comparison. The matching-client PR remains a draft until conflict UI integration and native verification are complete.
 
 Each account gets its own storage key. A set write persists a UUID origin, monotonically increasing revision, exact payload, captured server version, and original completion event time before enqueueing. Ordinary corrections retain that event time. Recovery re-enqueues pending writes without creating new revisions. A failed enqueue or acknowledgement storage write keeps the operation recoverable after restart.
 
@@ -14,8 +14,10 @@ A normal edit to a blocked set preserves the rejection copy and the original bas
 
 The journal must be included in account export/delete work. Recovery copies are retained until an explicit recovery/export policy is implemented.
 
-Verified: 18 journal regression tests; the branch's 32 suites / 205 tests and TypeScript pass. Unit checks used the installed SDK 57 test runtime with a temporary compatibility setup; that file is excluded from the PR. A disposable Chrome two-tab fixture using the actual compiled journal, queue and lock adapter verified an interrupted first enqueue holds the second correction until release; both records then contain 12 reps, revision two, one origin and the original event time. This does not verify the full app or native flows. Native flows remain unverified for this module.
+Verified: 18 journal regression tests; the branch's 32 suites / 219 tests and TypeScript pass. Unit checks used the installed SDK 57 test runtime with a temporary compatibility setup; that file is excluded from the PR. A disposable Chrome two-tab fixture using the actual compiled journal, queue and lock adapter verified an interrupted first enqueue holds the second correction until release; both records then contain 12 reps, revision two, one origin and the original event time. This does not verify the full app or native flows. Native flows remain unverified for this module.
 
 The source SDK 54 branch uses `expo-crypto ~15.0.9` as recommended by [Expo's versioned documentation](https://docs.expo.dev/versions/v54.0.0/sdk/crypto/). The installed SDK 57 test runtime uses `expo-crypto 57.0.3`; the combined release must use its SDK-compatible Crypto version and a fresh native binary.
 
 Transport rejects expired or account-switched responses before journal acknowledgement. Legacy queued sets are compared without mutation and differing values remain unresolved. Retry does not replay a conflict or an older retryable rejection beneath a newer conflict. Journal and outbox state are combined when counting unresolved sets. Recovery archive writes share the same platform storage lock; older acknowledgements cannot clear newer rejected copies.
+
+Summary uses `get_session_set_snapshot` and passes its complete versions to the five-argument progression RPC. A stale-set or progression baseline response reloads both sets and progression before recalculating; exhausted retries preserve the saved workout. New local workouts capture bodyweight alongside units, and both rest and summary use that context. Explicitly unknown bodyweight stays unknown. Older records or sessions with no local snapshot retain the profile fallback; server-backed context and cross-device resume are tracked in #30.

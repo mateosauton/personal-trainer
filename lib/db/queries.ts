@@ -235,6 +235,31 @@ export async function getSetLogs(sessionId: string) {
   return data ?? [];
 }
 
+export interface SetSnapshotVersion { logId: string; serverVersion: number }
+export interface SessionSetSnapshot {
+  logs: (Omit<SetLog, 'plan_item_id'> & { id: string; plan_item_id: string | null; completed_at: string })[];
+  versions: SetSnapshotVersion[];
+}
+/** Logs and their complete version membership come from one database snapshot. */
+export async function getSessionSetSnapshot(sessionId: string): Promise<SessionSetSnapshot> {
+  const { data, error } = await supabase.rpc('get_session_set_snapshot', { p_session_id: sessionId });
+  if (error) throw error;
+  const uuid = (value: unknown): value is string => typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  if (!data || !Array.isArray(data.logs) || !Array.isArray(data.versions)
+    || data.logs.length !== data.versions.length
+    || !data.logs.every((log: any) => log && uuid(log.id))
+    || !data.versions.every((version: any) => version && uuid(version.logId)
+      && Number.isSafeInteger(version.serverVersion) && version.serverVersion > 0))
+    throw new Error('Invalid workout set snapshot. Your saved data is preserved.');
+  const ids = new Set<string>(data.logs.map((log: any) => log.id.toLowerCase()));
+  const versions = new Set<string>(data.versions.map((version: any) => version.logId.toLowerCase()));
+  if (ids.size !== data.logs.length || versions.size !== data.versions.length
+    || [...versions].some(id => !ids.has(id)))
+    throw new Error('Invalid workout set snapshot. Your saved data is preserved.');
+  return data as SessionSetSnapshot;
+}
+
 export interface ProgressRow {
   exercise_id: string;
   last_weight_kg: number | null;
@@ -321,9 +346,10 @@ export async function applySessionProgress(
   expected: { exercise_id: string; state: ProgressRow | null }[],
   updates: ProgressRow[],
   result: SessionSummaryLine[],
+  setVersions: SetSnapshotVersion[],
 ): Promise<SessionSummaryLine[]> {
   const { data, error } = await supabase.rpc('apply_session_progress', {
-    p_session_id: sessionId, p_expected: expected, p_updates: updates, p_result: result,
+    p_session_id: sessionId, p_expected: expected, p_updates: updates, p_result: result, p_set_versions: setVersions,
   });
   if (error) throw error;
   return data as SessionSummaryLine[];

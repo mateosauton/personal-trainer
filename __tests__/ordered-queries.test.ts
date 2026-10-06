@@ -1,5 +1,10 @@
 import { supabase } from '@/lib/db/supabase';
-import { checkLegacySet, logSetVersioned } from '@/lib/db/queries';
+import {
+  checkLegacySet,
+  logSetVersioned,
+  getSessionSetSnapshot,
+  applySessionProgress,
+} from '@/lib/db/queries';
 import type { JournalWrite } from '@/lib/session/set-journal';
 jest.mock('@/lib/db/supabase', () => ({
   supabase: {
@@ -80,3 +85,57 @@ it('compares a legacy set without sending an origin or revision', async () => {
   });
   expect(supabase.from).not.toHaveBeenCalled();
 });
+
+it('passes complete captured set versions to the progression guard', async () => {
+  const versions = [
+    { logId: '11111111-1111-4111-8111-111111111111', serverVersion: 2 },
+  ];
+  respond([]);
+  await applySessionProgress('session', [], [], [], versions);
+  expect(supabase.rpc).toHaveBeenCalledWith('apply_session_progress', {
+    p_session_id: 'session',
+    p_expected: [],
+    p_updates: [],
+    p_result: [],
+    p_set_versions: versions,
+  });
+});
+it('accepts one atomic snapshot with matching log membership', async () => {
+  const id = '11111111-1111-4111-8111-111111111111';
+  const snapshot = {
+    logs: [{ id }],
+    versions: [{ logId: id, serverVersion: 2 }],
+  };
+  respond(snapshot);
+  await expect(getSessionSetSnapshot('session')).resolves.toEqual(snapshot);
+  expect(supabase.rpc).toHaveBeenCalledWith('get_session_set_snapshot', {
+    p_session_id: 'session',
+  });
+});
+it.each([
+  {
+    logs: [],
+    versions: [
+      { logId: '11111111-1111-4111-8111-111111111111', serverVersion: 1 },
+    ],
+  },
+  {
+    logs: [{ id: '11111111-1111-4111-8111-111111111111' }],
+    versions: [
+      { logId: '22222222-1111-4111-8111-222222222222', serverVersion: 1 },
+    ],
+  },
+  {
+    logs: [{ id: '11111111-1111-4111-8111-111111111111' }],
+    versions: [
+      { logId: '11111111-1111-4111-8111-111111111111', serverVersion: 0 },
+    ],
+  },
+  { logs: [{ id: 'bad' }], versions: [{ logId: 'bad', serverVersion: 1 }] },
+])(
+  'rejects inconsistent snapshot membership or versions: %p',
+  async (snapshot) => {
+    respond(snapshot);
+    await expect(getSessionSetSnapshot('session')).rejects.toThrow('preserved');
+  },
+);

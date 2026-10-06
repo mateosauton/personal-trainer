@@ -13,6 +13,8 @@ export interface SavedWorkout {
   sessionId: string;
   day: PlanDay;
   units: Units;
+  /** Absent only in older saved workouts; null means unknown at capture time. */
+  bodyweightKg?: number | null;
   progress: ProgressRow[];
   cursor: number;
   phase: 'work' | 'resting';
@@ -74,6 +76,9 @@ export function validateWorkout(
     !Array.isArray(value.day.blocks) ||
     value.day.blocks.length > 100 ||
     !['kg', 'lb'].includes(value.units) ||
+    (value.bodyweightKg !== undefined &&
+      value.bodyweightKg !== null &&
+      (!finite(value.bodyweightKg) || value.bodyweightKg < 0)) ||
     !integer(value.cursor, 0, 1000000) ||
     !['work', 'resting'].includes(value.phase) ||
     !finite(value.startedAtMs) ||

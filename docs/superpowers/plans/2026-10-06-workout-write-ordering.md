@@ -29,7 +29,7 @@
 - [x] Test journal enqueue/ack crash boundaries, sequence allocation across instances, correction reverts, stale acknowledgements/choices, malformed data preservation and safe-integer limits. Independent review found no remaining actionable journal findings.
 - [x] Verify integrated outbox recovery, token binding, request expiry, shared-instance queue/archive mutations and a real two-tab Chrome journal/queue fixture. Independent review findings fixed and covered by regressions.
 - [x] Update `lib/session/sync.ts` and `lib/db/queries.ts` to call versioned RPCs, carry original event times, recover interrupted journal enqueues, and preserve legacy conflicts.
-- [ ] Summary must use the atomic set snapshot and guarded progression RPC, reload logs and progression together on `40001`, and preserve saved workout units/bodyweight.
+- [x] Summary uses the atomic set snapshot and guarded progression RPC, reloads logs and progression together on `40001`, and preserves new local workout units/bodyweight. Legacy/no-local-context fallback is documented in #30.
 - [ ] Bootstrap captured server versions for reopened sessions. Fresh sessions begin with expected version zero.
 - [ ] Add conflict comparison/recovery in `components/SyncRecovery.tsx`. Display saved/server reps and loads; require an explicit choice, verify the local revision has not changed, and use the displayed server baseline.
 - [ ] Test account switching, stale reads, a newly corrected local value, a changed remote baseline, and finalized-workout rejection. Review and open matching client PR.
