@@ -39,21 +39,34 @@ export default function SessionRun() {
   const [phase, setPhase] = useState<Phase>('work');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [finishError, setFinishError] = useState<string | null>(null);
+  const [finishAttempt, setFinishAttempt] = useState(0);
   const [draft, setDraft] = useState<SetDraft | null>(null);
   const [pendingSync, setPendingSync] = useState(0);
   /** What is actually in set_logs for the set being rested on. */
   const savedRef = useRef<SetDraft | null>(null);
   const startedAt = useRef(Date.now());
   const completionStarted = useRef(false);
+  const completedDuration = useRef<number | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
     Promise.all([getActivePlan(userId), getProgress(userId)])
       .then(([plan, rows]) => {
+        if (cancelled) return;
         setDay(plan?.days.find((d) => d.id === dayId) ?? null);
         setProgress(rows);
       })
-      .finally(() => setLoading(false));
-  }, [userId, dayId]);
+      .catch((error: unknown) => {
+        if (!cancelled) setLoadError(error instanceof Error ? error.message : 'Could not load your workout.');
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [userId, dayId, loadAttempt]);
 
   const queue = useMemo(() => (day ? buildQueue(day) : []), [day]);
   const entry: QueueEntry | undefined = queue[cursor];
@@ -64,7 +77,9 @@ export default function SessionRun() {
   useEffect(() => {
     if (!finished || completionStarted.current) return;
     completionStarted.current = true;
-    const elapsed = Math.max(1, Math.round((Date.now() - startedAt.current) / 1000));
+    setFinishError(null);
+    completedDuration.current ??= Math.max(1, Math.round((Date.now() - startedAt.current) / 1000));
+    const elapsed = completedDuration.current;
     void queueCompletion(userId, sessionId, elapsed)
       .then(() => flushOutbox())
       .then(() => {
@@ -72,9 +87,9 @@ export default function SessionRun() {
       })
       .catch((error: unknown) => {
         completionStarted.current = false;
-        notify('Could not finish session', error instanceof Error ? error.message : 'Try again.');
+        setFinishError(error instanceof Error ? error.message : 'Could not finish your workout. Please retry.');
       });
-  }, [finished, userId, dayId, sessionId, router]);
+  }, [finished, userId, dayId, sessionId, router, finishAttempt]);
 
   const units = profile?.units ?? 'kg';
   const exercise = entry ? getExercise(entry.item.exercise_id) : null;
@@ -133,11 +148,33 @@ export default function SessionRun() {
     );
   }
 
+  if (loadError) {
+    return (
+      <Screen>
+        <Display>Workout unavailable</Display>
+        <Body style={{ marginTop: space.md }}>{loadError}</Body>
+        <Button title="Retry" onPress={() => setLoadAttempt((value) => value + 1)} style={{ marginTop: space.lg }} />
+        <Button title="Back to home" variant="ghost" onPress={() => router.replace('/(tabs)')} />
+      </Screen>
+    );
+  }
+
   if (!day || queue.length === 0) {
     return (
       <Screen>
         <Display>Session unavailable.</Display>
         <Button title="Back" variant="surface" onPress={() => router.back()} style={{ marginTop: space.xl }} />
+      </Screen>
+    );
+  }
+
+  if (finishError) {
+    return (
+      <Screen>
+        <Display>Finish your workout</Display>
+        <Body style={{ marginTop: space.md }}>{finishError}</Body>
+        <Muted style={{ marginTop: space.md }}>Your logged sets are saved on this device.</Muted>
+        <Button title="Retry finish" onPress={() => setFinishAttempt((value) => value + 1)} style={{ marginTop: space.lg }} />
       </Screen>
     );
   }
