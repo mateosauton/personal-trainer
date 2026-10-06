@@ -62,6 +62,7 @@ jest.mock('@/lib/db/queries', () => ({
   getProgress: async () => new Map(),
 }));
 jest.mock('@/lib/session/sync', () => ({
+  bootstrapSetBaselines: async () => undefined,
   queueCompletion: (...args: unknown[]) => mockComplete(...args),
   flushOutbox: async () => undefined,
   pendingSyncCount: async () => 0,

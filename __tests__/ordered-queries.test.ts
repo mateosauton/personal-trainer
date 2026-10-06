@@ -165,3 +165,14 @@ it('accepts an absent server set without inventing a completion time', async () 
   respond(null);
   await expect(getSetWriteState('session', 'item', 1)).resolves.toBeNull();
 });
+
+it('uses the owning client and deadline signal for a session set snapshot', async () => {
+  const snapshot = { logs: [], versions: [] };
+  const request = respond(snapshot);
+  const client = { rpc: jest.fn(() => request) };
+  const signal = new AbortController().signal;
+  await expect(getSessionSetSnapshot('session', client as unknown as typeof supabase, signal)).resolves.toEqual(snapshot);
+  expect(client.rpc).toHaveBeenCalledWith('get_session_set_snapshot', { p_session_id: 'session' });
+  expect(request.abortSignal).toHaveBeenCalledWith(signal);
+  expect(supabase.rpc).not.toHaveBeenCalled();
+});

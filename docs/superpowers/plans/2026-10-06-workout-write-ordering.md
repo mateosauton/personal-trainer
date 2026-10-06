@@ -31,7 +31,8 @@
 - [x] Update `lib/session/sync.ts` and `lib/db/queries.ts` to call versioned RPCs, carry original event times, recover interrupted journal enqueues, and preserve legacy conflicts.
 - [x] Summary uses the atomic set snapshot and guarded progression RPC, reloads logs and progression together on `40001`, and preserves new local workout units/bodyweight. Legacy/no-local-context fallback is documented in #30.
 - [x] Add durable journal baseline capture, preserve initial absence and completion times, and prevent repeated snapshots from adopting intervening writes.
-- [ ] Bootstrap captured server versions for reopened sessions. Fresh sessions begin with expected version zero.
+- [x] Bootstrap exact matching server values for local rest resume using account-bound reads, original units, deadlines, snapshot guards and locked legacy exclusions. Preserve offline continuation for journaled or unchanged sets.
+- [ ] Connect local-only historical rests with unknown time to explicit legacy recovery. Never publish them with a guessed current completion time. Server-only reconstruction remains tracked in #30.
 - [x] Add journal conflict comparison/recovery in `components/SyncRecovery.tsx`. Display saved/server reps and loads plus any unsent rest draft; require an explicit choice against the captured local snapshot and displayed server baseline. Keep finalized-workout values read-only.
 - [x] Preserve both reviewed values and the unsent draft after active-workout cleanup; reconcile guarded rest drafts without stale warm-screen overwrites. Verify completion after reconciliation and retry after a transient draft storage failure.
 - [x] Add explicit legacy queued-set recovery in Home. Require a confirmed UTC completion time for saved values, retain the original payload, and verify stale captures, account changes and interrupted publication.

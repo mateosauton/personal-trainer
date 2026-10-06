@@ -247,8 +247,15 @@ export class SetJournal {
       eventAt,
     };
   }
+  hasCapturedSession(sessionId: string) {
+    if (!uuid(sessionId)) throw new Error('Invalid workout session.');
+    return this.lock(this.key, async () =>
+      (await this.read())?.capturedSessions?.includes(sessionId.toLowerCase()) ?? false);
+  }
   /** Capture once: a later snapshot must never silently refresh a correction's baseline. */
-  async captureBaselines(sessionId: string, values: SetBaseline[]) {
+  async captureBaselines(sessionId: string, values: SetBaseline[],
+    publish: (persist: (excluded: string[]) => Promise<void>) => Promise<void> = persist => persist([]),
+  ) {
     if (!uuid(sessionId) || !Array.isArray(values)) throw new Error('Invalid workout baselines.');
     const session = sessionId.toLowerCase();
     const captured = values.map(value => {
@@ -267,10 +274,17 @@ export class SetJournal {
         ...journal.entries.map(entry => entry.write.id),
         ...(journal.baselines ?? []).map(entry => entry.id),
       ]);
-      const additions = captured.filter(entry => !existing.has(entry.id));
-      journal.capturedSessions = [...(journal.capturedSessions ?? []), session];
-      journal.baselines = [...(journal.baselines ?? []), ...additions];
-      await this.persist(journal);
+      let persisted = false;
+      await publish(async ids => {
+        if (persisted) throw new Error('Workout baselines were already persisted.');
+        const excluded = new Set(ids);
+        const additions = captured.filter(entry => !existing.has(entry.id) && !excluded.has(entry.id));
+        journal.capturedSessions = [...(journal.capturedSessions ?? []), session];
+        journal.baselines = [...(journal.baselines ?? []), ...additions];
+        await this.persist(journal);
+        persisted = true;
+      });
+      if (!persisted) throw new Error('Workout baselines were not persisted.');
     });
   }
   async save(

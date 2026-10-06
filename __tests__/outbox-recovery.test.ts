@@ -266,3 +266,17 @@ it('retains a reviewed rejection if replacement preparation fails', async () => 
   expect(await queue.rejected()).toEqual([capture]);
   expect(await queue.pending()).toEqual([]);
 });
+it('holds legacy exclusions stable until baseline persistence completes', async () => {
+  const storage = disk(), queue = make(storage, jest.fn());
+  await queue.enqueue(op('legacy'));
+  let release!: () => void, entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = queue.withSetExclusions(async excluded => {
+    expect(excluded).toEqual(['legacy']); entered();
+    await new Promise<void>(resolve => { release = resolve; });
+  });
+  await started;
+  let queued = false; const enqueue = queue.enqueue(op('new')).then(() => { queued = true; });
+  await Promise.resolve(); await Promise.resolve(); expect(queued).toBe(false);
+  release(); await held; await enqueue; expect(queued).toBe(true);
+});

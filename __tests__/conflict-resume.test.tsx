@@ -28,6 +28,11 @@ jest.mock('@/lib/db/supabase', () => ({
 jest.mock('@/lib/db/queries', () => ({
   logSetVersioned: (...args: unknown[]) => mockLog(...args),
   getSetWriteState: (...args: unknown[]) => mockServer(...args),
+  getSessionSetSnapshot: async () => ({ logs: [{
+    id: '00000099-1111-4111-8111-000000000099', plan_item_id: '00000015-1111-4111-8111-000000000015',
+    exercise_id: 'unknown', set_index: 1, reps: 8, weight_kg: 60, is_bodyweight: false, added_load_kg: 0,
+    rpe: null, completed_at: '2026-09-01T10:00:00.000Z',
+  }], versions: [{ logId: '00000099-1111-4111-8111-000000000099', serverVersion: 7 }] }),
   getSessionResumeDetails: jest.fn(), getSessionPlanDay: jest.fn(), getProgress: jest.fn(), finishSession: jest.fn(),
 }));
 jest.mock('@/lib/auth', () => ({

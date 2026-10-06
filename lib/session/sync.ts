@@ -8,12 +8,13 @@ import {
   logSetVersioned,
   checkLegacySet,
   getSetWriteState,
+  getSessionSetSnapshot,
   type SetWriteState,
 } from '@/lib/db/queries';
 import { clientForAccessToken, supabase } from '@/lib/db/supabase';
 import type { SetLog } from '@/lib/types';
 import { Outbox, type OutboxOperation, type RejectedOperation } from './outbox';
-import { SetJournal, type JournalWrite, type BlockedWrite, type LegacySetCapture, validLegacyCapture } from './set-journal';
+import { SetJournal, type JournalWrite, type BlockedWrite, type LegacySetCapture, validLegacyCapture, validSet } from './set-journal';
 import { storageLock } from './storage-lock';
 import { archiveLegacyProgress } from './legacy-progress';
 import { workouts } from './workout';
@@ -181,6 +182,69 @@ export async function queueSet(userId: string, sessionId: string, set: SetLog) {
     enqueueWrite(userId, write),
   );
   requireAccount(userId);
+}
+/** Only a value already observed locally may seed a baseline; differing remote edits require review. */
+export async function bootstrapSetBaselines(userId: string, sessionId: string, observed: SetLog[], expectedWorkout?: SavedWorkout | null) {
+  requireAccount(userId);
+  if (!Array.isArray(observed) || !observed.every(validSet)) throw new Error('Invalid observed workout sets.');
+  const saved = JSON.parse(JSON.stringify(observed)) as SetLog[];
+  const generation = accountGeneration;
+  const controller = new AbortController();
+  const guard = () => {
+    requireAccount(userId);
+    if (generation !== accountGeneration) throw new Error('The workout account changed.');
+    if (controller.signal.aborted) throw new Error('Workout baseline read timed out.');
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      (async () => {
+        const captured = await journalFor(userId).hasCapturedSession(sessionId);
+        guard();
+        if (captured) return;
+        const writes = await journalFor(userId).writes();
+        guard();
+        if (saved.length && saved.every(set => writes.some(write => write.sessionId === sessionId.toLowerCase()
+          && write.set.plan_item_id === set.plan_item_id.toLowerCase() && write.set.set_index === set.set_index))) return;
+        const { data, error } = await supabase.auth.getSession();
+        guard();
+        if (error) throw error;
+        if (data.session?.user.id !== userId) throw new Error('The workout account changed.');
+        const snapshot = await getSessionSetSnapshot(sessionId,
+          clientForAccessToken(data.session.access_token), controller.signal);
+        guard();
+        const versions = new Map(snapshot.versions.map(entry => [entry.logId.toLowerCase(), entry.serverVersion]));
+        const baselines = snapshot.logs.flatMap(log => {
+          const observedSet = saved.find(set => set.plan_item_id.toLowerCase() === log.plan_item_id?.toLowerCase()
+            && set.set_index === log.set_index);
+          if (!observedSet || !validSet(log) || !Object.keys(observedSet).every(key =>
+            key === 'plan_item_id' ? observedSet.plan_item_id.toLowerCase() === log.plan_item_id.toLowerCase()
+              : observedSet[key as keyof SetLog] === log[key as keyof SetLog])) return [];
+          const serverVersion = versions.get(log.id.toLowerCase());
+          if (!serverVersion) throw new Error('Invalid workout baseline snapshot. Your saved data is preserved.');
+          return [{ set: observedSet, serverVersion, eventAt: log.completed_at }];
+        });
+        const needsLegacyReview = () => Object.assign(new Error('This older saved set needs explicit recovery before correction. Your draft is preserved.'), { code: 'PT409' });
+        if (baselines.length !== saved.length) throw needsLegacyReview();
+        const capture = () => journalFor(userId).captureBaselines(sessionId, baselines, persist =>
+          queueFor(userId).withSetExclusions(async excluded => {
+            guard();
+            if (saved.some(set => excluded.includes(`set:${sessionId.toLowerCase()}:${set.plan_item_id.toLowerCase()}:${set.set_index}`)))
+              throw needsLegacyReview();
+            await persist(excluded);
+          }));
+        if (expectedWorkout !== undefined) await workouts.withSnapshot(userId, expectedWorkout, capture, undefined, guard);
+        else await capture();
+        guard();
+      })(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error('Workout baseline read timed out. Your saved data is preserved.'));
+        }, 15000);
+      }),
+    ]);
+  } finally { if (timer !== undefined) clearTimeout(timer); }
 }
 async function flushAccount(userId: string) {
   requireAccount(userId);

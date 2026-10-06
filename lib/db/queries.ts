@@ -271,8 +271,9 @@ export interface SessionSetSnapshot {
   versions: SetSnapshotVersion[];
 }
 /** Logs and their complete version membership come from one database snapshot. */
-export async function getSessionSetSnapshot(sessionId: string): Promise<SessionSetSnapshot> {
-  const { data, error } = await supabase.rpc('get_session_set_snapshot', { p_session_id: sessionId });
+export async function getSessionSetSnapshot(sessionId: string, client = supabase, signal?: AbortSignal): Promise<SessionSetSnapshot> {
+  const request = client.rpc('get_session_set_snapshot', { p_session_id: sessionId });
+  const { data, error } = await (signal ? request.abortSignal(signal) : request);
   if (error) throw error;
   const uuid = (value: unknown): value is string => typeof value === 'string'
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);

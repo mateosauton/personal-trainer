@@ -11,6 +11,7 @@ import {
 const mockLogSet = jest.fn();
 const mockLegacy = jest.fn();
 const mockServerState = jest.fn();
+const mockSnapshot = jest.fn();
 let mockUUIDSequence = 0;
 jest.mock(
   'expo-crypto',
@@ -37,6 +38,7 @@ jest.mock('@/lib/db/queries', () => ({
   logSetVersioned: (...args: unknown[]) => mockLogSet(...args),
   checkLegacySet: (...args: unknown[]) => mockLegacy(...args),
   getSetWriteState: (...args: unknown[]) => mockServerState(...args),
+  getSessionSetSnapshot: (...args: unknown[]) => mockSnapshot(...args),
   finishSession: (...args: unknown[]) => mockFinishSession(...args),
   upsertProgress: jest.fn(),
 }));
@@ -69,6 +71,7 @@ beforeEach(async () => {
   mockLogSet.mockReset();
   mockLegacy.mockReset();
   mockServerState.mockReset();
+  mockSnapshot.mockReset();
   mockGetSession.mockReset();
   jest
     .mocked(AsyncStorage.getItem)
@@ -698,4 +701,74 @@ it('invalidates an older set choice across sign-out and return to the same accou
   setSyncAccount(null); setSyncAccount(conflictOwner);
   await expect(api.resolveLegacySetConflict(conflictOwner, review, 'server')).rejects.toThrow(/account/);
   expect(mockLogSet).not.toHaveBeenCalled();
+});
+
+const bootstrapLogId = '00000099-1111-4111-8111-000000000099';
+const bootstrapSnapshot = () => ({ logs: [{ ...set, id: bootstrapLogId, completed_at: '2026-09-01T10:00:00.000Z' }],
+  versions: [{ logId: bootstrapLogId, serverVersion: 7 }] });
+it('captures only an explicitly observed server set through the owning token', async () => {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner); mockSnapshot.mockResolvedValue(bootstrapSnapshot());
+  const api = require('@/lib/session/sync');
+  await api.bootstrapSetBaselines(conflictOwner, conflictSession, [set]);
+  mockLogSet.mockRejectedValue(new Error('offline'));
+  await queueSet(conflictOwner, conflictSession, { ...set, reps: 12 }); await flushOutbox();
+  expect(mockSnapshot).toHaveBeenCalledWith(conflictSession, { token: `token-${conflictOwner}` }, expect.any(AbortSignal));
+  expect(mockLogSet).toHaveBeenCalledWith(expect.objectContaining({ expectedVersion: 7, eventAt: '2026-09-01T10:00:00.000Z' }), expect.anything(), expect.any(AbortSignal));
+});
+it('requires explicit recovery when an older saved set differs from the server', async () => {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner);
+  const snapshot = bootstrapSnapshot(); snapshot.logs[0].reps = 10; mockSnapshot.mockResolvedValue(snapshot);
+  const api = require('@/lib/session/sync');
+  await expect(api.bootstrapSetBaselines(conflictOwner, conflictSession, [set])).rejects.toMatchObject({ code: 'PT409' });
+  expect(values.has(`office-gym.set-journal.v1.${conflictOwner}`)).toBe(false);
+});
+it('does not capture a baseline beneath an unresolved legacy rejection', async () => {
+  const { api } = await legacyConflict(); mockSnapshot.mockResolvedValue(bootstrapSnapshot());
+  await expect(api.bootstrapSetBaselines(conflictOwner, conflictSession, [set])).rejects.toMatchObject({ code: 'PT409' });
+  expect(values.has(`office-gym.set-journal.v1.${conflictOwner}`)).toBe(false);
+  expect(await api.getLegacySetConflicts(conflictOwner)).toHaveLength(1);
+});
+it('does not invent an original completion time for an older rest absent on the server', async () => {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner); mockSnapshot.mockResolvedValue({ logs: [], versions: [] });
+  const api = require('@/lib/session/sync');
+  await expect(api.bootstrapSetBaselines(conflictOwner, conflictSession, [set])).rejects.toMatchObject({ code: 'PT409' });
+  expect(values.has(`office-gym.set-journal.v1.${conflictOwner}`)).toBe(false);
+});
+it('rejects a late bootstrap response after sign-out and return to the same account', async () => {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner); let release!: (value: unknown) => void;
+  mockSnapshot.mockImplementation(() => new Promise(resolve => { release = resolve; }));
+  const api = require('@/lib/session/sync'); const bootstrap = api.bootstrapSetBaselines(conflictOwner, conflictSession, [set]);
+  while (!release) await Promise.resolve();
+  setSyncAccount(null); setSyncAccount(conflictOwner); release(bootstrapSnapshot());
+  await expect(bootstrap).rejects.toThrow(/changed/);
+  expect(values.has(`office-gym.set-journal.v1.${conflictOwner}`)).toBe(false);
+});
+it('expires bootstrap reads without persisting a late response', async () => {
+  jest.useFakeTimers();
+  try {
+    signedIn(conflictOwner); setSyncAccount(conflictOwner); let release!: (value: unknown) => void;
+    mockSnapshot.mockImplementation(() => new Promise(resolve => { release = resolve; }));
+    const api = require('@/lib/session/sync');
+    const result = expect(api.bootstrapSetBaselines(conflictOwner, conflictSession, [set])).rejects.toThrow(/timed out/);
+    while (!release) await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(15000); await result;
+    release(bootstrapSnapshot()); await Promise.resolve(); await Promise.resolve();
+    expect(values.has(`office-gym.set-journal.v1.${conflictOwner}`)).toBe(false);
+  } finally { jest.useRealTimers(); }
+});
+it('uses the durable capture on restart without requiring network access', async () => {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner); mockSnapshot.mockResolvedValue(bootstrapSnapshot());
+  const api = require('@/lib/session/sync'); await api.bootstrapSetBaselines(conflictOwner, conflictSession, [set]);
+  mockSnapshot.mockClear(); mockGetSession.mockRejectedValue(new Error('offline'));
+  await expect(api.bootstrapSetBaselines(conflictOwner, conflictSession, [set])).resolves.toBeUndefined();
+  expect(mockSnapshot).not.toHaveBeenCalled();
+});
+
+it('reopens a journaled rest set offline without fetching a new remote baseline', async () => {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner); mockLogSet.mockRejectedValue(new Error('offline'));
+  await queueSet(conflictOwner, conflictSession, set); await flushOutbox();
+  mockGetSession.mockRejectedValue(new Error('offline')); mockSnapshot.mockClear();
+  const api = require('@/lib/session/sync');
+  await expect(api.bootstrapSetBaselines(conflictOwner, conflictSession, [set])).resolves.toBeUndefined();
+  expect(mockSnapshot).not.toHaveBeenCalled();
 });

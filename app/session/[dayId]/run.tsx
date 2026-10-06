@@ -32,6 +32,7 @@ import {
 } from '@/lib/db/queries';
 import {
   flushOutbox,
+  bootstrapSetBaselines,
   pendingSyncCount,
   queueCompletion,
   queueSet,
@@ -73,6 +74,7 @@ export default function SessionRun() {
   const isCurrent = () =>
     identity.current.userId === userId &&
     identity.current.sessionId === sessionId;
+  const baselineRetry = useRef<{ userId: string; sessionId: string; observed: SetLog[] } | null>(null);
   const completionStarted = useRef(false);
   const draftAttempt = useRef(0);
   const persistedWorkout = useRef<SavedWorkout | null>(null);
@@ -102,6 +104,7 @@ export default function SessionRun() {
     setLoadError(null);
     setBusy(false);
     completionStarted.current = false;
+    baselineRetry.current = null;
     (async () => {
       let saved = await workouts.read(userId);
       if (saved && (saved.sessionId !== sessionId || saved.day.id !== dayId))
@@ -148,6 +151,26 @@ export default function SessionRun() {
           startedAtMs: startTime,
           endedAtMs: null,
         });
+      }
+      if (cancelled) return;
+      const restingEntry = saved.phase === 'resting' ? buildQueue(saved.day)[saved.cursor] : null;
+      if (restingEntry && saved.savedDraft) {
+        const value = saved.savedDraft;
+        const kg = displayToKg(value.weight, saved.units);
+        const observed: SetLog[] = [{
+          plan_item_id: restingEntry.item.id, exercise_id: restingEntry.item.exercise_id,
+          set_index: restingEntry.set, reps: value.reps,
+          weight_kg: value.asBodyweight ? null : kg, is_bodyweight: value.asBodyweight,
+          added_load_kg: value.asBodyweight ? kg : 0, rpe: null,
+        }];
+        try { await bootstrapSetBaselines(userId, sessionId, observed, saved); }
+        catch (error) {
+          const message = (error as { message?: string })?.message ?? '';
+          if ((error as { code?: string })?.code !== 'PT409'
+            && !/network request failed|failed to fetch|offline|baseline read timed out/i.test(message)) throw error;
+          if (cancelled || !isCurrent()) return;
+          baselineRetry.current = { userId, sessionId, observed };
+        }
       }
       if (!cancelled) { persistedWorkout.current = saved; setWorkout(saved); }
     })()
@@ -249,6 +272,13 @@ export default function SessionRun() {
     await draftWrites.current;
     const expected = persistedWorkout.current;
     if (!expected || expected.ownerId !== userId || expected.sessionId !== sessionId) throw new Error('Workout unavailable.');
+    const retry = baselineRetry.current;
+    if (retry?.userId === userId && retry.sessionId === sessionId
+      && retry.observed.some(observed => observed.plan_item_id === set.plan_item_id && observed.set_index === set.set_index)) {
+      await bootstrapSetBaselines(userId, sessionId, retry.observed, expected);
+      if (isCurrent() && baselineRetry.current === retry) baselineRetry.current = null;
+    }
+    if (!isCurrent()) throw new Error('The workout changed. Reopen it from Home.');
     await workouts.withSnapshot(userId, expected, () => queueSet(userId, sessionId, set));
     if (isCurrent()) setPendingSync(await pendingSyncCount());
     const next = new Map(progress),

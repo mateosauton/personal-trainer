@@ -86,6 +86,16 @@ export class Outbox {
     return items;
   }
 
+  /** Callback may persist journal metadata only; do not enqueue or await network here. */
+  withSetExclusions<T>(action: (ids: string[]) => Promise<T>) {
+    return this.exclusive(async () => {
+      const pending = await this.read();
+      const rejected = await this.readRejected();
+      const ids = [...pending, ...rejected.filter(entry => !entry.resolved).map(entry => entry.operation)]
+        .filter(entry => entry.kind === 'set').map(entry => entry.id);
+      return action(ids);
+    });
+  }
   rejected() {
     return this.exclusive(async () =>
       (await this.readRejected()).filter((entry) => !entry.resolved),
