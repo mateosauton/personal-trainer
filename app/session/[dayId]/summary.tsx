@@ -1,6 +1,6 @@
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import Animated, { FadeIn, ReduceMotion } from 'react-native-reanimated';
 
@@ -12,7 +12,7 @@ import { getExercise } from '@/lib/catalog';
 import {
   getActivePlan, getProgress, getSetLogs, type ProgressRow,
 } from '@/lib/db/queries';
-import { queueProgress } from '@/lib/session/sync';
+import { flushOutbox, pendingSyncCount, queueProgress } from '@/lib/session/sync';
 import { nextLoad } from '@/lib/progression';
 import { colors, space, type } from '@/lib/theme';
 import { motion } from '@/lib/motion';
@@ -40,15 +40,25 @@ export default function SessionSummary() {
   const [lines, setLines] = useState<Line[]>([]);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
-  const pendingProgress = useRef<ProgressRow[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
 
   const durationS = Number.parseInt(elapsed ?? '0', 10) || 0;
   const units = profile?.units ?? 'kg';
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setError(null);
 
     (async () => {
+      // A failed send leaves operations queued even though flush resolves.
+      // Never derive future loads from a partial server view of this workout.
+      await flushOutbox();
+      if (await pendingSyncCount() > 0) {
+        throw new Error('Your workout is still syncing. Reconnect and retry to see all your sets.');
+      }
+      if (cancelled) return;
       const [logs, plan, progress] = await Promise.all([
         getSetLogs(sessionId),
         getActivePlan(userId),
@@ -97,6 +107,7 @@ export default function SessionSummary() {
               exercise.pattern,
               workingLoad,
               { last_weight_kg: known?.last_weight_kg ?? null, miss_streak: known?.miss_streak ?? 0 },
+              units,
             )
           : null;
 
@@ -126,22 +137,25 @@ export default function SessionSummary() {
       }
 
       if (!cancelled) {
-        pendingProgress.current = updates;
         await queueProgress(userId, updates);
+        if (cancelled) return;
         setLines(built);
         setLoading(false);
         if (built.some((l) => l.isPr)) {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }
       }
-    })().catch(() => {
-      if (!cancelled) setLoading(false);
+    })().catch((error: unknown) => {
+      if (!cancelled) {
+        setError(error instanceof Error ? error.message : 'Could not load your workout. Please retry.');
+        setLoading(false);
+      }
     });
 
     return () => {
       cancelled = true;
     };
-  }, [sessionId, userId, dayId, profile?.bodyweight_kg]);
+  }, [sessionId, userId, dayId, profile?.bodyweight_kg, units, retry]);
 
   const save = async () => {
     setSaving(true);
@@ -159,6 +173,17 @@ export default function SessionSummary() {
     return (
       <Screen scroll={false} style={styles.center}>
         <ActivityIndicator color={colors.accent} />
+      </Screen>
+    );
+  }
+
+  if (error) {
+    return (
+      <Screen scroll={false} style={styles.center}>
+        <Heading>Summary unavailable</Heading>
+        <Body style={{ marginTop: space.md }}>{error}</Body>
+        <Button title="Retry" onPress={() => setRetry((value) => value + 1)} style={{ marginTop: space.lg }} />
+        <Button title="Back to home" variant="ghost" onPress={() => router.replace('/(tabs)')} />
       </Screen>
     );
   }
