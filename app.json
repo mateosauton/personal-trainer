@@ -49,7 +49,7 @@
     },
     "owner": "mrsauron",
     "runtimeVersion": {
-      "policy": "appVersion"
+      "policy": "fingerprint"
     },
     "updates": {
       "url": "https://u.expo.dev/aa04a2aa-93a1-4e8f-ad57-84ed3e8c2bf5"
