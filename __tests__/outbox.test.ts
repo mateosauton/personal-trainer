@@ -113,3 +113,29 @@ it('times out a stalled send, keeps the operation, and allows another flush', as
     expect(jest.getTimerCount()).toBe(0);
   } finally { jest.useRealTimers(); }
 });
+
+it('serializes shared queue mutations across separate instances', async () => {
+  const values = new Map<string, string>();
+  let release!: () => void;
+  let held = false;
+  const storage = {
+    getItem: async (key: string) => values.get(key) ?? null,
+    setItem: async (key: string, value: string) => {
+      if (!held) {
+        held = true;
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      values.set(key, value);
+    },
+  };
+  const a = new Outbox(storage, async () => {}, 'shared-fixture'),
+    b = new Outbox(storage, async () => {}, 'shared-fixture');
+  const one = a.enqueue({ id: 'first', kind: 'complete', payload: {} });
+  while (!release) await Promise.resolve();
+  const two = b.enqueue({ id: 'second', kind: 'complete', payload: {} });
+  release();
+  await Promise.all([one, two]);
+  expect((await a.pending()).map((op) => op.id)).toEqual(['first', 'second']);
+});

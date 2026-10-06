@@ -32,6 +32,8 @@ import {
 } from '@/lib/db/queries';
 import {
   flushOutbox,
+  bootstrapSetBaselines,
+  stageLegacyRestRecovery,
   pendingSyncCount,
   queueCompletion,
   queueSet,
@@ -73,8 +75,11 @@ export default function SessionRun() {
   const isCurrent = () =>
     identity.current.userId === userId &&
     identity.current.sessionId === sessionId;
+  const baselineRetry = useRef<{ userId: string; sessionId: string; observed: SetLog[]; needsReview: boolean } | null>(null);
   const completionStarted = useRef(false);
   const draftAttempt = useRef(0);
+  const persistedWorkout = useRef<SavedWorkout | null>(null);
+  const draftWrites = useRef<Promise<void>>(Promise.resolve());
   const active =
     workout?.ownerId === userId && workout.sessionId === sessionId
       ? workout
@@ -100,6 +105,7 @@ export default function SessionRun() {
     setLoadError(null);
     setBusy(false);
     completionStarted.current = false;
+    baselineRetry.current = null;
     (async () => {
       let saved = await workouts.read(userId);
       if (saved && (saved.sessionId !== sessionId || saved.day.id !== dayId))
@@ -136,6 +142,7 @@ export default function SessionRun() {
           sessionId,
           day: originalDay,
           units: profile?.units ?? 'kg',
+          bodyweightKg: profile?.bodyweight_kg ?? null,
           progress: [...rows.values()],
           cursor: 0,
           phase: 'work',
@@ -146,7 +153,27 @@ export default function SessionRun() {
           endedAtMs: null,
         });
       }
-      if (!cancelled) setWorkout(saved);
+      if (cancelled) return;
+      const restingEntry = saved.phase === 'resting' ? buildQueue(saved.day)[saved.cursor] : null;
+      if (restingEntry && saved.savedDraft) {
+        const value = saved.savedDraft;
+        const kg = displayToKg(value.weight, saved.units);
+        const observed: SetLog[] = [{
+          plan_item_id: restingEntry.item.id, exercise_id: restingEntry.item.exercise_id,
+          set_index: restingEntry.set, reps: value.reps,
+          weight_kg: value.asBodyweight ? null : kg, is_bodyweight: value.asBodyweight,
+          added_load_kg: value.asBodyweight ? kg : 0, rpe: null,
+        }];
+        try { await bootstrapSetBaselines(userId, sessionId, observed, saved); }
+        catch (error) {
+          const message = (error as { message?: string })?.message ?? '';
+          if ((error as { code?: string })?.code !== 'PT409'
+            && !/network request failed|failed to fetch|offline|baseline read timed out/i.test(message)) throw error;
+          if (cancelled || !isCurrent()) return;
+          baselineRetry.current = { userId, sessionId, observed, needsReview: (error as { code?: string })?.code === 'PT409' };
+        }
+      }
+      if (!cancelled) { persistedWorkout.current = saved; setWorkout(saved); }
     })()
       .catch((error) => {
         if (!cancelled)
@@ -211,13 +238,17 @@ export default function SessionRun() {
   const known = entry ? progress.get(entry.item.exercise_id) : undefined;
   const commit = async (patch: Parameters<typeof workouts.update>[3]) => {
     if (!active) throw new Error('Workout unavailable.');
+    await draftWrites.current;
+    const expected = persistedWorkout.current;
+    if (!expected || expected.ownerId !== userId || expected.sessionId !== sessionId) throw new Error('Workout unavailable.');
     const saved = await workouts.update(
       userId,
       sessionId,
-      { cursor, phase },
+      { cursor, phase, snapshot: expected },
       patch,
     );
     if (isCurrent()) {
+      persistedWorkout.current = saved;
       setWorkout(saved);
       setSnapshotError(null);
     }
@@ -238,7 +269,18 @@ export default function SessionRun() {
       added_load_kg: value.asBodyweight ? kg : 0,
       rpe: null,
     };
-    await queueSet(userId, sessionId, set);
+    if (!active) throw new Error('Workout unavailable.');
+    await draftWrites.current;
+    const expected = persistedWorkout.current;
+    if (!expected || expected.ownerId !== userId || expected.sessionId !== sessionId) throw new Error('Workout unavailable.');
+    const retry = baselineRetry.current;
+    if (retry?.userId === userId && retry.sessionId === sessionId
+      && retry.observed.some(observed => observed.plan_item_id === set.plan_item_id && observed.set_index === set.set_index)) {
+      await bootstrapSetBaselines(userId, sessionId, retry.observed, expected);
+      if (isCurrent() && baselineRetry.current === retry) baselineRetry.current = null;
+    }
+    if (!isCurrent()) throw new Error('The workout changed. Reopen it from Home.');
+    await workouts.withSnapshot(userId, expected, () => queueSet(userId, sessionId, set));
     if (isCurrent()) setPendingSync(await pendingSyncCount());
     const next = new Map(progress),
       previous = next.get(target.item.exercise_id);
@@ -297,6 +339,22 @@ export default function SessionRun() {
     if (!active || !entry || !draft || busy) return;
     setBusy(true);
     try {
+      const retry = baselineRetry.current;
+      if (sameDraft(draft, active.savedDraft) && retry?.needsReview && retry.userId === userId
+        && retry.sessionId === sessionId && retry.observed.some(set => set.plan_item_id === entry.item.id && set.set_index === entry.set)) {
+        const expected = persistedWorkout.current;
+        if (!expected) throw new Error('Workout unavailable.');
+        await bootstrapSetBaselines(userId, sessionId, retry.observed, expected);
+        if (isCurrent() && baselineRetry.current === retry) baselineRetry.current = null;
+      }
+      if (sameDraft(draft, active.savedDraft) && retry && !retry.needsReview && retry.userId === userId
+        && retry.sessionId === sessionId && retry.observed.some(set => set.plan_item_id === entry.item.id && set.set_index === entry.set)) {
+        await draftWrites.current;
+        const expected = persistedWorkout.current;
+        if (!expected) throw new Error('Workout unavailable.');
+        await stageLegacyRestRecovery(userId, expected);
+        if (isCurrent() && baselineRetry.current === retry) baselineRetry.current = null;
+      }
       const rows = sameDraft(draft, active.savedDraft)
         ? active.progress
         : await logDraft(entry, draft);
@@ -329,20 +387,20 @@ export default function SessionRun() {
     if (!active || busy) return;
     const attempt = ++draftAttempt.current;
     setWorkout({ ...active, draft: value });
-    void workouts
-      .update(userId, sessionId, { cursor, phase }, { draft: value })
-      .then(() => {
-        if (isCurrent() && attempt === draftAttempt.current)
-          setSnapshotError(null);
-      })
-      .catch((error) => {
-        if (isCurrent() && attempt === draftAttempt.current)
-          setSnapshotError(
-            error instanceof Error
-              ? error.message
-              : 'Could not save your changes. Retry before leaving.',
-          );
-      });
+    draftWrites.current = draftWrites.current.then(async () => {
+      if (!isCurrent()) return;
+      const expected = persistedWorkout.current;
+      if (!expected || expected.ownerId !== userId || expected.sessionId !== sessionId
+        || expected.cursor !== cursor || expected.phase !== phase)
+        throw new Error('Your workout changed. Reopen it from Home.');
+      const saved = await workouts.update(userId, sessionId,
+        { cursor, phase, snapshot: expected }, { draft: value });
+      if (isCurrent()) persistedWorkout.current = saved;
+      if (isCurrent() && attempt === draftAttempt.current) setSnapshotError(null);
+    }).catch(error => {
+      if (isCurrent() && attempt === draftAttempt.current)
+        setSnapshotError(error instanceof Error ? error.message : 'Could not save your changes. Retry before leaving.');
+    });
   };
 
   if (loading)
@@ -388,6 +446,8 @@ export default function SessionRun() {
           onPress={() => setFinishAttempt((n) => n + 1)}
           style={{ marginTop: space.lg }}
         />
+        <Button title="Review saved sets" variant="surface" onPress={() => router.replace('/(tabs)')}
+          style={{ marginTop: space.md }} />
       </Screen>
     );
   if (!entry)
@@ -437,7 +497,22 @@ export default function SessionRun() {
     }
   };
 
+  const reviewSavedSet = async () => {
+    if (!active || !active.draft || busy) return;
+    setBusy(true);
+    try {
+      const saved = await commit({ draft: active.draft });
+      if (!isCurrent()) return;
+      await stageLegacyRestRecovery(userId, saved);
+      if (isCurrent()) router.replace('/(tabs)');
+    } catch (error) {
+      if (isCurrent()) notify('Could not open set recovery', error instanceof Error ? error.message : 'Your draft is preserved. Try again.');
+    } finally { if (isCurrent()) setBusy(false); }
+  };
   const resting = phase === 'resting' && draft != null;
+  const deferred = baselineRetry.current;
+  const needsLegacyRecovery = resting && deferred?.userId === userId && deferred.sessionId === sessionId
+    && deferred.observed.some(set => set.plan_item_id === entry.item.id && set.set_index === entry.set);
 
   return (
     <Screen scroll={false} style={{ padding: space.lg }}>
@@ -462,6 +537,11 @@ export default function SessionRun() {
       </View>
 
       {snapshotError ? <Muted>{snapshotError}</Muted> : null}
+      {needsLegacyRecovery ? <>
+        <Muted>This older set needs a comparison before correction. Your draft stays saved.</Muted>
+        <Button title="Review saved set" variant="surface" loading={busy}
+          onPress={() => { void reviewSavedSet(); }} />
+      </> : null}
       {resting ? (
         <Animated.View
           key={`rest:${entry.key}`}
@@ -476,7 +556,8 @@ export default function SessionRun() {
             setLabel={`Set ${entry.set} of ${entry.setsTotal}`}
             targetReps={targetReps}
             units={units}
-            bodyweightKg={profile?.bodyweight_kg ?? null}
+            bodyweightCaptured={workout?.bodyweightKg !== undefined}
+            bodyweightKg={workout?.bodyweightKg !== undefined ? workout.bodyweightKg : profile?.bodyweight_kg ?? null}
             restSeconds={entry.block.rest_seconds}
             restUntilMs={active?.restUntilMs}
             draft={draft}

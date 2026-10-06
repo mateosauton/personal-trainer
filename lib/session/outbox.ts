@@ -1,3 +1,5 @@
+import type { SavedWorkout } from './workout-store';
+import { nativeJournalLock, type JournalLock } from './set-journal';
 export interface OutboxOperation {
   id: string;
   kind: 'set' | 'progress' | 'complete';
@@ -8,6 +10,7 @@ export interface RejectedOperation {
   operation: OutboxOperation;
   code: string;
   resolved: boolean;
+  localRest?: SavedWorkout;
 }
 const validOperation = (item: any): item is OutboxOperation =>
   item &&
@@ -25,7 +28,6 @@ export interface OutboxStorage {
 
 /** Durable, serial replay queue. Operation IDs make retries safe for idempotent writes. */
 export class Outbox {
-  private tail: Promise<void> = Promise.resolve();
   private flushing: Promise<void> | null = null;
 
   constructor(
@@ -36,6 +38,7 @@ export class Outbox {
     ) => Promise<void>,
     private readonly key = 'office-gym.session-outbox.v1',
     private readonly isRejected: (error: unknown) => boolean = () => false,
+    private readonly storageLock: JournalLock = nativeJournalLock,
   ) {}
 
   private async read(): Promise<OutboxOperation[]> {
@@ -85,24 +88,83 @@ export class Outbox {
     return items;
   }
 
+  /** Callback may persist journal metadata only; do not enqueue or await network here. */
+  withSetExclusions<T>(action: (ids: string[]) => Promise<T>) {
+    return this.exclusive(async () => {
+      const pending = await this.read();
+      const rejected = await this.readRejected();
+      const ids = [...pending, ...rejected.filter(entry => !entry.resolved).map(entry => entry.operation)]
+        .filter(entry => entry.kind === 'set').map(entry => entry.id);
+      return action(ids);
+    });
+  }
+  /** Save a local-only legacy edit for explicit review without scheduling a send. */
+  captureLegacyReview(operation: OutboxOperation, guard: () => void = () => {}, localRest?: SavedWorkout) {
+    if (!validOperation(operation) || operation.kind !== 'set' || operation.payload.write)
+      throw new Error('Invalid legacy recovery capture.');
+    const captured = JSON.parse(JSON.stringify(operation)) as OutboxOperation;
+    const context = localRest ? JSON.parse(JSON.stringify(localRest)) as SavedWorkout : undefined;
+    return this.exclusive(async () => {
+      const pending = await this.read();
+      const archive = await this.readRejected();
+      if (pending.some(entry => entry.id === captured.id))
+        throw new Error('The saved set changed. Sync or review its current value from Home.');
+      const current = [...archive].reverse().find(entry => !entry.resolved && entry.operation.id === captured.id);
+      guard();
+      if (current) {
+        if (current.operation.kind !== 'set' || current.operation.payload.write
+          || !['PT409', 'PT410'].includes(current.code))
+          throw new Error('The saved set changed. Review its current value from Home.');
+        if (!context || JSON.stringify(current.localRest) === JSON.stringify(context)) return current;
+      }
+      const review: RejectedOperation = { operation: current?.operation ?? captured, code: current?.code ?? 'PT409', resolved: false,
+        ...(context ? { localRest: context } : {}) };
+      archive.push(review);
+      await this.storage.setItem(`${this.key}.rejected`, JSON.stringify(archive));
+      return review;
+    });
+  }
   rejected() {
     return this.exclusive(async () =>
       (await this.readRejected()).filter((entry) => !entry.resolved),
     );
   }
 
-  retryRejected() {
+  retryRejected(
+    shouldRetry: (entry: RejectedOperation) => boolean = () => true,
+  ) {
     return this.exclusive(async () => {
       const items = await this.read();
-      const latest = new Map<string, OutboxOperation>();
+      const latest = new Map<string, RejectedOperation>();
       for (const entry of await this.readRejected()) {
-        if (!entry.resolved) latest.set(entry.operation.id, entry.operation);
+        if (!entry.resolved) latest.set(entry.operation.id, entry);
       }
-      for (const operation of latest.values()) {
+      for (const entry of latest.values()) {
+        if (!shouldRetry(entry)) continue;
+        const operation = entry.operation;
         // A newer correction in the queue wins over its archived version.
         if (!items.some((item) => item.id === operation.id))
           items.push(operation);
       }
+      await this.write(items);
+    });
+  }
+
+  /** Prepare a replacement under the same lock that checks the reviewed archive. */
+  replaceRejected(captured: RejectedOperation, prepare: () => Promise<OutboxOperation>) {
+    return this.exclusive(async () => {
+      const items = await this.read();
+      const latest = [...await this.readRejected()].reverse().find(entry =>
+        !entry.resolved && entry.operation.id === captured.operation.id);
+      if (!latest || JSON.stringify(latest) !== JSON.stringify(captured)
+        || items.some(item => item.id === captured.operation.id))
+        throw new Error('The saved set changed. Review the latest value.');
+      const replacement = await prepare();
+      if (!validOperation(replacement) || replacement.id !== captured.operation.id
+        || replacement.kind !== captured.operation.kind)
+        throw new Error('Invalid workout recovery replacement.');
+      items.push(replacement);
+      // Rejections remain unresolved until this exact replacement is acknowledged.
       await this.write(items);
     });
   }
@@ -147,12 +209,7 @@ export class Outbox {
   }
 
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
-    const result = this.tail.then(work, work);
-    this.tail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
+    return this.storageLock(this.key, work);
   }
 
   async enqueue(operation: OutboxOperation) {
@@ -210,6 +267,16 @@ export class Outbox {
       await this.exclusive(async () => {
         const items = await this.read();
         const archive = await this.readRejected();
+        const queued = items.find((item) => item.id === operation.id);
+        const latestRejected = [...archive]
+          .reverse()
+          .find(
+            (entry) => !entry.resolved && entry.operation.id === operation.id,
+          );
+        const current = queued ?? latestRejected?.operation;
+        const acknowledgesCurrent =
+          current != null &&
+          JSON.stringify(current) === JSON.stringify(operation);
         if (
           archive.some(
             (entry) => !entry.resolved && entry.operation.id === operation.id,
@@ -219,7 +286,9 @@ export class Outbox {
             `${this.key}.rejected`,
             JSON.stringify(
               archive.map((entry) =>
-                entry.operation.id === operation.id
+                entry.operation.id === operation.id &&
+                (acknowledgesCurrent ||
+                  JSON.stringify(entry.operation) === JSON.stringify(operation))
                   ? { ...entry, resolved: true }
                   : entry,
               ),

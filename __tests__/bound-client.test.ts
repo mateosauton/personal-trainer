@@ -12,7 +12,7 @@ it('keeps a queued write bound to the captured access token', async () => {
   try {
     const { clientForAccessToken } = require('@/lib/db/supabase');
     const client = clientForAccessToken('captured-token-A');
-    const { error } = await client.from('set_logs').insert({ session_id: 'session-A' });
+    const { error } = await client.rpc('log_set_versioned', { p_session_id: 'session-A' });
     expect(error).toBeNull();
     const headers = fetch.mock.calls[0][1].headers;
     expect(headers.get('Authorization')).toBe('Bearer captured-token-A');
@@ -37,8 +37,8 @@ it('cancels an actual database request when sync expires', async () => {
   global.fetch = fetch as typeof global.fetch;
   try {
     const { clientForAccessToken } = require('@/lib/db/supabase');
-    const { logSet } = require('@/lib/db/queries');
-    const write = logSet('session-A', { plan_item_id: 'item-A', set_index: 1 },
+    const { logSetVersioned } = require('@/lib/db/queries');
+    const write = logSetVersioned({sessionId:'session-A',set:{plan_item_id:'item-A',set_index:1},origin:'origin',revision:1,expectedVersion:0,eventAt:'2026-10-06T10:00:00Z'},
       clientForAccessToken('captured-token-A'), controller.signal);
     while (fetch.mock.calls.length === 0) await Promise.resolve();
     expect(fetch.mock.calls[0][1].signal).toBe(controller.signal);

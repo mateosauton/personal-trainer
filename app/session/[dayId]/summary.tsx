@@ -24,7 +24,7 @@ import {
   getSessionProgressResult,
   getSessionPlanDay,
   getProgress,
-  getSetLogs,
+  getSessionSetSnapshot,
   type ProgressRow,
   type SessionSummaryLine,
 } from '@/lib/db/queries';
@@ -57,7 +57,8 @@ export default function SessionSummary() {
   const [retry, setRetry] = useState(0);
 
   const durationS = Number.parseInt(elapsed ?? '0', 10) || 0;
-  const units = profile?.units ?? 'kg';
+  const profileUnits = profile?.units ?? 'kg';
+  const [units, setUnits] = useState<Units>(profileUnits);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,16 +83,23 @@ export default function SessionSummary() {
       const previous = await getSessionProgressResult(sessionId);
       if (cancelled) return;
       if (previous !== null) {
+        setUnits(profileUnits);
         await workouts.clear(userId, sessionId);
         if (cancelled) return;
         setLines(previous);
         setLoading(false);
         return;
       }
-      const [logs, day] = await Promise.all([
-        getSetLogs(sessionId),
-        getSessionPlanDay(sessionId, userId),
-      ]);
+      const local = await workouts.read(userId);
+      if (cancelled) return;
+      const captured = local?.sessionId === sessionId ? local : null;
+      const calculationUnits = captured?.units ?? profileUnits;
+      const bodyweightKg =
+        captured?.bodyweightKg !== undefined
+          ? captured.bodyweightKg
+          : (profile?.bodyweight_kg ?? null);
+      setUnits(calculationUnits);
+      const day = await getSessionPlanDay(sessionId, userId);
       if (!day)
         throw new Error(
           'Could not load the original workout day. Please retry.',
@@ -102,25 +110,26 @@ export default function SessionSummary() {
         ),
       );
 
-      // Group the flat set list back into one line per exercise.
-      const grouped = new Map<string, typeof logs>();
-      for (const log of logs) {
-        const list = grouped.get(log.exercise_id) ?? [];
-        list.push(log);
-        grouped.set(log.exercise_id, list);
-      }
-
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        const progress = await getProgress(userId);
+        // A stale snapshot retry must refresh sets as well as progression.
+        const [snapshot, progress] = await Promise.all([
+          getSessionSetSnapshot(sessionId),
+          getProgress(userId),
+        ]);
         if (cancelled) return;
+        const logs = snapshot.logs;
+        const grouped = new Map<string, typeof logs>();
+        for (const log of logs) {
+          const list = grouped.get(log.exercise_id) ?? [];
+          list.push(log);
+          grouped.set(log.exercise_id, list);
+        }
         const built: SessionSummaryLine[] = [];
         const updates: ProgressRow[] = [];
 
         for (const [exerciseId, sets] of grouped) {
           const exercise = getExercise(exerciseId);
-          const loads = sets.map((s) =>
-            effectiveLoadKg(s, profile?.bodyweight_kg ?? null),
-          );
+          const loads = sets.map((s) => effectiveLoadKg(s, bodyweightKg));
           const volumeKg = sets.reduce(
             (sum, s, i) => sum + (loads[i] ?? 0) * (s.reps ?? 0),
             0,
@@ -154,7 +163,7 @@ export default function SessionSummary() {
                     last_weight_kg: known?.last_weight_kg ?? null,
                     miss_streak: known?.miss_streak ?? 0,
                   },
-                  units,
+                  calculationUnits,
                 )
               : null;
 
@@ -198,6 +207,7 @@ export default function SessionSummary() {
               })),
               updates,
               built,
+              snapshot.versions,
             );
           } catch (error) {
             if ((error as { code?: string }).code === '40001' && attempt < 2)
@@ -229,7 +239,7 @@ export default function SessionSummary() {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, userId, dayId, profile?.bodyweight_kg, units, retry]);
+  }, [sessionId, userId, dayId, profile?.bodyweight_kg, profileUnits, retry]);
 
   const save = async () => {
     setSaving(true);

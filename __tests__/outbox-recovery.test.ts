@@ -174,3 +174,109 @@ it('retries the current values when a correction reverts to an earlier rejected 
   ]);
   expect(await queue.rejected()).toEqual([]);
 });
+it('does not clear a newer rejected edit when another tab acknowledges an older write', async () => {
+  const storage = disk();
+  let release!: () => void;
+  const older = new Outbox(
+    storage,
+    async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    },
+    'shared-recovery',
+    rejected,
+  );
+  const newer = new Outbox(
+    storage,
+    async () => {
+      throw { code: '23503' };
+    },
+    'shared-recovery',
+    rejected,
+  );
+  await older.enqueue(op('same', 8));
+  const oldFlush = older.flush();
+  while (!release) await Promise.resolve();
+  await newer.enqueue(op('same', 12));
+  await newer.flush();
+  release();
+  await oldFlush;
+  expect(await newer.rejected()).toEqual([
+    { operation: op('same', 12), code: '23503', resolved: false },
+  ]);
+});
+it('does not replay an older retryable payload when the latest rejected value needs review', async () => {
+  const storage = disk();
+  const queue = new Outbox(
+    storage,
+    async () => {},
+    'mixed-recovery',
+    () => true,
+  );
+  storage.values.set(
+    'mixed-recovery.rejected',
+    JSON.stringify([
+      { operation: op('same', 8), code: '23503', resolved: false },
+      { operation: op('same', 12), code: 'PT409', resolved: false },
+    ]),
+  );
+  await queue.retryRejected((entry) => entry.code !== 'PT409');
+  expect(await queue.pending()).toEqual([]);
+  expect(await queue.rejected()).toHaveLength(2);
+});
+
+it('publishes a reviewed replacement only after preserving its exact rejected capture', async () => {
+  const storage = disk();
+  const queue = make(storage, jest.fn().mockRejectedValue({ code: '23503' }));
+  await queue.enqueue(op('legacy', 8)); await queue.flush();
+  const [capture] = await queue.rejected();
+  const replacement = op('legacy', 12);
+  await queue.replaceRejected(capture, async () => replacement);
+  expect(await queue.pending()).toEqual([replacement]);
+  expect(await queue.rejected()).toEqual([capture]); // A choice is not an acknowledgement.
+});
+it('rejects a legacy choice if a newer correction is queued before publication', async () => {
+  const storage = disk();
+  const queue = make(storage, jest.fn().mockRejectedValue({ code: '23503' }));
+  await queue.enqueue(op('legacy', 8)); await queue.flush();
+  const [capture] = await queue.rejected();
+  await queue.enqueue(op('legacy', 10));
+  const prepare = jest.fn(async () => op('legacy', 12));
+  await expect(queue.replaceRejected(capture, prepare)).rejects.toThrow(/changed/);
+  expect(prepare).not.toHaveBeenCalled();
+  expect(await queue.pending()).toEqual([op('legacy', 10)]);
+});
+it('rejects a legacy choice if a newer rejection replaced the reviewed value', async () => {
+  const storage = disk();
+  const queue = make(storage, jest.fn().mockRejectedValue({ code: '23503' }));
+  await queue.enqueue(op('legacy', 8)); await queue.flush();
+  const [capture] = await queue.rejected();
+  await queue.enqueue(op('legacy', 10)); await queue.flush();
+  const prepare = jest.fn(async () => op('legacy', 12));
+  await expect(queue.replaceRejected(capture, prepare)).rejects.toThrow(/changed/);
+  expect(prepare).not.toHaveBeenCalled();
+});
+it('retains a reviewed rejection if replacement preparation fails', async () => {
+  const storage = disk();
+  const queue = make(storage, jest.fn().mockRejectedValue({ code: '23503' }));
+  await queue.enqueue(op('legacy')); await queue.flush();
+  const [capture] = await queue.rejected();
+  await expect(queue.replaceRejected(capture, async () => { throw new Error('journal full'); })).rejects.toThrow('journal full');
+  expect(await queue.rejected()).toEqual([capture]);
+  expect(await queue.pending()).toEqual([]);
+});
+it('holds legacy exclusions stable until baseline persistence completes', async () => {
+  const storage = disk(), queue = make(storage, jest.fn());
+  await queue.enqueue(op('legacy'));
+  let release!: () => void, entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = queue.withSetExclusions(async excluded => {
+    expect(excluded).toEqual(['legacy']); entered();
+    await new Promise<void>(resolve => { release = resolve; });
+  });
+  await started;
+  let queued = false; const enqueue = queue.enqueue(op('new')).then(() => { queued = true; });
+  await Promise.resolve(); await Promise.resolve(); expect(queued).toBe(false);
+  release(); await held; await enqueue; expect(queued).toBe(true);
+});

@@ -3,6 +3,8 @@ import Run from '@/app/session/[dayId]/run';
 import type { SavedWorkout } from '@/lib/session/workout-store';
 
 const mockDetails = jest.fn();
+const mockBootstrap = jest.fn();
+const mockStageLegacy = jest.fn();
 const mockRead = jest.fn(),
   mockUpdate = jest.fn(),
   mockDay = jest.fn(),
@@ -12,8 +14,10 @@ const mockComplete = jest.fn(),
   mockReplace = jest.fn();
 const mockRouter = { replace: mockReplace, back: jest.fn() };
 let saved: SavedWorkout;
+let mockSessionId = 'session-A';
 jest.mock('@/lib/session/workout', () => ({
   workouts: {
+    withSnapshot: async (_owner: string, _snapshot: unknown, action: () => Promise<unknown>) => action(),
     read: (...args: unknown[]) => mockRead(...args),
     update: (...args: unknown[]) => mockUpdate(...args),
     create: jest.fn(),
@@ -22,10 +26,10 @@ jest.mock('@/lib/session/workout', () => ({
 }));
 jest.mock('@/lib/auth', () => ({
   useUserId: () => 'A',
-  useAuth: () => ({ profile: { units: 'lb' } }),
+  useAuth: () => ({ profile: { units: 'lb', bodyweight_kg: 100 } }),
 }));
 jest.mock('expo-router', () => ({
-  useLocalSearchParams: () => ({ dayId: 'day', sessionId: 'session-A' }),
+  useLocalSearchParams: () => ({ dayId: 'day', sessionId: mockSessionId }),
   useRouter: () => mockRouter,
 }));
 jest.mock('@/lib/db/queries', () => ({
@@ -35,6 +39,8 @@ jest.mock('@/lib/db/queries', () => ({
   getProgress: () => mockProgress(),
 }));
 jest.mock('@/lib/session/sync', () => ({
+  bootstrapSetBaselines: (...args: unknown[]) => mockBootstrap(...args),
+  stageLegacyRestRecovery: (...args: unknown[]) => mockStageLegacy(...args),
   queueCompletion: (...args: unknown[]) => mockComplete(...args),
   queueSet: (...args: unknown[]) => mockSet(...args),
   flushOutbox: async () => undefined,
@@ -50,6 +56,7 @@ jest.mock('react-native-safe-area-context', () => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockSessionId = 'session-A';
   saved = {
     version: 1,
     ownerId: 'A',
@@ -102,6 +109,8 @@ beforeEach(() => {
   mockProgress.mockRejectedValue(new Error('offline'));
   mockComplete.mockResolvedValue(undefined);
   mockSet.mockResolvedValue(undefined);
+  mockBootstrap.mockReset().mockResolvedValue(undefined);
+  mockStageLegacy.mockReset().mockResolvedValue({});
 });
 
 it('restores offline rest and its draft/deadline without a server read', async () => {
@@ -162,4 +171,136 @@ it('opens the saved summary instead of logging again through a completed-session
   );
   expect(mockSet).not.toHaveBeenCalled();
   expect(mockDay).not.toHaveBeenCalled();
+});
+it('shows captured bodyweight on the restored rest screen', async () => {
+  saved = {
+    ...saved,
+    bodyweightKg: 80,
+    draft: { reps: 7, weight: 0, asBodyweight: true },
+    savedDraft: { reps: 8, weight: 0, asBodyweight: true },
+  };
+  const screen = render(<Run />);
+  await waitFor(() =>
+    expect(
+      screen.getByText('Effective load 80 kg (bodyweight + added)'),
+    ).toBeTruthy(),
+  );
+});
+it('preserves unknown captured bodyweight on the restored rest screen', async () => {
+  saved = {
+    ...saved,
+    bodyweightKg: null,
+    draft: { reps: 7, weight: 0, asBodyweight: true },
+    savedDraft: { reps: 8, weight: 0, asBodyweight: true },
+  };
+  const screen = render(<Run />);
+  await waitFor(() =>
+    expect(
+      screen.getByText(
+        'No bodyweight saved for this workout. Add it in Profile for future workouts.',
+      ),
+    ).toBeTruthy(),
+  );
+  expect(
+    screen.queryByText('Effective load 100 kg (bodyweight + added)'),
+  ).toBeNull();
+});
+
+it('captures the observed saved rest value in its original units before showing correction controls', async () => {
+  const screen = render(<Run />);
+  await waitFor(() => expect(mockBootstrap).toHaveBeenCalledWith('A', 'session-A', [expect.objectContaining({
+    plan_item_id: 'item', exercise_id: 'unknown', set_index: 1, reps: 8, weight_kg: 60,
+  })], saved));
+  expect(screen.getByText('Next set')).toBeTruthy();
+});
+it('preserves a reopened rest draft when its initial baseline cannot be read', async () => {
+  mockBootstrap.mockRejectedValue(new Error('Could not read saved set version.'));
+  const before = JSON.stringify(saved);
+  const screen = render(<Run />);
+  await waitFor(() => expect(screen.getByText('Could not read saved set version.')).toBeTruthy());
+  expect(JSON.stringify(saved)).toBe(before);
+  expect(mockSet).not.toHaveBeenCalled();
+});
+it('shows an older rest offline and retains its correction until a baseline read succeeds', async () => {
+  mockBootstrap.mockRejectedValue(new Error('Network request failed'));
+  const screen = render(<Run />);
+  await waitFor(() => expect(screen.getByText('Next set')).toBeTruthy());
+  expect(screen.getByText('7')).toBeTruthy();
+  fireEvent.press(screen.getByText('Next set'));
+  await waitFor(() => expect(mockBootstrap).toHaveBeenCalledTimes(2));
+  expect(mockSet).not.toHaveBeenCalled();
+  expect(saved.cursor).toBe(0); expect(saved.draft?.reps).toBe(7);
+});
+it('continues logging new sets offline after advancing an unchanged older rest', async () => {
+  saved = { ...saved, draft: saved.savedDraft };
+  mockBootstrap.mockRejectedValue(new Error('Network request failed'));
+  const screen = render(<Run />);
+  await waitFor(() => expect(screen.getByText('Next set')).toBeTruthy());
+  fireEvent.press(screen.getByText('Next set'));
+  await waitFor(() => expect(screen.getByText('Complete set')).toBeTruthy());
+  fireEvent.press(screen.getByText('Complete set'));
+  await waitFor(() => expect(mockSet).toHaveBeenCalledWith('A', 'session-A', expect.objectContaining({ set_index: 2 })));
+  expect(mockBootstrap).toHaveBeenCalledTimes(1);
+});
+
+it('ignores an older load failure after switching to another workout', async () => {
+  let rejectOld!: (error: Error) => void;
+  mockBootstrap.mockImplementationOnce(() => new Promise((_, reject) => { rejectOld = reject; }));
+  const screen = render(<Run />);
+  await waitFor(() => expect(mockBootstrap).toHaveBeenCalledTimes(1));
+  mockSessionId = 'session-B';
+  saved = { ...saved, sessionId: 'session-B', draft: { reps: 11, weight: 60, asBodyweight: false },
+    savedDraft: { reps: 12, weight: 60, asBodyweight: false } };
+  screen.rerender(<Run />);
+  await waitFor(() => expect(screen.getByText('11')).toBeTruthy());
+  rejectOld(new Error('Network request failed'));
+  await waitFor(() => expect(mockBootstrap).toHaveBeenCalledTimes(2));
+  fireEvent.press(screen.getByText('Next set'));
+  await waitFor(() => expect(mockSet).toHaveBeenCalledWith('A', 'session-B', expect.objectContaining({ reps: 11 })));
+  expect(mockBootstrap).toHaveBeenCalledTimes(2);
+});
+
+it('preserves an unknown-time older rest without publishing a guessed completion time', async () => {
+  mockBootstrap.mockRejectedValue(Object.assign(new Error('Explicit recovery required.'), { code: 'PT409' }));
+  const screen = render(<Run />);
+  await waitFor(() => expect(screen.getByText('Next set')).toBeTruthy());
+  fireEvent.press(screen.getByText('Next set'));
+  await waitFor(() => expect(mockBootstrap).toHaveBeenCalledTimes(2));
+  expect(mockSet).not.toHaveBeenCalled(); expect(saved.cursor).toBe(0);
+});
+
+it('opens explicit recovery for an older rest while preserving its visible correction', async () => {
+  mockBootstrap.mockRejectedValue(Object.assign(new Error('Explicit recovery required.'), { code: 'PT409' }));
+  const screen = render(<Run />);
+  await waitFor(() => expect(screen.getByText('Review saved set')).toBeTruthy());
+  fireEvent.press(screen.getByText('Review saved set'));
+  await waitFor(() => expect(mockStageLegacy).toHaveBeenCalledWith('A', expect.objectContaining({
+    draft: { reps: 7, weight: 60, asBodyweight: false }, savedDraft: { reps: 8, weight: 60, asBodyweight: false },
+  })));
+  expect(mockSet).not.toHaveBeenCalled(); expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+});
+it('keeps the rest screen and draft when recovery staging cannot be saved', async () => {
+  mockBootstrap.mockRejectedValue(new Error('Network request failed'));
+  mockStageLegacy.mockRejectedValue(new Error('disk full'));
+  const screen = render(<Run />);
+  await waitFor(() => expect(screen.getByText('Review saved set')).toBeTruthy());
+  fireEvent.press(screen.getByText('Review saved set'));
+  await waitFor(() => expect(mockStageLegacy).toHaveBeenCalled());
+  expect(mockReplace).not.toHaveBeenCalled(); expect(saved.draft?.reps).toBe(7);
+});
+it('does not advance an unchanged older set that is known to require explicit recovery', async () => {
+  saved = { ...saved, draft: saved.savedDraft };
+  mockBootstrap.mockRejectedValue(Object.assign(new Error('Explicit recovery required.'), { code: 'PT409' }));
+  const screen = render(<Run />); await screen.findByText('Next set');
+  fireEvent.press(screen.getByText('Next set'));
+  await waitFor(() => expect(mockBootstrap).toHaveBeenCalledTimes(2));
+  expect(saved.cursor).toBe(0); expect(mockSet).not.toHaveBeenCalled();
+});
+it('durably stages an unchanged unknown older rest before advancing offline', async () => {
+  saved = { ...saved, draft: saved.savedDraft };
+  mockBootstrap.mockRejectedValue(new Error('Network request failed'));
+  const screen = render(<Run />); await screen.findByText('Next set');
+  fireEvent.press(screen.getByText('Next set'));
+  await waitFor(() => expect(saved.cursor).toBe(1));
+  expect(mockStageLegacy).toHaveBeenCalledWith('A', expect.objectContaining({ cursor: 0, draft: expect.objectContaining({ reps: 8 }) }));
 });

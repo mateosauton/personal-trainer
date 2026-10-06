@@ -1,6 +1,7 @@
 import type { ProgressRow } from '@/lib/db/queries';
 import type { PlanDay, Units } from '@/lib/types';
 import { buildQueue } from './queue';
+import { nativeJournalLock, type JournalLock } from './set-journal';
 
 export interface WorkoutDraft {
   reps: number;
@@ -9,10 +10,13 @@ export interface WorkoutDraft {
 }
 export interface SavedWorkout {
   version: 1;
+  recoveryCopies?: Pick<SavedWorkout, 'cursor' | 'phase' | 'draft' | 'savedDraft' | 'progress' | 'restUntilMs' | 'endedAtMs'>[];
   ownerId: string;
   sessionId: string;
   day: PlanDay;
   units: Units;
+  /** Absent only in older saved workouts; null means unknown at capture time. */
+  bodyweightKg?: number | null;
   progress: ProgressRow[];
   cursor: number;
   phase: 'work' | 'resting';
@@ -26,7 +30,7 @@ interface Storage {
   getItem(key: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<void>;
 }
-type Patch = Partial<
+export type WorkoutPatch = Partial<
   Pick<
     SavedWorkout,
     | 'progress'
@@ -38,7 +42,7 @@ type Patch = Partial<
     | 'endedAtMs'
   >
 >;
-const tails = new Map<string, Promise<void>>();
+
 const keyFor = (owner: string) => `office-gym.active-workout.v1.${owner}`;
 const record = (value: unknown): value is Record<string, any> =>
   value != null && typeof value === 'object' && !Array.isArray(value);
@@ -74,6 +78,9 @@ export function validateWorkout(
     !Array.isArray(value.day.blocks) ||
     value.day.blocks.length > 100 ||
     !['kg', 'lb'].includes(value.units) ||
+    (value.bodyweightKg !== undefined &&
+      value.bodyweightKg !== null &&
+      (!finite(value.bodyweightKg) || value.bodyweightKg < 0)) ||
     !integer(value.cursor, 0, 1000000) ||
     !['work', 'resting'].includes(value.phase) ||
     !finite(value.startedAtMs) ||
@@ -83,6 +90,13 @@ export function validateWorkout(
     !Array.isArray(value.progress)
   )
     return invalid();
+  if (value.recoveryCopies !== undefined) {
+    if (!Array.isArray(value.recoveryCopies)) return invalid();
+    for (const copy of value.recoveryCopies) {
+      if (!record(copy)) return invalid();
+      validateWorkout({ ...value, ...copy, recoveryCopies: undefined }, owner);
+    }
+  }
   for (const b of value.day.blocks) {
     if (
       !record(b) ||
@@ -134,18 +148,43 @@ export function validateWorkout(
 
 /** Serialized local transitions; every owner has an independent disk key. */
 export class WorkoutStore {
-  constructor(private readonly storage: Storage) {}
+  constructor(private readonly storage: Storage, private readonly lock: JournalLock = nativeJournalLock) {}
   private exclusive<T>(owner: string, action: () => Promise<T>): Promise<T> {
-    const key = keyFor(owner);
-    const result = (tails.get(key) ?? Promise.resolve()).then(action, action);
-    tails.set(
-      key,
-      result.then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-    return result;
+    return this.lock(keyFor(owner), action);
+  }
+  /** Serialize a reviewed snapshot with its set write; no network acknowledgement is awaited. */
+  withSnapshot<T>(owner: string, expected: SavedWorkout | null,
+    action: (persistDraft: () => Promise<void>) => Promise<T>,
+    patch?: WorkoutPatch, guard: () => void = () => {}, finalPatch?: WorkoutPatch) {
+    return this.exclusive(owner, async () => {
+      const current = await this.load(owner);
+      if (JSON.stringify(current) !== JSON.stringify(expected))
+        throw new Error('Your workout changed. Review the latest value from Home.');
+      guard();
+      let next = current;
+      let persisted = false;
+      const persistDraft = async () => {
+        guard();
+        if (!patch || !current || persisted) return;
+        const copy = { cursor: current.cursor, phase: current.phase, draft: current.draft,
+          savedDraft: current.savedDraft, progress: current.progress, restUntilMs: current.restUntilMs,
+          endedAtMs: current.endedAtMs };
+        next = { ...current, ...patch, recoveryCopies: [...(current.recoveryCopies ?? []), copy] };
+        validateWorkout(next, owner);
+        await this.storage.setItem(keyFor(owner), JSON.stringify(next));
+        persisted = true;
+      };
+      // The journal calls this hook only after checking its exact blocked entry
+      // under its own lock. Until its write is durable, savedDraft remains unchanged.
+      const result = await action(persistDraft);
+      guard();
+      if (persisted && next && finalPatch) {
+        const finished = { ...next, ...finalPatch };
+        validateWorkout(finished, owner);
+        await this.storage.setItem(keyFor(owner), JSON.stringify(finished));
+      }
+      return result;
+    });
   }
   private async load(owner: string): Promise<SavedWorkout | null> {
     const raw = await this.storage.getItem(keyFor(owner));
@@ -185,8 +224,8 @@ export class WorkoutStore {
   update(
     owner: string,
     session: string,
-    expected: { cursor: number; phase: SavedWorkout['phase'] },
-    patch: Patch,
+    expected: { cursor: number; phase: SavedWorkout['phase']; snapshot?: SavedWorkout },
+    patch: WorkoutPatch,
   ) {
     return this.exclusive(owner, async () => {
       const current = await this.load(owner);
@@ -195,6 +234,7 @@ export class WorkoutStore {
         current.sessionId !== session ||
         current.cursor !== expected.cursor ||
         current.phase !== expected.phase
+        || (expected.snapshot !== undefined && JSON.stringify(current) !== JSON.stringify(expected.snapshot))
       )
         throw new Error('Your workout changed. Reopen it from Home.');
       const next = { ...current, ...patch };

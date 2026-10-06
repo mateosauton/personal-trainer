@@ -5,6 +5,7 @@ const mockPlan = jest.fn();
 let mockSaved: any = null;
 jest.mock('@/lib/session/workout', () => ({
   workouts: {
+    withSnapshot: async (_owner: string, _snapshot: unknown, action: () => Promise<unknown>) => action(),
     read: async () => mockSaved,
     create: async (value: any) => {
       mockSaved = value;
@@ -61,6 +62,7 @@ jest.mock('@/lib/db/queries', () => ({
   getProgress: async () => new Map(),
 }));
 jest.mock('@/lib/session/sync', () => ({
+  bootstrapSetBaselines: async () => undefined,
   queueCompletion: (...args: unknown[]) => mockComplete(...args),
   flushOutbox: async () => undefined,
   pendingSyncCount: async () => 0,

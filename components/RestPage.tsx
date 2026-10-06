@@ -44,6 +44,7 @@ interface Props {
   targetReps: string;
   units: Units;
   bodyweightKg: number | null;
+  bodyweightCaptured?: boolean;
   restSeconds: number;
   restUntilMs?: number | null;
   draft: SetDraft;
@@ -68,6 +69,7 @@ export function RestPage({
   targetReps,
   units,
   bodyweightKg,
+  bodyweightCaptured = false,
   restSeconds,
   restUntilMs,
   draft,
@@ -195,7 +197,9 @@ export function RestPage({
             <Muted style={{ marginTop: space.xs }}>
               {bodyweightKg != null
                 ? `Effective load ${formatWeight(effectiveKg, units)} (bodyweight + added)`
-                : 'Add your bodyweight in Profile to track effective load.'}
+                : bodyweightCaptured
+                  ? 'No bodyweight saved for this workout. Add it in Profile for future workouts.'
+                  : 'Add your bodyweight in Profile to track effective load.'}
             </Muted>
           ) : null}
         </View>

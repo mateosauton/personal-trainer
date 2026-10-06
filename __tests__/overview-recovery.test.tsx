@@ -9,7 +9,7 @@ let mockOwner = 'A';
 const day = { id: 'day', name: 'Training', blocks: [] };
 jest.mock('@/lib/auth', () => ({
   useUserId: () => mockOwner,
-  useAuth: () => ({ profile: { units: 'lb' } }),
+  useAuth: () => ({ profile: { units: 'lb', bodyweight_kg: 70 } }),
 }));
 jest.mock('expo-router', () => ({
   useLocalSearchParams: () => ({ dayId: 'day' }),
@@ -92,6 +92,7 @@ it('persists the new workout before navigating and retries storage without anoth
       ownerId: 'A',
       sessionId: 'new-session',
       units: 'lb',
+      bodyweightKg: 70,
       cursor: 0,
     }),
   );

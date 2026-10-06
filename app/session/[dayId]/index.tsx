@@ -136,6 +136,7 @@ export default function SessionOverview() {
           sessionId,
           day,
           units: profile?.units ?? 'kg',
+          bodyweightKg: profile?.bodyweight_kg ?? null,
           progress: [...progress.values()],
           cursor: 0,
           phase: 'work',

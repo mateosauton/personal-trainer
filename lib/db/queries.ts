@@ -1,3 +1,5 @@
+import { validSet } from '@/lib/session/set-journal';
+import type { JournalWrite } from '@/lib/session/set-journal';
 import { supabase } from './supabase';
 import type { GeneratedPlan } from '@/lib/plan/generate';
 import { dayKey } from '@/lib/stats';
@@ -155,15 +157,87 @@ export async function getTrainedDayKeys(userId: string): Promise<string[]> {
   return (data ?? []).flatMap((row) => typeof row.local_day === 'string' ? [row.local_day] : []);
 }
 
-export async function logSet(sessionId: string, set: SetLog, client = supabase, signal?: AbortSignal) {
-  const request = client
-    .from('set_logs')
-    .upsert(
-      { session_id: sessionId, ...set },
-      { onConflict: 'session_id,plan_item_id,set_index' },
-    );
-  const { error } = await (signal ? request.abortSignal(signal) : request);
+export interface SetWriteResult {
+  status: 'applied' | 'duplicate' | 'superseded';
+  serverVersion: number;
+}
+export async function logSetVersioned(
+  write: JournalWrite,
+  client = supabase,
+  signal?: AbortSignal,
+): Promise<SetWriteResult> {
+  const request = client.rpc('log_set_versioned', {
+    p_session_id: write.sessionId,
+    p_set: write.set,
+    p_origin: write.origin,
+    p_revision: write.revision,
+    p_expected_version: write.expectedVersion,
+    p_event_at: write.eventAt,
+  });
+  const { data, error } = await (signal
+    ? request.abortSignal(signal)
+    : request);
   if (error) throw error;
+  if (
+    !data ||
+    !['applied', 'duplicate', 'superseded'].includes(data.status) ||
+    !Number.isSafeInteger(data.serverVersion) ||
+    data.serverVersion < 1
+  )
+    throw new Error('Invalid workout sync response.');
+  return data as SetWriteResult;
+}
+export interface SetWriteState {
+  serverVersion: number;
+  set: SetLog;
+  eventAt: string;
+}
+/** Read an owned set for comparison; never adopt its baseline automatically. */
+export async function getSetWriteState(
+  sessionId: string,
+  planItemId: string,
+  setIndex: number,
+  client = supabase,
+  signal?: AbortSignal,
+): Promise<SetWriteState | null> {
+  const request = client.rpc('get_set_write_state', {
+    p_session_id: sessionId,
+    p_plan_item_id: planItemId,
+    p_set_index: setIndex,
+  });
+  const { data, error } = await (signal ? request.abortSignal(signal) : request);
+  if (error) throw error;
+  if (data === null) return null;
+  if (!data || !Number.isSafeInteger(data.serverVersion) || data.serverVersion < 1
+    || !validSet(data.set)
+    || data.set.plan_item_id.toLowerCase() !== planItemId.toLowerCase()
+    || data.set.set_index !== setIndex
+    || typeof data.eventAt !== 'string' || !Number.isFinite(Date.parse(data.eventAt)))
+    throw new Error('Invalid workout recovery response. Your saved data is preserved.');
+  return data as SetWriteState;
+}
+export async function checkLegacySet(
+  sessionId: string,
+  set: SetLog,
+  client = supabase,
+  signal?: AbortSignal,
+) {
+  const request = client.rpc('check_legacy_set', {
+    p_session_id: sessionId,
+    p_set: set,
+  });
+  const { data, error } = await (signal
+    ? request.abortSignal(signal)
+    : request);
+  if (error) throw error;
+  if (!data || !['duplicate', 'conflict'].includes(data.status))
+    throw new Error('Invalid workout recovery response.');
+  return data as {
+    status: 'duplicate' | 'conflict';
+    serverVersion: number;
+    set: SetLog | null;
+    eventAt?: string;
+  };
 }
 
 export async function finishSession(
@@ -189,6 +263,32 @@ export async function getSetLogs(sessionId: string) {
     .order('completed_at');
   if (error) throw error;
   return data ?? [];
+}
+
+export interface SetSnapshotVersion { logId: string; serverVersion: number }
+export interface SessionSetSnapshot {
+  logs: (Omit<SetLog, 'plan_item_id'> & { id: string; plan_item_id: string | null; completed_at: string })[];
+  versions: SetSnapshotVersion[];
+}
+/** Logs and their complete version membership come from one database snapshot. */
+export async function getSessionSetSnapshot(sessionId: string, client = supabase, signal?: AbortSignal): Promise<SessionSetSnapshot> {
+  const request = client.rpc('get_session_set_snapshot', { p_session_id: sessionId });
+  const { data, error } = await (signal ? request.abortSignal(signal) : request);
+  if (error) throw error;
+  const uuid = (value: unknown): value is string => typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  if (!data || !Array.isArray(data.logs) || !Array.isArray(data.versions)
+    || data.logs.length !== data.versions.length
+    || !data.logs.every((log: any) => log && uuid(log.id))
+    || !data.versions.every((version: any) => version && uuid(version.logId)
+      && Number.isSafeInteger(version.serverVersion) && version.serverVersion > 0))
+    throw new Error('Invalid workout set snapshot. Your saved data is preserved.');
+  const ids = new Set<string>(data.logs.map((log: any) => log.id.toLowerCase()));
+  const versions = new Set<string>(data.versions.map((version: any) => version.logId.toLowerCase()));
+  if (ids.size !== data.logs.length || versions.size !== data.versions.length
+    || [...versions].some(id => !ids.has(id)))
+    throw new Error('Invalid workout set snapshot. Your saved data is preserved.');
+  return data as SessionSetSnapshot;
 }
 
 export interface ProgressRow {
@@ -277,9 +377,10 @@ export async function applySessionProgress(
   expected: { exercise_id: string; state: ProgressRow | null }[],
   updates: ProgressRow[],
   result: SessionSummaryLine[],
+  setVersions: SetSnapshotVersion[],
 ): Promise<SessionSummaryLine[]> {
   const { data, error } = await supabase.rpc('apply_session_progress', {
-    p_session_id: sessionId, p_expected: expected, p_updates: updates, p_result: result,
+    p_session_id: sessionId, p_expected: expected, p_updates: updates, p_result: result, p_set_versions: setVersions,
   });
   if (error) throw error;
   return data as SessionSummaryLine[];

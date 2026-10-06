@@ -112,3 +112,14 @@ it('preserves corrupted or cross-account data without overwriting it', async () 
   disk.values.set(key, JSON.stringify(fixture('B')));
   await expect(store.read('A')).rejects.toThrow('preserved');
 });
+it('preserves a captured bodyweight across restart and rejects corrupt values', async () => {
+  const storage = memory();
+  const saved = { ...fixture(), bodyweightKg: 80 };
+  await new WorkoutStore(storage).create(saved);
+  expect((await new WorkoutStore(storage).read('A'))?.bodyweightKg).toBe(80);
+  for (const bodyweightKg of [-1, NaN, Infinity]) {
+    await expect(
+      new WorkoutStore(memory()).create({ ...fixture(), bodyweightKg }),
+    ).rejects.toThrow('preserved');
+  }
+});
