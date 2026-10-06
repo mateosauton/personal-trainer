@@ -13,9 +13,10 @@ import {
   Overline,
   Screen,
 } from '@/components/ui';
-import { useUserId } from '@/lib/auth';
+import { useAuth, useUserId } from '@/lib/auth';
 import { getExercise } from '@/lib/catalog';
-import { getActivePlan, startSession } from '@/lib/db/queries';
+import { getActivePlan, getProgress, startSession } from '@/lib/db/queries';
+import type { SavedWorkout } from '@/lib/session/workout-store';
 import { workouts } from '@/lib/session/workout';
 import { prefetchUrls } from '@/lib/media/provider';
 import { colors, space, type } from '@/lib/theme';
@@ -25,6 +26,8 @@ import type { PlanDay } from '@/lib/types';
 export default function SessionOverview() {
   const { dayId } = useLocalSearchParams<{ dayId: string }>();
   const userId = useUserId();
+  const { profile } = useAuth();
+  const pendingStart = useRef<SavedWorkout | null>(null);
   const router = useRouter();
   const identity = `${userId}:${dayId}`;
   const currentIdentity = useRef(identity);
@@ -40,12 +43,14 @@ export default function SessionOverview() {
   const [day, setDay] = useState<PlanDay | null>(null);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setStartError(null);
     setStarting(false);
     getActivePlan(userId)
       .then((plan) => {
@@ -104,6 +109,7 @@ export default function SessionOverview() {
     const isCurrent = () =>
       mounted.current && currentIdentity.current === identity;
     setStarting(true);
+    setStartError(null);
     try {
       const saved = await workouts.read(userId);
       if (!isCurrent()) return;
@@ -114,15 +120,46 @@ export default function SessionOverview() {
         });
         return;
       }
-      const sessionId = await startSession(userId, day.id);
+      let candidate = pendingStart.current;
+      if (
+        !candidate ||
+        candidate.ownerId !== userId ||
+        candidate.day.id !== day.id
+      ) {
+        const progress = await getProgress(userId);
+        if (!isCurrent()) return;
+        const startedAtMs = Date.now();
+        const sessionId = await startSession(userId, day.id);
+        candidate = {
+          version: 1,
+          ownerId: userId,
+          sessionId,
+          day,
+          units: profile?.units ?? 'kg',
+          progress: [...progress.values()],
+          cursor: 0,
+          phase: 'work',
+          draft: null,
+          savedDraft: null,
+          restUntilMs: null,
+          startedAtMs,
+          endedAtMs: null,
+        };
+        pendingStart.current = candidate;
+      }
+      // Keep the created session recoverable even if its account changed while starting.
+      const persisted = await workouts.create(candidate);
       if (!isCurrent()) return;
+      pendingStart.current = null;
       router.replace({
         pathname: '/session/[dayId]/run',
-        params: { dayId: day.id, sessionId },
+        params: { dayId: persisted.day.id, sessionId: persisted.sessionId },
       });
     } catch (e) {
       if (!isCurrent()) return;
-      setError(e instanceof Error ? e.message : 'Could not start the session');
+      setStartError(
+        e instanceof Error ? e.message : 'Could not start the session',
+      );
       setStarting(false);
     }
   };
@@ -178,8 +215,11 @@ export default function SessionOverview() {
         ))}
       </View>
 
+      {startError && (
+        <Muted style={{ marginTop: space.md }}>{startError}</Muted>
+      )}
       <Button
-        title="Begin"
+        title={startError ? 'Retry start' : 'Begin'}
         onPress={begin}
         loading={starting}
         style={{ marginTop: space.xl }}

@@ -2,6 +2,8 @@
 
 An active workout is saved on the device under its account ID. Home offers Resume workout even when the dashboard cannot load. Beginning another workout returns to the saved workout until its summary has been saved.
 
+Before opening the player, the overview saves the new session snapshot. A failed local save offers Retry start using the same session ID.
+
 The snapshot contains the original training day, units, exercise progression, current set, drafts, rest deadline, and start/end times. Cursor changes are persisted before the player advances. Restarting the app restores that snapshot without fetching the plan. Rest timers use the original deadline; workout duration includes time spent paused and stops when the last set is completed.
 
 A successful server progression receipt clears the matching snapshot. Failed summary synchronization keeps it for retry. A completed session opened without a snapshot goes directly to its summary. Account changes cancel pending navigation and hide the previous account's workout.
