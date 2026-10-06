@@ -4,6 +4,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { ExerciseStrip } from '@/components/ExerciseStrip';
 import { Header } from '@/components/Header';
+import { SyncRecovery } from '@/components/SyncRecovery';
 import { Streak } from '@/components/Streak';
 import {
   Body,
@@ -132,6 +133,7 @@ export default function Home() {
   if (loading) {
     return (
       <Screen scroll={false}>
+        <SyncRecovery userId={userId} />
         {resumeCard}
         <ActivityIndicator color={colors.accent} />
       </Screen>
@@ -146,6 +148,7 @@ export default function Home() {
           avatarUrl={profile?.avatar_url ?? null}
           subtitle={subtitle}
         />
+        <SyncRecovery userId={userId} />
         {resumeCard}
         <Card style={{ marginTop: space.xl, gap: space.md }}>
           <Overline>No plan yet</Overline>
@@ -196,6 +199,7 @@ export default function Home() {
         subtitle={subtitle}
       />
 
+      <SyncRecovery userId={userId} />
       {resumeCard}
       <View style={{ marginTop: space.xl }}>
         <Streak

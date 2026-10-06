@@ -28,7 +28,11 @@ import {
   type ProgressRow,
   type SessionSummaryLine,
 } from '@/lib/db/queries';
-import { flushOutbox, pendingSyncCount } from '@/lib/session/sync';
+import {
+  failedSyncCount,
+  flushOutbox,
+  pendingSyncCount,
+} from '@/lib/session/sync';
 import { workouts } from '@/lib/session/workout';
 import { nextLoad } from '@/lib/progression';
 import { colors, space, type } from '@/lib/theme';
@@ -64,7 +68,12 @@ export default function SessionSummary() {
       // A failed send leaves operations queued even though flush resolves.
       // Never derive future loads from a partial server view of this workout.
       await flushOutbox();
-      if ((await pendingSyncCount()) > 0) {
+      if ((await failedSyncCount(sessionId)) > 0) {
+        throw new Error(
+          'Some sets could not sync. Retry workout sync from Home before saving this summary.',
+        );
+      }
+      if ((await pendingSyncCount(sessionId)) > 0) {
         throw new Error(
           'Your workout is still syncing. Reconnect and retry to see all your sets.',
         );

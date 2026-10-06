@@ -120,3 +120,20 @@ it('retains legacy progress if its archive cannot be saved', async () => {
   expect(values.get('office-gym.legacy-progress.v1.E')).toBe('{broken');
   expect(mockFinishSession).not.toHaveBeenCalled();
 });
+
+it('quarantines validation failures by account without blocking other workouts', async () => {
+  const { getSyncStatus, failedSyncCount, retrySync } = require('@/lib/session/sync');
+  signedIn('F'); setSyncAccount('F');
+  mockLogSet.mockRejectedValueOnce({ code: '23503' });
+  await queueSet('F', 'rejected-session', set); await flushOutbox();
+  await queueCompletion('F', 'healthy-session', 90); await flushOutbox();
+  expect(await getSyncStatus('F')).toEqual({ ownerId: 'F', pending: 0, rejected: 1 });
+  expect(await failedSyncCount('rejected-session')).toBe(1);
+  expect(await failedSyncCount('healthy-session')).toBe(0);
+  expect(mockFinishSession).toHaveBeenCalledWith('healthy-session', expect.anything(), expect.anything(), expect.anything());
+  signedIn('G'); setSyncAccount('G');
+  expect(await getSyncStatus('G')).toEqual({ ownerId: 'G', pending: 0, rejected: 0 });
+  await expect(retrySync('F')).rejects.toThrow(/account/i);
+  signedIn('F'); setSyncAccount('F'); await retrySync('F');
+  expect(await failedSyncCount('rejected-session')).toBe(0);
+});
