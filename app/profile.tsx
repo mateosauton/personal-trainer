@@ -212,7 +212,7 @@ export default function ProfileTab() {
         loading={regenerating}
         style={{ marginTop: space.md }}
       />
-      <Button variant="ghost" title="Sign out" onPress={signOut} style={{ marginTop: space.sm }} />
+      <Button variant="ghost" title="Sign out" onPress={() => { void signOut().catch((error: unknown) => notify('Could not sign out', error instanceof Error ? error.message : 'Please retry.')); }} style={{ marginTop: space.sm }} />
 
       <Attribution />
     </Screen>

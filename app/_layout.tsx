@@ -8,6 +8,7 @@ import { AuthProvider, useAuth } from '@/lib/auth';
 import { profileGate } from '@/lib/auth-gate';
 import { Button, Body, Screen } from '@/components/ui';
 import { colors } from '@/lib/theme';
+import { notify } from '@/lib/alerts';
 
 const Splash = () => (
   <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
@@ -26,18 +27,26 @@ const Splash = () => (
  * asking the router to go somewhere is what left the app on a dead spinner.
  */
 function Routes() {
-  const { session, profileState, loading, refreshProfile, signOut } = useAuth();
-  if (loading) return <Splash />;
+  const { session, profileState, loading, refreshProfile, signOut, recoveringPassword, processingAuthLink, authError, retrySession } = useAuth();
+  const reportError = (error: unknown) => notify('Could not complete the action', error instanceof Error ? error.message : 'Please retry.');
+  if (processingAuthLink || (loading && !recoveringPassword)) return <Splash />;
+  if (authError) return (
+    <Screen scroll={false} style={{ justifyContent: 'center' }}>
+      <Body>{authError.message}</Body>
+      <Button title="Retry sign-in" onPress={() => { void retrySession(); }} style={{ marginTop: 24 }} />
+      <Button title="Sign out" variant="ghost" onPress={() => { void signOut().catch(reportError); }} />
+    </Screen>
+  );
 
   const signedIn = session != null;
-  const gate = profileGate(signedIn, profileState);
+  const gate = signedIn && recoveringPassword ? 'recovery' : profileGate(signedIn, profileState);
   if (gate === 'loading') return <Splash />;
   if (gate === 'error') {
     return (
       <Screen scroll={false} style={{ justifyContent: 'center' }}>
         <Body>Couldn’t reach the server. Your plan has not been changed.</Body>
-        <Button title="Retry" onPress={() => { void refreshProfile(); }} style={{ marginTop: 24 }} />
-        <Button title="Sign out" variant="ghost" onPress={() => { void signOut(); }} />
+        <Button title="Retry" onPress={() => { void refreshProfile().catch(reportError); }} style={{ marginTop: 24 }} />
+        <Button title="Sign out" variant="ghost" onPress={() => { void signOut().catch(reportError); }} />
       </Screen>
     );
   }
@@ -55,13 +64,17 @@ function Routes() {
         <Stack.Screen name="(auth)" />
       </Stack.Protected>
 
+      <Stack.Protected guard={signedIn && recoveringPassword === true}>
+        <Stack.Screen name="reset-password" />
+      </Stack.Protected>
+
       {/* Onboarding is not in a route group: a group index would claim "/" too,
           and the tab bar's Today screen already owns it. */}
-      <Stack.Protected guard={signedIn && !onboarded}>
+      <Stack.Protected guard={signedIn && !onboarded && !recoveringPassword}>
         <Stack.Screen name="onboarding" />
       </Stack.Protected>
 
-      <Stack.Protected guard={signedIn && onboarded}>
+      <Stack.Protected guard={signedIn && onboarded && !recoveringPassword}>
         <Stack.Screen name="(tabs)" />
         {/* Profile is a modal over the tabs, opened by the avatar on Home. */}
         <Stack.Screen name="profile" options={{ presentation: 'modal' }} />
