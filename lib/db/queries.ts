@@ -155,8 +155,8 @@ export async function getTrainedDayKeys(userId: string): Promise<string[]> {
   return (data ?? []).flatMap((row) => typeof row.local_day === 'string' ? [row.local_day] : []);
 }
 
-export async function logSet(sessionId: string, set: SetLog) {
-  const { error } = await supabase
+export async function logSet(sessionId: string, set: SetLog, client = supabase) {
+  const { error } = await client
     .from('set_logs')
     .upsert(
       { session_id: sessionId, ...set },
@@ -168,8 +168,9 @@ export async function logSet(sessionId: string, set: SetLog) {
 export async function finishSession(
   sessionId: string,
   patch: { duration_s: number; rpe: number | null; notes?: string | null },
+  client = supabase,
 ) {
-  const { error } = await supabase
+  const { error } = await client
     .from('sessions')
     .update({ completed_at: new Date().toISOString(), ...patch })
     .eq('id', sessionId)
@@ -206,9 +207,9 @@ export async function getProgress(userId: string): Promise<Map<string, ProgressR
   return new Map((data ?? []).map((row) => [row.exercise_id, row as ProgressRow]));
 }
 
-export async function upsertProgress(userId: string, rows: (ProgressRow & { exercise_id: string })[]) {
+export async function upsertProgress(userId: string, rows: (ProgressRow & { exercise_id: string })[], client = supabase) {
   if (rows.length === 0) return;
-  const { error } = await supabase.from('exercise_progress').upsert(
+  const { error } = await client.from('exercise_progress').upsert(
     rows.map((r) => ({ user_id: userId, ...r, updated_at: new Date().toISOString() })),
     { onConflict: 'user_id,exercise_id' },
   );

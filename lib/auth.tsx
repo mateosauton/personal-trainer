@@ -8,6 +8,7 @@ import { getProfile } from './db/queries';
 import { supabase } from './db/supabase';
 import type { ProfileState } from './auth-gate';
 import type { Profile } from './types';
+import { setSyncAccount, startOutboxSync } from './session/sync';
 
 interface AuthState {
   session: Session | null;
@@ -33,11 +34,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let authChanged = false;
     supabase.auth.getSession().then(({ data }) => {
+      if (authChanged) return;
+      setSyncAccount(data.session?.user.id ?? null);
       setSession(data.session);
       if (!data.session) setLoading(false);
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
+      authChanged = true;
+      setSyncAccount(next?.user.id ?? null);
       setSession(next);
       if (!next) {
         setProfileState({ status: 'ready', profile: null });
@@ -61,6 +67,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const userId = session?.user.id;
+
+  useEffect(() => {
+    if (!userId) return;
+    return startOutboxSync(userId);
+  }, [userId]);
 
   useEffect(() => {
     if (!userId) return;
@@ -107,7 +118,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       },
       signOut: async () => {
-        await supabase.auth.signOut();
+        setSyncAccount(null);
+        const { error } = await supabase.auth.signOut();
+        if (error) {
+          const { data } = await supabase.auth.getSession();
+          setSyncAccount(data.session?.user.id ?? null);
+          throw error;
+        }
       },
     }),
     [session, profileState, loading, userId],
