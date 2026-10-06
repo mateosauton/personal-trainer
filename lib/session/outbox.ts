@@ -1,3 +1,4 @@
+import { nativeJournalLock, type JournalLock } from './set-journal';
 export interface OutboxOperation {
   id: string;
   kind: 'set' | 'progress' | 'complete';
@@ -25,7 +26,6 @@ export interface OutboxStorage {
 
 /** Durable, serial replay queue. Operation IDs make retries safe for idempotent writes. */
 export class Outbox {
-  private tail: Promise<void> = Promise.resolve();
   private flushing: Promise<void> | null = null;
 
   constructor(
@@ -36,6 +36,7 @@ export class Outbox {
     ) => Promise<void>,
     private readonly key = 'office-gym.session-outbox.v1',
     private readonly isRejected: (error: unknown) => boolean = () => false,
+    private readonly storageLock: JournalLock = nativeJournalLock,
   ) {}
 
   private async read(): Promise<OutboxOperation[]> {
@@ -91,14 +92,18 @@ export class Outbox {
     );
   }
 
-  retryRejected() {
+  retryRejected(
+    shouldRetry: (entry: RejectedOperation) => boolean = () => true,
+  ) {
     return this.exclusive(async () => {
       const items = await this.read();
-      const latest = new Map<string, OutboxOperation>();
+      const latest = new Map<string, RejectedOperation>();
       for (const entry of await this.readRejected()) {
-        if (!entry.resolved) latest.set(entry.operation.id, entry.operation);
+        if (!entry.resolved) latest.set(entry.operation.id, entry);
       }
-      for (const operation of latest.values()) {
+      for (const entry of latest.values()) {
+        if (!shouldRetry(entry)) continue;
+        const operation = entry.operation;
         // A newer correction in the queue wins over its archived version.
         if (!items.some((item) => item.id === operation.id))
           items.push(operation);
@@ -147,12 +152,7 @@ export class Outbox {
   }
 
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
-    const result = this.tail.then(work, work);
-    this.tail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
+    return this.storageLock(this.key, work);
   }
 
   async enqueue(operation: OutboxOperation) {
@@ -210,6 +210,16 @@ export class Outbox {
       await this.exclusive(async () => {
         const items = await this.read();
         const archive = await this.readRejected();
+        const queued = items.find((item) => item.id === operation.id);
+        const latestRejected = [...archive]
+          .reverse()
+          .find(
+            (entry) => !entry.resolved && entry.operation.id === operation.id,
+          );
+        const current = queued ?? latestRejected?.operation;
+        const acknowledgesCurrent =
+          current != null &&
+          JSON.stringify(current) === JSON.stringify(operation);
         if (
           archive.some(
             (entry) => !entry.resolved && entry.operation.id === operation.id,
@@ -219,7 +229,9 @@ export class Outbox {
             `${this.key}.rejected`,
             JSON.stringify(
               archive.map((entry) =>
-                entry.operation.id === operation.id
+                entry.operation.id === operation.id &&
+                (acknowledgesCurrent ||
+                  JSON.stringify(entry.operation) === JSON.stringify(operation))
                   ? { ...entry, resolved: true }
                   : entry,
               ),

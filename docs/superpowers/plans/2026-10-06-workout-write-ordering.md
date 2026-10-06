@@ -25,10 +25,10 @@
 ## Client boundary
 
 - [x] Add `lib/session/set-journal.ts`: account-scoped atomic origin/revision/payload journal with pending state, exact acknowledgement guards, blocked records, preserved event times and explicit new-origin conflict choices.
-- [ ] Wire Expo Crypto and Web Locks through the native/browser transport. The journal core default lock covers one JS runtime.
+- [x] Wire Expo Crypto and Web Locks through the native/browser transport. The journal core default lock covers one JS runtime.
 - [x] Test journal enqueue/ack crash boundaries, sequence allocation across instances, correction reverts, stale acknowledgements/choices, malformed data preservation and safe-integer limits. Independent review found no remaining actionable journal findings.
-- [ ] Verify the same boundaries through the integrated outbox and browser cross-tab transport.
-- [ ] Update `lib/session/sync.ts` and `lib/db/queries.ts` to call versioned RPCs, carry original event times, recover interrupted journal enqueues, and preserve legacy conflicts.
+- [x] Verify integrated outbox recovery, token binding, request expiry, shared-instance queue/archive mutations and a real two-tab Chrome journal/queue fixture. Independent review findings fixed and covered by regressions.
+- [x] Update `lib/session/sync.ts` and `lib/db/queries.ts` to call versioned RPCs, carry original event times, recover interrupted journal enqueues, and preserve legacy conflicts.
 - [ ] Summary must use the atomic set snapshot and guarded progression RPC, reload logs and progression together on `40001`, and preserve saved workout units/bodyweight.
 - [ ] Bootstrap captured server versions for reopened sessions. Fresh sessions begin with expected version zero.
 - [ ] Add conflict comparison/recovery in `components/SyncRecovery.tsx`. Display saved/server reps and loads; require an explicit choice, verify the local revision has not changed, and use the displayed server baseline.

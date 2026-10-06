@@ -174,3 +174,54 @@ it('retries the current values when a correction reverts to an earlier rejected 
   ]);
   expect(await queue.rejected()).toEqual([]);
 });
+it('does not clear a newer rejected edit when another tab acknowledges an older write', async () => {
+  const storage = disk();
+  let release!: () => void;
+  const older = new Outbox(
+    storage,
+    async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    },
+    'shared-recovery',
+    rejected,
+  );
+  const newer = new Outbox(
+    storage,
+    async () => {
+      throw { code: '23503' };
+    },
+    'shared-recovery',
+    rejected,
+  );
+  await older.enqueue(op('same', 8));
+  const oldFlush = older.flush();
+  while (!release) await Promise.resolve();
+  await newer.enqueue(op('same', 12));
+  await newer.flush();
+  release();
+  await oldFlush;
+  expect(await newer.rejected()).toEqual([
+    { operation: op('same', 12), code: '23503', resolved: false },
+  ]);
+});
+it('does not replay an older retryable payload when the latest rejected value needs review', async () => {
+  const storage = disk();
+  const queue = new Outbox(
+    storage,
+    async () => {},
+    'mixed-recovery',
+    () => true,
+  );
+  storage.values.set(
+    'mixed-recovery.rejected',
+    JSON.stringify([
+      { operation: op('same', 8), code: '23503', resolved: false },
+      { operation: op('same', 12), code: 'PT409', resolved: false },
+    ]),
+  );
+  await queue.retryRejected((entry) => entry.code !== 'PT409');
+  expect(await queue.pending()).toEqual([]);
+  expect(await queue.rejected()).toHaveLength(2);
+});
