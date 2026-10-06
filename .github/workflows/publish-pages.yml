@@ -30,6 +30,12 @@ jobs:
 
       - run: npm ci
 
+      - name: Check types
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test -- --runInBand --testTimeout=20000
+
       # Pages serves from /<repo>/, and Expo bakes that prefix into every asset
       # URL, so it is set here rather than committed — a root-hosted build of
       # the same commit (Vercel) must not carry it.
