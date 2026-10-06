@@ -19,8 +19,8 @@ import { storageLock } from './storage-lock';
 import { archiveLegacyProgress } from './legacy-progress';
 import { workouts } from './workout';
 import { buildQueue } from './queue';
-import { kgToDisplay } from '@/lib/units';
-import type { SavedWorkout, WorkoutPatch } from './workout-store';
+import { kgToDisplay, displayToKg } from '@/lib/units';
+import { validateWorkout, type SavedWorkout, type WorkoutPatch } from './workout-store';
 
 let activeAccount: string | null = null;
 let accountGeneration = 0;
@@ -35,6 +35,7 @@ const permanentCodes = [
   '22023',
   'PT409',
   'PT410',
+  'PTREVIEW',
 ];
 const needsReview = (code: string) => code === 'PT409' || code === 'PT410';
 function journalFor(userId: string) {
@@ -140,6 +141,8 @@ function queueFor(userId: string): Outbox {
             sessionId: string;
             durationS: number;
           };
+          if (await hasRejectedSets(userId, sessionId))
+            throw Object.assign(new Error('Review saved sets before finishing this workout.'), { code: 'PTREVIEW' });
           await finishSession(
             sessionId,
             { duration_s: durationS, rpe: null },
@@ -260,16 +263,21 @@ async function flushAccount(userId: string) {
   await queueFor(userId).flush();
 }
 
-export const queueCompletion = (
-  userId: string,
-  sessionId: string,
-  durationS: number,
-) =>
-  enqueue(userId, {
-    id: `complete:${sessionId}`,
-    kind: 'complete',
-    payload: { sessionId, durationS },
-  });
+async function hasRejectedSets(userId: string, sessionId: string) {
+  requireAccount(userId);
+  const generation = accountGeneration;
+  const [rejected, blocked] = await Promise.all([queueFor(userId).rejected(), journalFor(userId).blocked()]);
+  requireAccount(userId);
+  if (generation !== accountGeneration) throw new Error('The workout account changed.');
+  return rejected.some(entry => entry.operation.kind === 'set' && belongsToSession(entry.operation, sessionId))
+    || blocked.some(entry => entry.write.sessionId === sessionId);
+}
+export async function queueCompletion(userId: string, sessionId: string, durationS: number) {
+  if (await hasRejectedSets(userId, sessionId)) throw new Error('Review saved sets before finishing this workout.');
+  await queueFor(userId).retryRejected(entry => entry.code === 'PTREVIEW' && entry.operation.kind === 'complete'
+    && entry.operation.payload.sessionId === sessionId);
+  return enqueue(userId, { id: `complete:${sessionId}`, kind: 'complete', payload: { sessionId, durationS } });
+}
 
 const belongsToSession = (operation: OutboxOperation, sessionId?: string) =>
   !sessionId ||
@@ -419,9 +427,35 @@ export async function resolveSetConflict(userId: string, review: SetConflictRevi
   guard();
 }
 
+/** User-requested handoff of a durable local rest to explicit unknown-time recovery. */
+export async function stageLegacyRestRecovery(userId: string, expected: SavedWorkout): Promise<RejectedOperation> {
+  requireAccount(userId);
+  const generation = accountGeneration;
+  const guard = () => {
+    requireAccount(userId);
+    if (generation !== accountGeneration) throw new Error('The workout account changed.');
+  };
+  const local = JSON.parse(JSON.stringify(expected)) as SavedWorkout;
+  const entry = local?.phase === 'resting' ? buildQueue(local.day)[local.cursor] : null;
+  if (local?.ownerId !== userId || !entry || !local.savedDraft || !local.draft)
+    throw new Error('This saved rest is unavailable for recovery.');
+  const kg = displayToKg(local.draft.weight, local.units);
+  const set: SetLog = { plan_item_id: entry.item.id.toLowerCase(), exercise_id: entry.item.exercise_id,
+    set_index: entry.set, reps: local.draft.reps, weight_kg: local.draft.asBodyweight ? null : kg,
+    is_bodyweight: local.draft.asBodyweight, added_load_kg: local.draft.asBodyweight ? kg : 0, rpe: null };
+  const sessionId = local.sessionId.toLowerCase();
+  const id = `set:${sessionId}:${set.plan_item_id}:${set.set_index}`;
+  if (!validLegacyCapture({ id, sessionId, set })) throw new Error('Invalid local rest recovery capture.');
+  const capture = await workouts.withSnapshot(userId, local, () => journalFor(userId).withUnknownSet(id,
+    () => queueFor(userId).captureLegacyReview({ id, kind: 'set', payload: { sessionId, set } }, guard, local)), undefined, guard);
+  guard();
+  if (!legacyCapture(capture.operation)) throw new Error('The saved recovery data is invalid. Its data is preserved.');
+  return capture;
+}
 export interface LegacySetConflictReview {
   ownerId: string;
   captured: RejectedOperation;
+  rest?: SavedWorkout;
   saved: LegacySetCapture;
   server: SetWriteState | null;
   workout: SavedWorkout | null;
@@ -466,6 +500,13 @@ export async function reviewLegacySetConflict(userId: string, captured: Rejected
       (async () => {
         const current = await currentLegacyConflict(userId, captured);
         const saved = legacyCapture(current.operation)!;
+        const rest = current.localRest;
+        if (rest) {
+          validateWorkout(rest, userId);
+          const entry = rest.phase === 'resting' ? buildQueue(rest.day)[rest.cursor] : null;
+          if (rest.sessionId !== saved.sessionId || !entry || entry.item.id !== saved.set.plan_item_id || entry.set !== saved.set.set_index)
+            throw new Error('The saved rest recovery data is invalid. Its data is preserved.');
+        }
         const { data, error } = await supabase.auth.getSession();
         guard();
         if (error) throw error;
@@ -476,7 +517,7 @@ export async function reviewLegacySetConflict(userId: string, captured: Rejected
         const workout = await workouts.read(userId);
         await currentLegacyConflict(userId, captured);
         guard();
-        return { ownerId: userId, captured: current, saved, server, workout, accountGeneration: generation };
+        return { ownerId: userId, captured: current, saved, server, workout, rest, accountGeneration: generation };
       })(),
       new Promise<never>((_, reject) => { timer = setTimeout(() => {
         controller.abort(); reject(new Error('Workout conflict review timed out. Your saved data is preserved.'));
@@ -500,6 +541,7 @@ export async function resolveLegacySetConflict(userId: string, review: LegacySet
   };
   guard();
   if (review.ownerId !== userId || !['saved', 'server'].includes(choice)
+    || JSON.stringify(review.rest) !== JSON.stringify(review.captured.localRest)
     || JSON.stringify(legacyCapture(review.captured.operation)) !== JSON.stringify(review.saved))
     throw new Error('Invalid legacy conflict choice.');
   const current = await currentLegacyConflict(userId, review.captured);
@@ -524,6 +566,7 @@ export async function resolveLegacySetConflict(userId: string, review: LegacySet
         best_weight_kg: previous?.best_weight_kg ?? null, best_e1rm: previous?.best_e1rm ?? null,
         miss_streak: previous?.miss_streak ?? 0 }] };
   }
+  const recoveryRest = review.rest ?? (patch ? local : null);
   await workouts.withSnapshot(userId, local, persistDraft => journalFor(userId).importLegacy(
     review.saved, chosen, review.server?.serverVersion ?? 0, eventAt,
     (write, persist) => queueFor(userId).replaceRejected(review.captured, async () => {
@@ -531,7 +574,7 @@ export async function resolveLegacySetConflict(userId: string, review: LegacySet
       return { id: write.id, kind: 'set', payload: { sessionId: write.sessionId, set: write.set, write } };
     }), async () => { guard(); await persistDraft(); guard(); },
     { saved: review.saved, server: review.server, choice, eventAt,
-      ...(patch && local ? { draftCopy: { units: local.units, draft: local.draft, savedDraft: local.savedDraft, bodyweightKg: local.bodyweightKg } } : {}) }),
+      ...(recoveryRest ? { draftCopy: { units: recoveryRest.units, draft: recoveryRest.draft, savedDraft: recoveryRest.savedDraft, bodyweightKg: recoveryRest.bodyweightKg } } : {}) }),
     patch, guard, patch ? { savedDraft: patch.draft } : undefined);
   guard();
   void flushAccount(userId).catch(() => undefined);

@@ -33,6 +33,7 @@ import {
 import {
   flushOutbox,
   bootstrapSetBaselines,
+  stageLegacyRestRecovery,
   pendingSyncCount,
   queueCompletion,
   queueSet,
@@ -74,7 +75,7 @@ export default function SessionRun() {
   const isCurrent = () =>
     identity.current.userId === userId &&
     identity.current.sessionId === sessionId;
-  const baselineRetry = useRef<{ userId: string; sessionId: string; observed: SetLog[] } | null>(null);
+  const baselineRetry = useRef<{ userId: string; sessionId: string; observed: SetLog[]; needsReview: boolean } | null>(null);
   const completionStarted = useRef(false);
   const draftAttempt = useRef(0);
   const persistedWorkout = useRef<SavedWorkout | null>(null);
@@ -169,7 +170,7 @@ export default function SessionRun() {
           if ((error as { code?: string })?.code !== 'PT409'
             && !/network request failed|failed to fetch|offline|baseline read timed out/i.test(message)) throw error;
           if (cancelled || !isCurrent()) return;
-          baselineRetry.current = { userId, sessionId, observed };
+          baselineRetry.current = { userId, sessionId, observed, needsReview: (error as { code?: string })?.code === 'PT409' };
         }
       }
       if (!cancelled) { persistedWorkout.current = saved; setWorkout(saved); }
@@ -338,6 +339,22 @@ export default function SessionRun() {
     if (!active || !entry || !draft || busy) return;
     setBusy(true);
     try {
+      const retry = baselineRetry.current;
+      if (sameDraft(draft, active.savedDraft) && retry?.needsReview && retry.userId === userId
+        && retry.sessionId === sessionId && retry.observed.some(set => set.plan_item_id === entry.item.id && set.set_index === entry.set)) {
+        const expected = persistedWorkout.current;
+        if (!expected) throw new Error('Workout unavailable.');
+        await bootstrapSetBaselines(userId, sessionId, retry.observed, expected);
+        if (isCurrent() && baselineRetry.current === retry) baselineRetry.current = null;
+      }
+      if (sameDraft(draft, active.savedDraft) && retry && !retry.needsReview && retry.userId === userId
+        && retry.sessionId === sessionId && retry.observed.some(set => set.plan_item_id === entry.item.id && set.set_index === entry.set)) {
+        await draftWrites.current;
+        const expected = persistedWorkout.current;
+        if (!expected) throw new Error('Workout unavailable.');
+        await stageLegacyRestRecovery(userId, expected);
+        if (isCurrent() && baselineRetry.current === retry) baselineRetry.current = null;
+      }
       const rows = sameDraft(draft, active.savedDraft)
         ? active.progress
         : await logDraft(entry, draft);
@@ -429,6 +446,8 @@ export default function SessionRun() {
           onPress={() => setFinishAttempt((n) => n + 1)}
           style={{ marginTop: space.lg }}
         />
+        <Button title="Review saved sets" variant="surface" onPress={() => router.replace('/(tabs)')}
+          style={{ marginTop: space.md }} />
       </Screen>
     );
   if (!entry)
@@ -478,7 +497,22 @@ export default function SessionRun() {
     }
   };
 
+  const reviewSavedSet = async () => {
+    if (!active || !active.draft || busy) return;
+    setBusy(true);
+    try {
+      const saved = await commit({ draft: active.draft });
+      if (!isCurrent()) return;
+      await stageLegacyRestRecovery(userId, saved);
+      if (isCurrent()) router.replace('/(tabs)');
+    } catch (error) {
+      if (isCurrent()) notify('Could not open set recovery', error instanceof Error ? error.message : 'Your draft is preserved. Try again.');
+    } finally { if (isCurrent()) setBusy(false); }
+  };
   const resting = phase === 'resting' && draft != null;
+  const deferred = baselineRetry.current;
+  const needsLegacyRecovery = resting && deferred?.userId === userId && deferred.sessionId === sessionId
+    && deferred.observed.some(set => set.plan_item_id === entry.item.id && set.set_index === entry.set);
 
   return (
     <Screen scroll={false} style={{ padding: space.lg }}>
@@ -503,6 +537,11 @@ export default function SessionRun() {
       </View>
 
       {snapshotError ? <Muted>{snapshotError}</Muted> : null}
+      {needsLegacyRecovery ? <>
+        <Muted>This older set needs a comparison before correction. Your draft stays saved.</Muted>
+        <Button title="Review saved set" variant="surface" loading={busy}
+          onPress={() => { void reviewSavedSet(); }} />
+      </> : null}
       {resting ? (
         <Animated.View
           key={`rest:${entry.key}`}

@@ -247,6 +247,16 @@ export class SetJournal {
       eventAt,
     };
   }
+  /** Local-only recovery cannot replace an ordinary write or a known captured baseline. */
+  withUnknownSet<T>(id: string, action: () => Promise<T>) {
+    return this.lock(this.key, async () => {
+      const journal = await this.read();
+      if (journal?.entries.some(entry => entry.write.id === id)
+        || journal?.baselines?.some(entry => entry.id === id))
+        throw new Error('The saved set changed. Review its current value from Home.');
+      return action();
+    });
+  }
   hasCapturedSession(sessionId: string) {
     if (!uuid(sessionId)) throw new Error('Invalid workout session.');
     return this.lock(this.key, async () =>

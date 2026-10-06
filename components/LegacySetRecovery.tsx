@@ -48,7 +48,7 @@ export function LegacySetRecovery({ userId, captured, onResolved }: {
       }
     } finally { choosing.current = false; if (mounted.current) setBusy(false); }
   };
-  const local = review?.workout;
+  const local = review?.rest ?? review?.workout;
   const entry = local ? buildQueue(local.day)[local.cursor] : null;
   const unsent = local?.sessionId === review?.saved.sessionId && local?.phase === 'resting'
     && entry?.item.id === review?.saved.set.plan_item_id && entry?.set === review?.saved.set.set_index
@@ -64,6 +64,9 @@ export function LegacySetRecovery({ userId, captured, onResolved }: {
           <Overline>{exerciseName(review.saved.set.exercise_id)} · Set {review.saved.set.set_index}</Overline>
           <Body>Older saved set: {describe(review.saved.set)}</Body>
           <Body>Server: {review.server ? describe(review.server.set) : 'No saved server set'}</Body>
+          {local?.savedDraft && entry?.item.id === review.saved.set.plan_item_id
+            && entry.set === review.saved.set.set_index && local.sessionId === review.saved.sessionId ?
+            <Body>Last saved rest value: {local.savedDraft.reps} reps · {local.savedDraft.asBodyweight ? 'bodyweight + ' : ''}{local.savedDraft.weight} {local.units}</Body> : null}
           {unsent ? <Body>Unsent rest draft: {unsent.reps} reps · {unsent.asBodyweight ? 'bodyweight + ' : ''}{unsent.weight} {local!.units}. Your choice will replace this draft; a recovery copy is kept.</Body> : null}
           {review.captured.code === 'PT410' ? <Body>This workout is finalized. Your older edit is preserved for review.</Body> : (
             <>

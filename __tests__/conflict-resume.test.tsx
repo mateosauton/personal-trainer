@@ -1,12 +1,13 @@
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import Run from '@/app/session/[dayId]/run';
+import { LegacySetRecovery } from '@/components/LegacySetRecovery';
 import { workouts } from '@/lib/session/workout';
-import { flushOutbox, getSetConflicts, queueSet, resolveSetConflict, reviewSetConflict, setSyncAccount } from '@/lib/session/sync';
+import { flushOutbox, getLegacySetConflicts, getSetConflicts, queueSet, resolveSetConflict, reviewSetConflict, setSyncAccount } from '@/lib/session/sync';
 import type { SavedWorkout } from '@/lib/session/workout-store';
 const owner = 'abababab-1111-4111-8111-abababababab';
 const session = 'cdcdcdcd-1111-4111-8111-cdcdcdcdcdcd';
 const item = '00000015-1111-4111-8111-000000000015';
-const mockLog = jest.fn(), mockServer = jest.fn(), mockNotify = jest.fn();
+const mockLog = jest.fn(), mockServer = jest.fn(), mockNotify = jest.fn(), mockSnapshot = jest.fn();
 let mockOrigin = 0;
 let mockFailWorkout = false;
 const mockRouter = { replace: jest.fn(), back: jest.fn() };
@@ -28,11 +29,7 @@ jest.mock('@/lib/db/supabase', () => ({
 jest.mock('@/lib/db/queries', () => ({
   logSetVersioned: (...args: unknown[]) => mockLog(...args),
   getSetWriteState: (...args: unknown[]) => mockServer(...args),
-  getSessionSetSnapshot: async () => ({ logs: [{
-    id: '00000099-1111-4111-8111-000000000099', plan_item_id: '00000015-1111-4111-8111-000000000015',
-    exercise_id: 'unknown', set_index: 1, reps: 8, weight_kg: 60, is_bodyweight: false, added_load_kg: 0,
-    rpe: null, completed_at: '2026-09-01T10:00:00.000Z',
-  }], versions: [{ logId: '00000099-1111-4111-8111-000000000099', serverVersion: 7 }] }),
+  getSessionSetSnapshot: (...args: unknown[]) => mockSnapshot(...args),
   getSessionResumeDetails: jest.fn(), getSessionPlanDay: jest.fn(), getProgress: jest.fn(), finishSession: jest.fn(),
 }));
 jest.mock('@/lib/auth', () => ({
@@ -54,6 +51,13 @@ const fixture = (): SavedWorkout => ({
     items: [{ id: item, item_index: 0, exercise_id: 'unknown', sets: 2, reps_low: 6, reps_high: 8,
       seconds: null, tempo: null, notes: null }],
   }] },
+});
+beforeEach(() => {
+  mockSnapshot.mockResolvedValue({ logs: [{
+    id: '00000099-1111-4111-8111-000000000099', plan_item_id: '00000015-1111-4111-8111-000000000015',
+    exercise_id: 'unknown', set_index: 1, reps: 8, weight_kg: 60, is_bodyweight: false, added_load_kg: 0,
+    rpe: null, completed_at: '2026-09-01T10:00:00.000Z',
+  }], versions: [{ logId: '00000099-1111-4111-8111-000000000099', serverVersion: 7 }] });
 });
 it('preserves the explicit server choice through a warm rest screen and a restarted resume', async () => {
   mockValues.clear(); setSyncAccount(owner);
@@ -102,4 +106,63 @@ it('retries an optimistic draft after a transient disk failure without reopening
   fireEvent.press(screen.getByText('Next set'));
   await waitFor(async () => expect((await workouts.read(owner))?.cursor).toBe(1));
   expect((await workouts.read(owner))?.progress[0].last_reps).toBe(11);
+});
+
+it('recovers a local-only draft through explicit time confirmation, restart and workout completion', async () => {
+  mockValues.clear(); setSyncAccount(owner); mockSnapshot.mockResolvedValue({ logs: [], versions: [] });
+  mockLog.mockResolvedValue({ status: 'applied', serverVersion: 1 }); mockServer.mockResolvedValue(null);
+  await workouts.create(fixture());
+  const rest = render(<Run />); await rest.findByText('Review saved set');
+  fireEvent.press(rest.getByText('Review saved set'));
+  await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(tabs)')); rest.unmount();
+  const [captured] = await getLegacySetConflicts(owner);
+  const recovery = render(<LegacySetRecovery userId={owner} captured={captured} onResolved={async () => {}} />);
+  fireEvent.press(recovery.getByText(/Review older.*set 1/));
+  await recovery.findByText('Last saved rest value: 8 reps · 60 kg');
+  fireEvent.changeText(recovery.getByLabelText('Completion date in UTC'), '2026-09-01');
+  fireEvent.changeText(recovery.getByLabelText('Completion time in UTC'), '10:30');
+  fireEvent.press(recovery.getByText('Keep older set at this time'));
+  await waitFor(async () => expect((await workouts.read(owner))?.savedDraft?.reps).toBe(10));
+  await flushOutbox(); recovery.unmount();
+  const resumed = render(<Run />); await resumed.findByText('10');
+  fireEvent.press(resumed.getByText('Next set'));
+  await waitFor(async () => expect((await workouts.read(owner))?.cursor).toBe(1));
+  fireEvent.press(await resumed.findByText('Complete set')); await resumed.findByText('Finish session');
+  fireEvent.press(resumed.getByText('Finish session'));
+  await waitFor(async () => expect((await workouts.read(owner))?.cursor).toBe(2)); await flushOutbox();
+  resumed.unmount(); await workouts.clear(owner, session);
+  const journal = JSON.parse(mockValues.get(`office-gym.set-journal.v1.${owner}`)!);
+  expect(journal.legacyComparisons[0]).toMatchObject({ eventAt: '2026-09-01T10:30:00.000Z',
+    saved: { set: { reps: 10 } }, draftCopy: { draft: { reps: 10 }, savedDraft: { reps: 8 } } });
+  expect(journal.legacyComparisons[0].saved).not.toHaveProperty('eventAt');
+  expect(journal.entries.find((entry: any) => entry.write.set.set_index === 1).write.eventAt).toBe('2026-09-01T10:30:00.000Z');
+});
+it('preserves an unchanged old rest offline and finishes only after historical recovery', async () => {
+  mockValues.clear(); setSyncAccount(owner); mockSnapshot.mockRejectedValue(new Error('Network request failed'));
+  mockLog.mockResolvedValue({ status: 'applied', serverVersion: 1 }); mockServer.mockResolvedValue(null);
+  const queries = require('@/lib/db/queries'); queries.finishSession.mockClear();
+  const local = fixture(); local.draft = local.savedDraft;
+  await workouts.create(local);
+  const offline = render(<Run />); await offline.findByText('Next set');
+  fireEvent.press(offline.getByText('Next set'));
+  await waitFor(async () => expect((await workouts.read(owner))?.cursor).toBe(1));
+  const [captured] = await getLegacySetConflicts(owner);
+  expect(captured.localRest).toMatchObject({ cursor: 0, draft: { reps: 8 }, savedDraft: { reps: 8 } });
+  fireEvent.press(await offline.findByText('Complete set')); await offline.findByText('Finish session');
+  fireEvent.press(offline.getByText('Finish session'));
+  await offline.findByText('Review saved sets'); expect(queries.finishSession).not.toHaveBeenCalled();
+  offline.unmount();
+  const recovery = render(<LegacySetRecovery userId={owner} captured={captured} onResolved={async () => {}} />);
+  fireEvent.press(recovery.getByText(/Review older.*set 1/));
+  await recovery.findByText('Last saved rest value: 8 reps · 60 kg');
+  fireEvent.changeText(recovery.getByLabelText('Completion date in UTC'), '2026-09-01');
+  fireEvent.changeText(recovery.getByLabelText('Completion time in UTC'), '10:30');
+  fireEvent.press(recovery.getByText('Keep older set at this time'));
+  await waitFor(async () => expect(await getLegacySetConflicts(owner)).toEqual([]));
+  await flushOutbox(); recovery.unmount();
+  const finished = render(<Run />);
+  await waitFor(() => expect(queries.finishSession).toHaveBeenCalledTimes(1));
+  finished.unmount(); await workouts.clear(owner, session);
+  const journal = JSON.parse(mockValues.get(`office-gym.set-journal.v1.${owner}`)!);
+  expect(journal.legacyComparisons[0].draftCopy).toMatchObject({ draft: { reps: 8 }, savedDraft: { reps: 8 }, units: 'kg' });
 });

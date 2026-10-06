@@ -1,3 +1,4 @@
+import type { SavedWorkout } from './workout-store';
 import { nativeJournalLock, type JournalLock } from './set-journal';
 export interface OutboxOperation {
   id: string;
@@ -9,6 +10,7 @@ export interface RejectedOperation {
   operation: OutboxOperation;
   code: string;
   resolved: boolean;
+  localRest?: SavedWorkout;
 }
 const validOperation = (item: any): item is OutboxOperation =>
   item &&
@@ -94,6 +96,32 @@ export class Outbox {
       const ids = [...pending, ...rejected.filter(entry => !entry.resolved).map(entry => entry.operation)]
         .filter(entry => entry.kind === 'set').map(entry => entry.id);
       return action(ids);
+    });
+  }
+  /** Save a local-only legacy edit for explicit review without scheduling a send. */
+  captureLegacyReview(operation: OutboxOperation, guard: () => void = () => {}, localRest?: SavedWorkout) {
+    if (!validOperation(operation) || operation.kind !== 'set' || operation.payload.write)
+      throw new Error('Invalid legacy recovery capture.');
+    const captured = JSON.parse(JSON.stringify(operation)) as OutboxOperation;
+    const context = localRest ? JSON.parse(JSON.stringify(localRest)) as SavedWorkout : undefined;
+    return this.exclusive(async () => {
+      const pending = await this.read();
+      const archive = await this.readRejected();
+      if (pending.some(entry => entry.id === captured.id))
+        throw new Error('The saved set changed. Sync or review its current value from Home.');
+      const current = [...archive].reverse().find(entry => !entry.resolved && entry.operation.id === captured.id);
+      guard();
+      if (current) {
+        if (current.operation.kind !== 'set' || current.operation.payload.write
+          || !['PT409', 'PT410'].includes(current.code))
+          throw new Error('The saved set changed. Review its current value from Home.');
+        if (!context || JSON.stringify(current.localRest) === JSON.stringify(context)) return current;
+      }
+      const review: RejectedOperation = { operation: current?.operation ?? captured, code: current?.code ?? 'PT409', resolved: false,
+        ...(context ? { localRest: context } : {}) };
+      archive.push(review);
+      await this.storage.setItem(`${this.key}.rejected`, JSON.stringify(archive));
+      return review;
     });
   }
   rejected() {

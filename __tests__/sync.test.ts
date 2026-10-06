@@ -772,3 +772,106 @@ it('reopens a journaled rest set offline without fetching a new remote baseline'
   await expect(api.bootstrapSetBaselines(conflictOwner, conflictSession, [set])).resolves.toBeUndefined();
   expect(mockSnapshot).not.toHaveBeenCalled();
 });
+it('stages a local-only rest correction for explicit recovery without publishing or inventing a time', async () => {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner);
+  const api = require('@/lib/session/sync'); const { workouts } = require('@/lib/session/workout');
+  await workouts.create(pausedWorkout()); const captured = await workouts.read(conflictOwner);
+  const recovery = await api.stageLegacyRestRecovery(conflictOwner, captured);
+  expect(recovery.operation.payload.set).toMatchObject({ reps: 10, weight_kg: 60 });
+  expect(recovery.operation.payload).not.toHaveProperty('write');
+  expect(mockLogSet).not.toHaveBeenCalled();
+  expect(await workouts.read(conflictOwner)).toEqual(captured);
+  expect(await api.getLegacySetConflicts(conflictOwner)).toEqual([recovery]);
+});
+it('cannot stage a stale rest after the draft changes', async () => {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner);
+  const api = require('@/lib/session/sync'); const { workouts } = require('@/lib/session/workout');
+  await workouts.create(pausedWorkout()); const captured = await workouts.read(conflictOwner);
+  await workouts.update(conflictOwner, conflictSession, { cursor: 0, phase: 'resting' }, { draft: { reps: 11, weight: 60, asBodyweight: false } });
+  await expect(api.stageLegacyRestRecovery(conflictOwner, captured)).rejects.toThrow(/changed/);
+  expect(await api.getLegacySetConflicts(conflictOwner)).toEqual([]);
+});
+it('cannot stage legacy recovery over a newer journal entry', async () => {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner); mockLogSet.mockRejectedValue(new Error('offline'));
+  const api = require('@/lib/session/sync'); const { workouts } = require('@/lib/session/workout');
+  await workouts.create(pausedWorkout()); await queueSet(conflictOwner, conflictSession, set); await flushOutbox();
+  await expect(api.stageLegacyRestRecovery(conflictOwner, await workouts.read(conflictOwner))).rejects.toThrow(/changed/);
+  expect(await api.getLegacySetConflicts(conflictOwner)).toEqual([]);
+});
+it('reconciles a staged local-only draft with a confirmed historical time and retains both rest values', async () => {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner);
+  const api = require('@/lib/session/sync'); const { workouts } = require('@/lib/session/workout');
+  await workouts.create(pausedWorkout());
+  const staged = await api.stageLegacyRestRecovery(conflictOwner, await workouts.read(conflictOwner));
+  mockServerState.mockResolvedValue(null); const review = await api.reviewLegacySetConflict(conflictOwner, staged);
+  await api.resolveLegacySetConflict(conflictOwner, review, 'saved', '2026-09-01T10:30:00.000Z'); await flushOutbox();
+  expect(mockLogSet).toHaveBeenCalledWith(expect.objectContaining({ eventAt: '2026-09-01T10:30:00.000Z', set: expect.objectContaining({ reps: 10 }) }), expect.anything(), expect.any(AbortSignal));
+  expect((await workouts.read(conflictOwner)).savedDraft.reps).toBe(10);
+  const journal = JSON.parse(values.get(`office-gym.set-journal.v1.${conflictOwner}`)!);
+  expect(journal.legacyComparisons[0].draftCopy).toMatchObject({ draft: { reps: 10 }, savedDraft: { reps: 8 } });
+});
+it('preserves the local rest if recovery archive storage fails', async () => {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner);
+  const api = require('@/lib/session/sync'); const { workouts } = require('@/lib/session/workout');
+  await workouts.create(pausedWorkout()); const local = await workouts.read(conflictOwner);
+  jest.mocked(AsyncStorage.setItem).mockImplementation(async (key, value) => {
+    if (key.endsWith('.rejected')) throw new Error('disk full'); values.set(key, value);
+  });
+  await expect(api.stageLegacyRestRecovery(conflictOwner, local)).rejects.toThrow('disk full');
+  expect(await workouts.read(conflictOwner)).toEqual(local); expect(mockLogSet).not.toHaveBeenCalled();
+});
+it('does not stage a rest if the account changes while waiting for journal storage', async () => {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner);
+  const api = require('@/lib/session/sync'); const { workouts } = require('@/lib/session/workout');
+  await workouts.create(pausedWorkout()); const local = await workouts.read(conflictOwner);
+  jest.mocked(AsyncStorage.getItem).mockImplementation(async key => {
+    if (key === `office-gym.set-journal.v1.${conflictOwner}`) setSyncAccount(null);
+    return values.get(key) ?? null;
+  });
+  await expect(api.stageLegacyRestRecovery(conflictOwner, local)).rejects.toThrow(/account/);
+  expect(values.has(`office-gym.session-outbox.v2.${conflictOwner}.rejected`)).toBe(false);
+});
+it('preserves an existing legacy capture instead of replacing its original payload', async () => {
+  const { api, capture } = await legacyConflict(); const { workouts } = require('@/lib/session/workout');
+  await workouts.create(pausedWorkout()); const staged = await api.stageLegacyRestRecovery(conflictOwner, await workouts.read(conflictOwner));
+  expect(staged.operation).toEqual(capture.operation); expect(staged.localRest).toMatchObject({ draft: { reps: 10 }, savedDraft: { reps: 8 } });
+  expect(staged.operation.payload.set.reps).toBe(8);
+  expect((await workouts.read(conflictOwner)).draft.reps).toBe(10);
+});
+it('retains original rest context for recovery after offline progression clears the active draft', async () => {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner);
+  const api = require('@/lib/session/sync'); const { workouts } = require('@/lib/session/workout');
+  await workouts.create(pausedWorkout()); const local = await workouts.read(conflictOwner);
+  const staged = await api.stageLegacyRestRecovery(conflictOwner, local);
+  await workouts.update(conflictOwner, conflictSession, { cursor: 0, phase: 'resting' },
+    { cursor: 1, phase: 'work', draft: null, savedDraft: null, restUntilMs: null });
+  mockServerState.mockResolvedValue(null); const review = await api.reviewLegacySetConflict(conflictOwner, staged);
+  await api.resolveLegacySetConflict(conflictOwner, review, 'saved', '2026-09-01T10:30:00.000Z'); await flushOutbox();
+  const journal = JSON.parse(values.get(`office-gym.set-journal.v1.${conflictOwner}`)!);
+  expect(journal.legacyComparisons[0].draftCopy).toMatchObject({ units: 'kg', draft: { reps: 10 }, savedDraft: { reps: 8 } });
+});
+it('does not queue finalization while a historical set still needs explicit recovery', async () => {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner);
+  const api = require('@/lib/session/sync'); const { workouts } = require('@/lib/session/workout');
+  await workouts.create(pausedWorkout()); await api.stageLegacyRestRecovery(conflictOwner, await workouts.read(conflictOwner));
+  await expect(queueCompletion(conflictOwner, conflictSession, 10)).rejects.toThrow(/review|recover/i);
+  expect(mockFinishSession).not.toHaveBeenCalled();
+});
+it('defers a queued finish if a set rejects after completion was queued and retries after recovery', async () => {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner);
+  let rejectSet!: (error: unknown) => void;
+  mockLogSet.mockImplementationOnce(() => new Promise((_, reject) => { rejectSet = reject; }));
+  await queueSet(conflictOwner, conflictSession, set);
+  while (!rejectSet) await Promise.resolve();
+  await queueCompletion(conflictOwner, conflictSession, 10);
+  rejectSet({ code: 'PT409' }); await flushOutbox();
+  expect(mockFinishSession).not.toHaveBeenCalled();
+  const api = require('@/lib/session/sync'); const [blocked] = await api.getSetConflicts(conflictOwner);
+  mockServerState.mockResolvedValue(serverSet());
+  const review = await api.reviewSetConflict(conflictOwner, blocked.write);
+  mockLogSet.mockResolvedValue({ status: 'applied', serverVersion: 5 });
+  await api.resolveSetConflict(conflictOwner, review, 'server'); await flushOutbox();
+  await queueCompletion(conflictOwner, conflictSession, 10); await flushOutbox();
+  expect(mockFinishSession).toHaveBeenCalledTimes(1);
+  expect(await api.getSyncStatus(conflictOwner)).toMatchObject({ rejected: 0, pending: 0 });
+});
