@@ -39,11 +39,11 @@ it('preserves A pending writes across sign-out and never replays them as B', asy
   setSyncAccount(null); signedIn('B'); setSyncAccount('B');
   await queueCompletion('B', 'session-B', 120); await flushOutbox();
   expect(await pendingSyncCount()).toBe(0);
-  expect(mockFinishSession).toHaveBeenCalledWith('session-B', { duration_s: 120, rpe: null }, { token: 'token-B' });
+  expect(mockFinishSession).toHaveBeenCalledWith('session-B', { duration_s: 120, rpe: null }, { token: 'token-B' }, expect.any(AbortSignal));
   expect(mockLogSet.mock.calls.every((call) => call[2].token === 'token-A')).toBe(true);
   signedIn('A'); setSyncAccount('A'); mockLogSet.mockResolvedValue(undefined);
   await flushOutbox(); expect(await pendingSyncCount()).toBe(0);
-  expect(mockLogSet).toHaveBeenLastCalledWith('session-A', set, { token: 'token-A' });
+  expect(mockLogSet).toHaveBeenLastCalledWith('session-A', set, { token: 'token-A' }, expect.any(AbortSignal));
 });
 
 it('rejects a stale A screen enqueue after account B takes over', async () => {
@@ -71,4 +71,27 @@ it('does not send if the account switches while the auth lookup is pending', asy
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(mockLogSet).not.toHaveBeenCalled();
   expect(values.get('office-gym.session-outbox.v2.A')).toContain('session-A');
+});
+
+
+it('does not start a write after its auth lookup times out', async () => {
+  jest.useFakeTimers();
+  try {
+    let release!: (value: unknown) => void;
+    mockGetSession.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    setSyncAccount('C');
+    await queueSet('C', 'session-C', set);
+    const flushing = flushOutbox();
+    while (mockGetSession.mock.calls.length === 0) await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(15000);
+    await flushing;
+    expect(await pendingSyncCount()).toBe(1);
+    release({ data: { session: { user: { id: 'C' }, access_token: 'token-C' } }, error: null });
+    await Promise.resolve(); await Promise.resolve();
+    expect(mockLogSet).not.toHaveBeenCalled();
+    signedIn('C');
+    await flushOutbox();
+    expect(mockLogSet).toHaveBeenCalledTimes(1);
+    expect(await pendingSyncCount()).toBe(0);
+  } finally { jest.useRealTimers(); }
 });
