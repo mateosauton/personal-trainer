@@ -1,5 +1,7 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { ObserveRoot, useObserve } from 'expo-observe';
+import { useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -93,15 +95,25 @@ function Routes() {
   );
 }
 
-export default function RootLayout() {
+function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <AuthProvider>
-          <StatusBar style="light" />
-          <Routes />
+          <AppContent />
         </AuthProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }
+
+function AppContent() {
+  const { session, profileState, loading, processingAuthLink, recoveringPassword } = useAuth();
+  const { markInteractive } = useObserve();
+  const profileLoading = session != null && !recoveringPassword && profileGate(true, profileState) === 'loading';
+  const blocked = loading || profileLoading || processingAuthLink;
+  useEffect(() => { if (!blocked) markInteractive(); }, [blocked, markInteractive]);
+  return <><StatusBar style="light" /><Routes /></>;
+}
+
+export default ObserveRoot.wrap(RootLayout);
