@@ -95,3 +95,28 @@ it('does not start a write after its auth lookup times out', async () => {
     expect(await pendingSyncCount()).toBe(0);
   } finally { jest.useRealTimers(); }
 });
+
+
+it('archives legacy progress without replay and continues with completion', async () => {
+  const progress = { id: 'progress-D', kind: 'progress', payload: { userId: 'D', rows: [{ exercise_id: 'press', miss_streak: 2 }] } };
+  values.set('office-gym.session-outbox.v2.D', JSON.stringify([progress, {
+    id: 'complete-D', kind: 'complete', payload: { sessionId: 'session-D', durationS: 60 },
+  }]));
+  signedIn('D'); setSyncAccount('D');
+  await flushOutbox();
+  expect(JSON.parse(values.get('office-gym.legacy-progress.v1.D')!)).toEqual([progress]);
+  expect(mockFinishSession).toHaveBeenCalledTimes(1);
+  expect(await pendingSyncCount()).toBe(0);
+});
+
+it('retains legacy progress if its archive cannot be saved', async () => {
+  values.set('office-gym.session-outbox.v2.E', JSON.stringify([{
+    id: 'progress-E', kind: 'progress', payload: { userId: 'E', rows: [] },
+  }]));
+  values.set('office-gym.legacy-progress.v1.E','{broken');
+  signedIn('E'); setSyncAccount('E');
+  await flushOutbox();
+  expect(await pendingSyncCount()).toBe(1);
+  expect(values.get('office-gym.legacy-progress.v1.E')).toBe('{broken');
+  expect(mockFinishSession).not.toHaveBeenCalled();
+});

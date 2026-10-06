@@ -10,24 +10,16 @@ import { notify } from '@/lib/alerts';
 import { useAuth, useUserId } from '@/lib/auth';
 import { getExercise } from '@/lib/catalog';
 import {
-  getActivePlan, getProgress, getSetLogs, type ProgressRow,
+  applySessionProgress, getSessionProgressResult, getSessionPlanDay, getProgress, getSetLogs, type ProgressRow, type SessionSummaryLine,
 } from '@/lib/db/queries';
-import { flushOutbox, pendingSyncCount, queueProgress } from '@/lib/session/sync';
+import { flushOutbox, pendingSyncCount } from '@/lib/session/sync';
 import { nextLoad } from '@/lib/progression';
 import { colors, space, type } from '@/lib/theme';
 import { motion } from '@/lib/motion';
 import { effectiveLoadKg, estimateOneRepMax, formatWeight } from '@/lib/units';
-import type { PlanDay, Units } from '@/lib/types';
+import type { Units } from '@/lib/types';
 
-interface Line {
-  exerciseId: string;
-  name: string;
-  sets: number;
-  volumeKg: number;
-  topLoadKg: number | null;
-  verdict: 'progress' | 'hold' | 'deload' | null;
-  isPr: boolean;
-}
+
 
 export default function SessionSummary() {
   const { dayId, sessionId, elapsed } = useLocalSearchParams<{
@@ -37,7 +29,7 @@ export default function SessionSummary() {
   const { profile } = useAuth();
   const router = useRouter();
 
-  const [lines, setLines] = useState<Line[]>([]);
+  const [lines, setLines] = useState<SessionSummaryLine[]>([]);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,12 +51,18 @@ export default function SessionSummary() {
         throw new Error('Your workout is still syncing. Reconnect and retry to see all your sets.');
       }
       if (cancelled) return;
-      const [logs, plan, progress] = await Promise.all([
+      const previous = await getSessionProgressResult(sessionId);
+      if (cancelled) return;
+      if (previous !== null) {
+        setLines(previous);
+        setLoading(false);
+        return;
+      }
+      const [logs, day] = await Promise.all([
         getSetLogs(sessionId),
-        getActivePlan(userId),
-        getProgress(userId),
+        getSessionPlanDay(sessionId, userId),
       ]);
-      const day: PlanDay | null = plan?.days.find((d) => d.id === dayId) ?? null;
+      if (!day) throw new Error('Could not load the original workout day. Please retry.');
       const itemById = new Map(
         (day?.blocks ?? []).flatMap((b) => b.items.map((i) => [i.id, { item: i, block: b }])),
       );
@@ -77,72 +75,85 @@ export default function SessionSummary() {
         grouped.set(log.exercise_id, list);
       }
 
-      const built: Line[] = [];
-      const updates: ProgressRow[] = [];
-
-      for (const [exerciseId, sets] of grouped) {
-        const exercise = getExercise(exerciseId);
-        const loads = sets.map((s) => effectiveLoadKg(s, profile?.bodyweight_kg ?? null));
-        const volumeKg = sets.reduce((sum, s, i) => sum + (loads[i] ?? 0) * (s.reps ?? 0), 0);
-        const topLoadKg = loads.reduce<number | null>(
-          (best, l) => (l != null && (best == null || l > best) ? l : best),
-          null,
-        );
-
-        const e1rm = sets.reduce((best, s, i) => {
-          const load = loads[i];
-          if (load == null || !s.reps) return best;
-          return Math.max(best, estimateOneRepMax(load, s.reps));
-        }, 0);
-
-        const known = progress.get(exerciseId);
-        const context = itemById.get(sets[0].plan_item_id ?? '');
-        const workingLoad = sets[0].is_bodyweight ? sets[0].added_load_kg : sets[0].weight_kg;
-
-        const verdict = context && exercise
-          ? nextLoad(
-              sets.map((s) => ({ reps: s.reps, rpe: s.rpe })),
-              context.item.reps_high,
-              context.item.reps_low,
-              exercise.pattern,
-              workingLoad,
-              { last_weight_kg: known?.last_weight_kg ?? null, miss_streak: known?.miss_streak ?? 0 },
-              units,
-            )
-          : null;
-
-        const isPr = topLoadKg != null && (known?.best_weight_kg == null || topLoadKg > known.best_weight_kg);
-
-        built.push({
-          exerciseId,
-          name: exercise?.name ?? exerciseId,
-          sets: sets.length,
-          volumeKg,
-          topLoadKg,
-          verdict: verdict?.verdict ?? null,
-          isPr,
-        });
-
-        // Warm-ups carry no load and should never move a working weight.
-        if (context && context.block.kind !== 'warmup') {
-          updates.push({
-            exercise_id: exerciseId,
-            last_weight_kg: verdict?.last_weight_kg ?? workingLoad,
-            last_reps: sets[sets.length - 1].reps,
-            best_weight_kg: isPr ? topLoadKg : (known?.best_weight_kg ?? null),
-            best_e1rm: Math.max(e1rm, known?.best_e1rm ?? 0) || null,
-            miss_streak: verdict?.miss_streak ?? 0,
-          });
-        }
-      }
-
-      if (!cancelled) {
-        await queueProgress(userId, updates);
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const progress = await getProgress(userId);
         if (cancelled) return;
-        setLines(built);
-        setLoading(false);
-        if (built.some((l) => l.isPr)) {
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        const built: SessionSummaryLine[] = [];
+        const updates: ProgressRow[] = [];
+
+        for (const [exerciseId, sets] of grouped) {
+          const exercise = getExercise(exerciseId);
+          const loads = sets.map((s) => effectiveLoadKg(s, profile?.bodyweight_kg ?? null));
+          const volumeKg = sets.reduce((sum, s, i) => sum + (loads[i] ?? 0) * (s.reps ?? 0), 0);
+          const topLoadKg = loads.reduce<number | null>(
+            (best, l) => (l != null && (best == null || l > best) ? l : best),
+            null,
+          );
+
+          const e1rm = sets.reduce((best, s, i) => {
+            const load = loads[i];
+            if (load == null || !s.reps) return best;
+            return Math.max(best, estimateOneRepMax(load, s.reps));
+          }, 0);
+
+          const known = progress.get(exerciseId);
+          const context = itemById.get(sets[0].plan_item_id ?? '');
+          const workingLoad = sets[0].is_bodyweight ? sets[0].added_load_kg : sets[0].weight_kg;
+
+          const verdict = context && exercise
+            ? nextLoad(
+                sets.map((s) => ({ reps: s.reps, rpe: s.rpe })),
+                context.item.reps_high,
+                context.item.reps_low,
+                exercise.pattern,
+                workingLoad,
+                { last_weight_kg: known?.last_weight_kg ?? null, miss_streak: known?.miss_streak ?? 0 },
+                units,
+              )
+            : null;
+
+          const isPr = topLoadKg != null && (known?.best_weight_kg == null || topLoadKg > known.best_weight_kg);
+
+          built.push({
+            exerciseId,
+            name: exercise?.name ?? exerciseId,
+            sets: sets.length,
+            volumeKg,
+            topLoadKg,
+            verdict: verdict?.verdict ?? null,
+            isPr,
+          });
+
+          // Warm-ups carry no load and should never move a working weight.
+          if (context && context.block.kind !== 'warmup') {
+            updates.push({
+              exercise_id: exerciseId,
+              last_weight_kg: verdict?.last_weight_kg ?? workingLoad,
+              last_reps: sets[sets.length - 1].reps,
+              best_weight_kg: isPr ? topLoadKg : (known?.best_weight_kg ?? null),
+              best_e1rm: Math.max(e1rm, known?.best_e1rm ?? 0) || null,
+              miss_streak: verdict?.miss_streak ?? 0,
+            });
+          }
+        }
+
+        if (!cancelled) {
+          let saved: SessionSummaryLine[];
+          try {
+            saved = await applySessionProgress(sessionId,
+              updates.map((row) => ({ exercise_id: row.exercise_id, state: progress.get(row.exercise_id) ?? null })),
+              updates, built);
+          } catch (error) {
+            if ((error as { code?: string }).code === '40001' && attempt < 2) continue;
+            throw error;
+          }
+          if (cancelled) return;
+          setLines(saved);
+          setLoading(false);
+          if (saved.some((l) => l.isPr)) {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          }
+          return;
         }
       }
     })().catch((error: unknown) => {
