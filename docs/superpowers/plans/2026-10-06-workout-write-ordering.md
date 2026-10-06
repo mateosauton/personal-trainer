@@ -18,14 +18,16 @@
   `check_legacy_set(uuid,jsonb) returns jsonb`.
 - [x] Verify applied/duplicate/superseded/conflict states, exact payload/event equality, owner/reference checks, safe integer bounds, direct mutation revocation, and unchanged historical data.
 - [x] Verify two-connection request and receipt races under shared transaction locks; independent backend review found no remaining actionable findings.
-- [ ] Open backend PR; deployment requires the matching client.
+- [x] Open backend PR #28; deployment requires the matching client.
 
 - [x] Add atomic logs/version snapshot and guarded five-argument progression RPC. Verify stale versions, added/omitted membership, malformed snapshots, owner checks, old RPC revocation, and idempotent receipts.
 
 ## Client boundary
 
-- [ ] Add `lib/session/set-journal.ts`: account-scoped atomic origin/revision/payload journal with pending state and conditional acknowledgement. Allocate with Expo Crypto; serialize native storage and shared web storage.
-- [ ] Test crashes between journal and outbox persistence, sequence allocation across instances, identical retries, corrections reverted to prior values, and stale acknowledgements.
+- [x] Add `lib/session/set-journal.ts`: account-scoped atomic origin/revision/payload journal with pending state, exact acknowledgement guards, blocked records, preserved event times and explicit new-origin conflict choices.
+- [ ] Wire Expo Crypto and Web Locks through the native/browser transport. The journal core default lock covers one JS runtime.
+- [x] Test journal enqueue/ack crash boundaries, sequence allocation across instances, correction reverts, stale acknowledgements/choices, malformed data preservation and safe-integer limits. Independent review found no remaining actionable journal findings.
+- [ ] Verify the same boundaries through the integrated outbox and browser cross-tab transport.
 - [ ] Update `lib/session/sync.ts` and `lib/db/queries.ts` to call versioned RPCs, carry original event times, recover interrupted journal enqueues, and preserve legacy conflicts.
 - [ ] Summary must use the atomic set snapshot and guarded progression RPC, reload logs and progression together on `40001`, and preserve saved workout units/bodyweight.
 - [ ] Bootstrap captured server versions for reopened sessions. Fresh sessions begin with expected version zero.
