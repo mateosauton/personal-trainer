@@ -63,7 +63,7 @@ function Routes() {
         <Stack.Screen name="onboarding" />
       </Stack.Protected>
 
-      <Stack.Protected guard={onboarded}>
+      <Stack.Protected guard={signedIn && onboarded}>
         <Stack.Screen name="(tabs)" />
         {/* Profile is a modal over the tabs, opened by the avatar on Home. */}
         <Stack.Screen name="profile" options={{ presentation: 'modal' }} />
