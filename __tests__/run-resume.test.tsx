@@ -14,6 +14,7 @@ const mockRouter = { replace: mockReplace, back: jest.fn() };
 let saved: SavedWorkout;
 jest.mock('@/lib/session/workout', () => ({
   workouts: {
+    withSnapshot: async (_owner: string, _snapshot: unknown, action: () => Promise<unknown>) => action(),
     read: (...args: unknown[]) => mockRead(...args),
     update: (...args: unknown[]) => mockUpdate(...args),
     create: jest.fn(),

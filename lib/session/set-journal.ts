@@ -1,3 +1,4 @@
+import type { WorkoutDraft } from './workout-store';
 import type { SetLog } from '@/lib/types';
 import type { OutboxStorage } from './outbox';
 
@@ -15,6 +16,12 @@ export interface BlockedWrite {
   write: JournalWrite;
   code: string;
 }
+export interface SetComparison {
+  saved: JournalWrite;
+  server: { set: SetLog; serverVersion: number; eventAt: string } | null;
+  choice: 'saved' | 'server';
+  draftCopy?: { units: 'kg' | 'lb'; draft: WorkoutDraft | null; savedDraft: WorkoutDraft | null; bodyweightKg?: number | null };
+}
 interface Entry {
   write: JournalWrite;
   status: 'pending' | 'blocked' | 'synced';
@@ -27,6 +34,7 @@ interface SavedJournal {
   origin: string;
   entries: Entry[];
   recovery: BlockedWrite[];
+  comparisons?: SetComparison[];
 }
 export type JournalLock = <T>(
   key: string,
@@ -62,7 +70,7 @@ const bounded = (v: unknown, max: number, integer = false) =>
   v >= 0 &&
   v <= max &&
   (!integer || Number.isInteger(v));
-const validSet = (v: unknown): v is SetLog =>
+export const validSet = (v: unknown): v is SetLog =>
   object(v) &&
   uuid(v.plan_item_id) &&
   typeof v.exercise_id === 'string' &&
@@ -104,6 +112,23 @@ const validWrite = (v: unknown, owner: string): v is JournalWrite =>
   time(v.eventAt);
 const same = (a: JournalWrite, b: JournalWrite) =>
   JSON.stringify(a) === JSON.stringify(b);
+
+const validDraftCopy = (value: unknown) => value === null || (object(value)
+  && bounded(value.reps, 1000, true) && typeof value.weight === 'number'
+  && Number.isFinite(value.weight) && value.weight >= 0 && typeof value.asBodyweight === 'boolean');
+const validComparison = (value: unknown, owner: string): value is SetComparison =>
+  object(value) && validWrite(value.saved, owner)
+  && ['saved', 'server'].includes(value.choice)
+  && (value.server === null || (object(value.server) && validSet(value.server.set)
+    && idFor(value.saved.sessionId, value.server.set) === value.saved.id
+    && safe(value.server.serverVersion, 1) && time(value.server.eventAt)))
+  && (value.choice !== 'server' || value.server !== null)
+  && (value.draftCopy === undefined || (object(value.draftCopy)
+    && ['kg', 'lb'].includes(value.draftCopy.units)
+    && validDraftCopy(value.draftCopy.draft) && validDraftCopy(value.draftCopy.savedDraft)
+    && (value.draftCopy.bodyweightKg === undefined || value.draftCopy.bodyweightKg === null
+      || (typeof value.draftCopy.bodyweightKg === 'number' && Number.isFinite(value.draftCopy.bodyweightKg)
+        && value.draftCopy.bodyweightKg >= 0))));
 
 /** Write-ahead recovery record: saving never depends on a network response. */
 export class SetJournal {
@@ -155,6 +180,8 @@ export class SetJournal {
       ) ||
       new Set(value.entries.map((e: Entry) => e.write.id)).size !==
         value.entries.length ||
+      (value.comparisons !== undefined && (!Array.isArray(value.comparisons)
+        || !value.comparisons.every((entry: unknown) => validComparison(entry, this.owner)))) ||
       !value.recovery.every(
         (e: unknown) =>
           object(e) &&
@@ -294,6 +321,8 @@ export class SetJournal {
     serverVersion: number,
     eventAt: string,
     enqueue: (write: JournalWrite) => Promise<void>,
+    beforePersist: () => void | Promise<void> = () => {},
+    comparison?: SetComparison,
   ) {
     const input = this.prepare(captured.sessionId, set, eventAt);
     if (
@@ -302,6 +331,12 @@ export class SetJournal {
       idFor(input.sessionId, input.set) !== captured.id
     )
       return Promise.reject(new Error('Invalid conflict choice.'));
+    if (comparison && (!validComparison(comparison, this.owner)
+      || !same(comparison.saved, captured)
+      || (comparison.server?.serverVersion ?? 0) !== serverVersion
+      || JSON.stringify(canonicalSet(comparison.choice === 'server' ? comparison.server!.set : captured.set)) !== JSON.stringify(input.set)
+      || (comparison.choice === 'server' ? comparison.server!.eventAt : captured.eventAt) !== eventAt))
+      throw new Error('Invalid conflict comparison.');
     return this.lock(this.key, async () => {
       const journal = await this.read();
       const entry = journal?.entries.find((e) => e.write.id === captured.id);
@@ -331,6 +366,8 @@ export class SetJournal {
       entry.status = 'pending';
       delete entry.code;
       entry.acknowledgedVersion = 0;
+      if (comparison) (journal.comparisons ??= []).push(JSON.parse(JSON.stringify(comparison)));
+      await beforePersist();
       await this.persist(journal);
       await enqueue(write);
       return write;

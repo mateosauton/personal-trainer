@@ -10,9 +10,11 @@ import {
 
 const mockLogSet = jest.fn();
 const mockLegacy = jest.fn();
+const mockServerState = jest.fn();
+let mockUUIDSequence = 0;
 jest.mock(
   'expo-crypto',
-  () => ({ randomUUID: () => '99999999-1111-4111-8111-999999999999' }),
+  () => ({ randomUUID: () => `${String(++mockUUIDSequence).padStart(8, '0')}-1111-4111-8111-999999999999` }),
   { virtual: true },
 );
 const mockFinishSession = jest.fn();
@@ -34,6 +36,7 @@ jest.mock('@/lib/db/supabase', () => ({
 jest.mock('@/lib/db/queries', () => ({
   logSetVersioned: (...args: unknown[]) => mockLogSet(...args),
   checkLegacySet: (...args: unknown[]) => mockLegacy(...args),
+  getSetWriteState: (...args: unknown[]) => mockServerState(...args),
   finishSession: (...args: unknown[]) => mockFinishSession(...args),
   upsertProgress: jest.fn(),
 }));
@@ -65,6 +68,7 @@ beforeEach(async () => {
   jest.mocked(AsyncStorage.setItem).mockReset();
   mockLogSet.mockReset();
   mockLegacy.mockReset();
+  mockServerState.mockReset();
   mockGetSession.mockReset();
   jest
     .mocked(AsyncStorage.getItem)
@@ -460,4 +464,149 @@ it('retries the exact version after an ambiguous network failure', async () => {
     ),
   ).toBe(true);
   expect(await pendingSyncCount()).toBe(0);
+});
+
+const conflictOwner = 'abababab-1111-4111-8111-abababababab';
+const conflictSession = 'cdcdcdcd-1111-4111-8111-cdcdcdcdcdcd';
+async function conflict(code = 'PT409') {
+  signedIn(conflictOwner); setSyncAccount(conflictOwner);
+  mockLogSet.mockRejectedValue({ code });
+  await queueSet(conflictOwner, conflictSession, set); await flushOutbox();
+  const api = require('@/lib/session/sync');
+  const [blocked] = await api.getSetConflicts(conflictOwner);
+  return { api, blocked };
+}
+const serverSet = () => ({ serverVersion: 4, set: { ...set, reps: 12 }, eventAt: '2026-10-06T11:00:00Z' });
+it.each(['saved', 'server'])('fences the explicit %s choice and retains the rejected copy', async choice => {
+  const { api, blocked } = await conflict();
+  mockServerState.mockResolvedValue(serverSet());
+  const review = await api.reviewSetConflict(conflictOwner, blocked.write);
+  expect(mockServerState).toHaveBeenCalledWith(conflictSession, set.plan_item_id, 1,
+    { token: `token-${conflictOwner}` }, expect.any(AbortSignal));
+  mockLogSet.mockResolvedValue({ status: 'applied', serverVersion: 5 });
+  await api.resolveSetConflict(conflictOwner, review, choice); await flushOutbox();
+  const chosen = mockLogSet.mock.calls.at(-1)[0];
+  expect(chosen).toMatchObject({ expectedVersion: 4, revision: 2,
+    set: choice === 'saved' ? set : serverSet().set,
+    eventAt: choice === 'saved' ? blocked.write.eventAt : serverSet().eventAt });
+  expect(chosen.origin).not.toBe(blocked.write.origin);
+  expect(await api.getSyncStatus(conflictOwner)).toMatchObject({ pending: 0, rejected: 0 });
+  expect(JSON.parse(values.get(`office-gym.set-journal.v1.${conflictOwner}`)!).recovery).toContainEqual(blocked);
+  expect(JSON.parse(values.get(`office-gym.set-journal.v1.${conflictOwner}`)!).comparisons).toContainEqual({
+    saved: blocked.write, server: serverSet(), choice,
+  });
+});
+it('rejects a reviewed choice after the local set changes', async () => {
+  const { api, blocked } = await conflict(); mockServerState.mockResolvedValue(serverSet());
+  const review = await api.reviewSetConflict(conflictOwner, blocked.write);
+  await queueSet(conflictOwner, conflictSession, { ...set, reps: 10 }); await flushOutbox();
+  await expect(api.resolveSetConflict(conflictOwner, review, 'saved')).rejects.toThrow(/changed/);
+});
+it('hides a conflict if the account switches during the read', async () => {
+  const { api, blocked } = await conflict(); let release!: (value: unknown) => void;
+  mockServerState.mockImplementation(() => new Promise(done => { release = done; }));
+  const read = api.reviewSetConflict(conflictOwner, blocked.write);
+  while (!release) await Promise.resolve(); setSyncAccount(null); release(serverSet());
+  await expect(read).rejects.toThrow(/account/);
+});
+it('rejects stale local state when a server read finishes', async () => {
+  const { api, blocked } = await conflict(); let release!: (value: unknown) => void;
+  mockServerState.mockImplementation(() => new Promise(done => { release = done; }));
+  const read = api.reviewSetConflict(conflictOwner, blocked.write);
+  while (!release) await Promise.resolve();
+  await queueSet(conflictOwner, conflictSession, { ...set, reps: 11 }); await flushOutbox();
+  release(serverSet()); await expect(read).rejects.toThrow(/changed/);
+});
+it('keeps a changed remote baseline blocked without silently fetching a new one', async () => {
+  const { api, blocked } = await conflict(); mockServerState.mockResolvedValue(serverSet());
+  const review = await api.reviewSetConflict(conflictOwner, blocked.write);
+  await api.resolveSetConflict(conflictOwner, review, 'saved'); await flushOutbox();
+  expect(mockServerState).toHaveBeenCalledTimes(1);
+  const [next] = await api.getSetConflicts(conflictOwner);
+  expect(next.write).toMatchObject({ expectedVersion: 4, revision: 2 });
+});
+it('never offers a write choice for a finalized workout', async () => {
+  const { api, blocked } = await conflict('PT410'); mockServerState.mockResolvedValue(serverSet());
+  const review = await api.reviewSetConflict(conflictOwner, blocked.write); mockLogSet.mockClear();
+  await expect(api.resolveSetConflict(conflictOwner, review, 'saved')).rejects.toThrow(/finalized/);
+  expect(mockLogSet).not.toHaveBeenCalled();
+});
+it('expires a stalled conflict read and preserves its saved write', async () => {
+  const { api, blocked } = await conflict(); jest.useFakeTimers();
+  try {
+    mockServerState.mockImplementation(() => new Promise(() => {}));
+    const assertion = expect(api.reviewSetConflict(conflictOwner, blocked.write)).rejects.toThrow(/timed out/);
+    await jest.advanceTimersByTimeAsync(15000); await assertion;
+    expect(await api.getSetConflicts(conflictOwner)).toEqual([blocked]);
+  } finally { jest.useRealTimers(); }
+});
+
+it('invalidates a review across sign-out and return to the same account', async () => {
+  const { api, blocked } = await conflict(); mockServerState.mockResolvedValue(serverSet());
+  const review = await api.reviewSetConflict(conflictOwner, blocked.write);
+  setSyncAccount(null); setSyncAccount(conflictOwner); mockLogSet.mockClear();
+  await expect(api.resolveSetConflict(conflictOwner, review, 'saved')).rejects.toThrow(/account/);
+  expect(mockLogSet).not.toHaveBeenCalled();
+});
+it('checks the account again inside the journal lock before persisting a choice', async () => {
+  const { api, blocked } = await conflict(); mockServerState.mockResolvedValue(serverSet());
+  const review = await api.reviewSetConflict(conflictOwner, blocked.write);
+  const key = `office-gym.set-journal.v1.${conflictOwner}`; const original = values.get(key); let reads = 0;
+  jest.mocked(AsyncStorage.getItem).mockImplementation(async k => {
+    if (k === key && ++reads === 2) setSyncAccount(null);
+    return values.get(k) ?? null;
+  });
+  await expect(api.resolveSetConflict(conflictOwner, review, 'saved')).rejects.toThrow(/account/);
+  expect(values.get(key)).toBe(original);
+});
+
+const pausedWorkout = () => ({ version: 1 as const, ownerId: conflictOwner, sessionId: conflictSession,
+  units: 'kg' as const, cursor: 0, phase: 'resting' as const,
+  draft: { reps: 10, weight: 60, asBodyweight: false }, savedDraft: { reps: 8, weight: 60, asBodyweight: false },
+  startedAtMs: 1000, endedAtMs: null, restUntilMs: 100000, progress: [],
+  day: { id: 'day', day_index: 0, name: 'Day', focus: 'Strength', blocks: [{ id: 'block', block_index: 0,
+    kind: 'straight' as const, title: 'Work', rounds: 1, rest_seconds: 90, items: [{ id: set.plan_item_id,
+      item_index: 0, exercise_id: 'press', sets: 2, reps_low: 6, reps_high: 8, seconds: null, tempo: null, notes: null }] }] } });
+it('reconciles a paused rest draft and prevents its warm screen from reversing the server choice', async () => {
+  const { workouts } = require('@/lib/session/workout'); await workouts.create(pausedWorkout());
+  const warm = await workouts.read(conflictOwner);
+  const { api, blocked } = await conflict(); mockServerState.mockResolvedValue(serverSet());
+  const review = await api.reviewSetConflict(conflictOwner, blocked.write);
+  mockLogSet.mockResolvedValue({ status: 'applied', serverVersion: 5 });
+  await api.resolveSetConflict(conflictOwner, review, 'server'); await flushOutbox();
+  const restored = await workouts.read(conflictOwner);
+  expect(restored).toMatchObject({ draft: { reps: 12, weight: 60 }, savedDraft: { reps: 12, weight: 60 },
+    progress: [expect.objectContaining({ exercise_id: 'press', last_reps: 12, last_weight_kg: 60 })] });
+  expect(restored.recoveryCopies[0]).toMatchObject({ draft: warm.draft, savedDraft: warm.savedDraft });
+  await expect(workouts.update(conflictOwner, conflictSession, { cursor: 0, phase: 'resting', snapshot: warm },
+    { draft: warm.draft })).rejects.toThrow(/changed/);
+});
+it('invalidates a comparison if the paused draft changes before choosing', async () => {
+  const { workouts } = require('@/lib/session/workout'); await workouts.create(pausedWorkout());
+  const { api, blocked } = await conflict(); mockServerState.mockResolvedValue(serverSet());
+  const review = await api.reviewSetConflict(conflictOwner, blocked.write);
+  await workouts.update(conflictOwner, conflictSession, { cursor: 0, phase: 'resting' },
+    { draft: { reps: 11, weight: 60, asBodyweight: false } });
+  mockLogSet.mockClear();
+  await expect(api.resolveSetConflict(conflictOwner, review, 'server')).rejects.toThrow(/changed/);
+  expect(mockLogSet).not.toHaveBeenCalled();
+});
+
+it('does not mark a reviewed draft saved when a queued correction invalidates its journal capture', async () => {
+  const { workouts } = require('@/lib/session/workout'); await workouts.create(pausedWorkout());
+  const { api, blocked } = await conflict(); mockServerState.mockResolvedValue(serverSet());
+  const review = await api.reviewSetConflict(conflictOwner, blocked.write);
+  const key = `office-gym.active-workout.v1.${conflictOwner}`; const original = values.get(key);
+  const journalKey = `office-gym.set-journal.v1.${conflictOwner}`;
+  const journal = JSON.parse(values.get(journalKey)!); let changed = false;
+  jest.mocked(AsyncStorage.getItem).mockImplementation(async k => {
+    if (k === key && !changed) {
+      changed = true; journal.entries[0].write.revision++; journal.entries[0].write.set.reps = 10;
+      journal.entries[0].status = 'pending'; delete journal.entries[0].code;
+      values.set(journalKey, JSON.stringify(journal));
+    }
+    return values.get(k) ?? null;
+  });
+  await expect(api.resolveSetConflict(conflictOwner, review, 'server')).rejects.toThrow(/changed/);
+  expect(values.get(key)).toBe(original);
 });

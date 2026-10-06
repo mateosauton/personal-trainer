@@ -1,3 +1,4 @@
+import { validSet } from '@/lib/session/set-journal';
 import type { JournalWrite } from '@/lib/session/set-journal';
 import { supabase } from './supabase';
 import type { GeneratedPlan } from '@/lib/plan/generate';
@@ -185,6 +186,35 @@ export async function logSetVersioned(
   )
     throw new Error('Invalid workout sync response.');
   return data as SetWriteResult;
+}
+export interface SetWriteState {
+  serverVersion: number;
+  set: SetLog;
+  eventAt: string;
+}
+/** Read an owned set for comparison; never adopt its baseline automatically. */
+export async function getSetWriteState(
+  sessionId: string,
+  planItemId: string,
+  setIndex: number,
+  client = supabase,
+  signal?: AbortSignal,
+): Promise<SetWriteState | null> {
+  const request = client.rpc('get_set_write_state', {
+    p_session_id: sessionId,
+    p_plan_item_id: planItemId,
+    p_set_index: setIndex,
+  });
+  const { data, error } = await (signal ? request.abortSignal(signal) : request);
+  if (error) throw error;
+  if (data === null) return null;
+  if (!data || !Number.isSafeInteger(data.serverVersion) || data.serverVersion < 1
+    || !validSet(data.set)
+    || data.set.plan_item_id.toLowerCase() !== planItemId.toLowerCase()
+    || data.set.set_index !== setIndex
+    || typeof data.eventAt !== 'string' || !Number.isFinite(Date.parse(data.eventAt)))
+    throw new Error('Invalid workout recovery response. Your saved data is preserved.');
+  return data as SetWriteState;
 }
 export async function checkLegacySet(
   sessionId: string,

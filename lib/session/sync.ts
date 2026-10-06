@@ -7,15 +7,22 @@ import {
   finishSession,
   logSetVersioned,
   checkLegacySet,
+  getSetWriteState,
+  type SetWriteState,
 } from '@/lib/db/queries';
 import { clientForAccessToken, supabase } from '@/lib/db/supabase';
 import type { SetLog } from '@/lib/types';
 import { Outbox, type OutboxOperation } from './outbox';
-import { SetJournal, type JournalWrite } from './set-journal';
+import { SetJournal, type JournalWrite, type BlockedWrite } from './set-journal';
 import { storageLock } from './storage-lock';
 import { archiveLegacyProgress } from './legacy-progress';
+import { workouts } from './workout';
+import { buildQueue } from './queue';
+import { kgToDisplay } from '@/lib/units';
+import type { SavedWorkout, WorkoutPatch } from './workout-store';
 
 let activeAccount: string | null = null;
+let accountGeneration = 0;
 const queues = new Map<string, Outbox>();
 const journals = new Map<string, SetJournal>();
 const permanentCodes = [
@@ -46,6 +53,7 @@ function journalFor(userId: string) {
 
 /** Call synchronously on auth transitions, before changing visible routes. */
 export function setSyncAccount(userId: string | null) {
+  if (activeAccount !== userId) accountGeneration++;
   activeAccount = userId;
 }
 
@@ -247,6 +255,104 @@ export async function retrySync(userId: string) {
   requireAccount(userId);
   await flushAccount(userId);
   requireAccount(userId);
+}
+
+export interface SetConflictReview extends BlockedWrite {
+  ownerId: string;
+  server: SetWriteState | null;
+  accountGeneration: number;
+  workout: SavedWorkout | null;
+}
+export async function getSetConflicts(userId: string): Promise<BlockedWrite[]> {
+  requireAccount(userId);
+  const generation = accountGeneration;
+  const entries = await journalFor(userId).blocked();
+  requireAccount(userId);
+  if (generation !== accountGeneration) throw new Error('The workout account changed.');
+  return entries.filter(entry => needsReview(entry.code));
+}
+const exactWrite = (a: JournalWrite, b: JournalWrite) => JSON.stringify(a) === JSON.stringify(b);
+async function currentConflict(userId: string, write: JournalWrite) {
+  const entry = (await getSetConflicts(userId)).find(entry => exactWrite(entry.write, write));
+  if (!entry) throw new Error('The saved set changed. Review the latest value.');
+  return entry;
+}
+/** A review is a snapshot, not permission to adopt a newly fetched baseline. */
+export async function reviewSetConflict(userId: string, write: JournalWrite): Promise<SetConflictReview> {
+  requireAccount(userId);
+  const generation = accountGeneration;
+  const controller = new AbortController();
+  const guard = () => {
+    requireAccount(userId);
+    if (generation !== accountGeneration) throw new Error('The workout account changed.');
+    if (controller.signal.aborted) throw new Error('Workout conflict review timed out.');
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      (async () => {
+        const blocked = await currentConflict(userId, write);
+        const { data, error } = await supabase.auth.getSession();
+        guard();
+        if (error) throw error;
+        if (data.session?.user.id !== userId) throw new Error('The workout account changed.');
+        const client = clientForAccessToken(data.session.access_token);
+        const server = await getSetWriteState(write.sessionId, write.set.plan_item_id,
+          write.set.set_index, client, controller.signal);
+        guard();
+        const workout = await workouts.read(userId);
+        await currentConflict(userId, write);
+        guard();
+        return { ownerId: userId, ...blocked, server, accountGeneration: generation, workout };
+      })(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error('Workout conflict review timed out. Your saved data is preserved.'));
+        }, 15000);
+      }),
+    ]);
+  } finally { if (timer !== undefined) clearTimeout(timer); }
+}
+export async function resolveSetConflict(userId: string, review: SetConflictReview, choice: 'saved' | 'server') {
+  requireAccount(userId);
+  const generation = accountGeneration;
+  const guard = () => {
+    requireAccount(userId);
+    if (generation !== accountGeneration) throw new Error('The workout account changed.');
+  };
+  if (review.accountGeneration !== generation) throw new Error('The workout account changed. Review this set again.');
+  if (review.ownerId !== userId || review.write.ownerId !== userId
+    || !['saved', 'server'].includes(choice)) throw new Error('Invalid conflict choice.');
+  const blocked = await currentConflict(userId, review.write);
+  guard();
+  if (blocked.code === 'PT410')
+    throw new Error('This workout is finalized. Your saved edit is preserved for review.');
+  if (choice === 'server' && !review.server) throw new Error('There is no server set to choose.');
+  const chosen = choice === 'server' ? review.server!.set : review.write.set;
+  const local = review.workout;
+  const entry = local ? buildQueue(local.day)[local.cursor] : null;
+  let patch: WorkoutPatch | undefined;
+  if (local?.sessionId === review.write.sessionId && local.phase === 'resting'
+    && entry?.item.id === chosen.plan_item_id && entry.set === chosen.set_index) {
+    const kg = chosen.is_bodyweight ? chosen.added_load_kg : chosen.weight_kg;
+    if (chosen.reps === null || kg === null)
+      throw new Error('This set has incomplete reps or load. Your saved draft is preserved.');
+    const draft = { reps: chosen.reps, weight: kgToDisplay(kg, local.units), asBodyweight: chosen.is_bodyweight };
+    const previous = local.progress.find(row => row.exercise_id === chosen.exercise_id);
+    const row = { exercise_id: chosen.exercise_id, last_weight_kg: kg, last_reps: chosen.reps,
+      best_weight_kg: previous?.best_weight_kg ?? null, best_e1rm: previous?.best_e1rm ?? null,
+      miss_streak: previous?.miss_streak ?? 0 };
+    patch = { draft,
+      progress: [...local.progress.filter(row => row.exercise_id !== chosen.exercise_id), row] };
+  }
+  await workouts.withSnapshot(userId, local, persistDraft => journalFor(userId).resolve(review.write,
+    chosen, review.server?.serverVersion ?? 0,
+    choice === 'server' ? review.server!.eventAt : review.write.eventAt,
+    async write => { guard(); await enqueueWrite(userId, write); }, async () => { guard(); await persistDraft(); guard(); },
+    { saved: review.write, server: review.server, choice,
+      ...(patch && local ? { draftCopy: { units: local.units, draft: local.draft, savedDraft: local.savedDraft, bodyweightKg: local.bodyweightKg } } : {}) }), patch, guard, patch ? { savedDraft: patch.draft } : undefined);
+  guard();
 }
 
 /** Install for the authenticated account only. Old callbacks cannot replay a new account. */

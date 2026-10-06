@@ -75,6 +75,8 @@ export default function SessionRun() {
     identity.current.sessionId === sessionId;
   const completionStarted = useRef(false);
   const draftAttempt = useRef(0);
+  const persistedWorkout = useRef<SavedWorkout | null>(null);
+  const draftWrites = useRef<Promise<void>>(Promise.resolve());
   const active =
     workout?.ownerId === userId && workout.sessionId === sessionId
       ? workout
@@ -147,7 +149,7 @@ export default function SessionRun() {
           endedAtMs: null,
         });
       }
-      if (!cancelled) setWorkout(saved);
+      if (!cancelled) { persistedWorkout.current = saved; setWorkout(saved); }
     })()
       .catch((error) => {
         if (!cancelled)
@@ -212,13 +214,17 @@ export default function SessionRun() {
   const known = entry ? progress.get(entry.item.exercise_id) : undefined;
   const commit = async (patch: Parameters<typeof workouts.update>[3]) => {
     if (!active) throw new Error('Workout unavailable.');
+    await draftWrites.current;
+    const expected = persistedWorkout.current;
+    if (!expected || expected.ownerId !== userId || expected.sessionId !== sessionId) throw new Error('Workout unavailable.');
     const saved = await workouts.update(
       userId,
       sessionId,
-      { cursor, phase },
+      { cursor, phase, snapshot: expected },
       patch,
     );
     if (isCurrent()) {
+      persistedWorkout.current = saved;
       setWorkout(saved);
       setSnapshotError(null);
     }
@@ -239,7 +245,11 @@ export default function SessionRun() {
       added_load_kg: value.asBodyweight ? kg : 0,
       rpe: null,
     };
-    await queueSet(userId, sessionId, set);
+    if (!active) throw new Error('Workout unavailable.');
+    await draftWrites.current;
+    const expected = persistedWorkout.current;
+    if (!expected || expected.ownerId !== userId || expected.sessionId !== sessionId) throw new Error('Workout unavailable.');
+    await workouts.withSnapshot(userId, expected, () => queueSet(userId, sessionId, set));
     if (isCurrent()) setPendingSync(await pendingSyncCount());
     const next = new Map(progress),
       previous = next.get(target.item.exercise_id);
@@ -330,20 +340,20 @@ export default function SessionRun() {
     if (!active || busy) return;
     const attempt = ++draftAttempt.current;
     setWorkout({ ...active, draft: value });
-    void workouts
-      .update(userId, sessionId, { cursor, phase }, { draft: value })
-      .then(() => {
-        if (isCurrent() && attempt === draftAttempt.current)
-          setSnapshotError(null);
-      })
-      .catch((error) => {
-        if (isCurrent() && attempt === draftAttempt.current)
-          setSnapshotError(
-            error instanceof Error
-              ? error.message
-              : 'Could not save your changes. Retry before leaving.',
-          );
-      });
+    draftWrites.current = draftWrites.current.then(async () => {
+      if (!isCurrent()) return;
+      const expected = persistedWorkout.current;
+      if (!expected || expected.ownerId !== userId || expected.sessionId !== sessionId
+        || expected.cursor !== cursor || expected.phase !== phase)
+        throw new Error('Your workout changed. Reopen it from Home.');
+      const saved = await workouts.update(userId, sessionId,
+        { cursor, phase, snapshot: expected }, { draft: value });
+      if (isCurrent()) persistedWorkout.current = saved;
+      if (isCurrent() && attempt === draftAttempt.current) setSnapshotError(null);
+    }).catch(error => {
+      if (isCurrent() && attempt === draftAttempt.current)
+        setSnapshotError(error instanceof Error ? error.message : 'Could not save your changes. Retry before leaving.');
+    });
   };
 
   if (loading)

@@ -31,8 +31,10 @@
 - [x] Update `lib/session/sync.ts` and `lib/db/queries.ts` to call versioned RPCs, carry original event times, recover interrupted journal enqueues, and preserve legacy conflicts.
 - [x] Summary uses the atomic set snapshot and guarded progression RPC, reloads logs and progression together on `40001`, and preserves new local workout units/bodyweight. Legacy/no-local-context fallback is documented in #30.
 - [ ] Bootstrap captured server versions for reopened sessions. Fresh sessions begin with expected version zero.
-- [ ] Add conflict comparison/recovery in `components/SyncRecovery.tsx`. Display saved/server reps and loads; require an explicit choice, verify the local revision has not changed, and use the displayed server baseline.
-- [ ] Test account switching, stale reads, a newly corrected local value, a changed remote baseline, and finalized-workout rejection. Review and open matching client PR.
+- [x] Add journal conflict comparison/recovery in `components/SyncRecovery.tsx`. Display saved/server reps and loads plus any unsent rest draft; require an explicit choice against the captured local snapshot and displayed server baseline. Keep finalized-workout values read-only.
+- [x] Preserve both reviewed values and the unsent draft after active-workout cleanup; reconcile guarded rest drafts without stale warm-screen overwrites. Verify completion after reconciliation and retry after a transient draft storage failure.
+- [ ] Add the explicit legacy queued-set recovery path; unknown original event times must not be invented.
+- [x] Test journal conflict account switching, stale reads, newly corrected local/remote values, deadlines, finalized-workout rejection and paused-rest resume/completion. Client PR #29 remains draft for legacy recovery, bootstrap and fresh native verification.
 
 ## Launch acceptance
 

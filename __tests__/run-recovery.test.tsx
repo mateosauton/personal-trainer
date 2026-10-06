@@ -5,6 +5,7 @@ const mockPlan = jest.fn();
 let mockSaved: any = null;
 jest.mock('@/lib/session/workout', () => ({
   workouts: {
+    withSnapshot: async (_owner: string, _snapshot: unknown, action: () => Promise<unknown>) => action(),
     read: async () => mockSaved,
     create: async (value: any) => {
       mockSaved = value;

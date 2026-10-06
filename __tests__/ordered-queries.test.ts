@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/db/supabase';
 import {
   checkLegacySet,
+  getSetWriteState,
   logSetVersioned,
   getSessionSetSnapshot,
   applySessionProgress,
@@ -139,3 +140,28 @@ it.each([
     await expect(getSessionSetSnapshot('session')).rejects.toThrow('preserved');
   },
 );
+
+it('reads a captured server set and baseline with the account-bound client', async () => {
+  const state = { serverVersion: 2, origin: null, revision: 0, set: { ...write.set,
+    plan_item_id: '11111111-1111-4111-8111-111111111111' }, eventAt: write.eventAt };
+  const request = respond(state);
+  const signal = new AbortController().signal;
+  await expect(getSetWriteState('session', state.set.plan_item_id, 1, supabase, signal)).resolves.toEqual(state);
+  expect(supabase.rpc).toHaveBeenCalledWith('get_set_write_state', {
+    p_session_id: 'session', p_plan_item_id: state.set.plan_item_id, p_set_index: 1,
+  });
+  expect(request.abortSignal).toHaveBeenCalledWith(signal);
+});
+it.each([
+  { serverVersion: -1 }, { serverVersion: 1, set: null },
+  { serverVersion: 2, set: { ...write.set, plan_item_id: '11111111-1111-4111-8111-111111111111', reps: -2 }, eventAt: write.eventAt },
+  { serverVersion: 2, set: { ...write.set, plan_item_id: '11111111-1111-4111-8111-111111111111' }, eventAt: 'bad' },
+  { serverVersion: 2, set: { ...write.set, plan_item_id: '22222222-1111-4111-8111-222222222222' }, eventAt: write.eventAt },
+])('preserves data when the conflict response is invalid: %p', async (state) => {
+  respond(state);
+  await expect(getSetWriteState('session', '11111111-1111-4111-8111-111111111111', 1)).rejects.toThrow('Invalid workout recovery response');
+});
+it('accepts an absent server set without inventing a completion time', async () => {
+  respond(null);
+  await expect(getSetWriteState('session', 'item', 1)).resolves.toBeNull();
+});
