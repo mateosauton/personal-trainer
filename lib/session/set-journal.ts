@@ -36,6 +36,8 @@ interface Entry {
   code?: string;
   acknowledgedVersion: number;
 }
+export interface SetBaseline { set: SetLog; serverVersion: number; eventAt: string }
+interface CapturedBaseline extends SetBaseline { sessionId: string; id: string }
 interface SavedJournal {
   version: 1;
   ownerId: string;
@@ -44,6 +46,8 @@ interface SavedJournal {
   recovery: BlockedWrite[];
   comparisons?: SetComparison[];
   legacyComparisons?: LegacySetComparison[];
+  baselines?: CapturedBaseline[];
+  capturedSessions?: string[];
 }
 export type JournalLock = <T>(
   key: string,
@@ -206,6 +210,15 @@ export class SetJournal {
         || !value.comparisons.every((entry: unknown) => validComparison(entry, this.owner)))) ||
       (value.legacyComparisons !== undefined && (!Array.isArray(value.legacyComparisons)
         || !value.legacyComparisons.every((entry: unknown) => validLegacyComparison(entry, this.owner)))) ||
+      (value.capturedSessions !== undefined && (!Array.isArray(value.capturedSessions)
+        || !value.capturedSessions.every((id: unknown) => uuid(id) && id === id.toLowerCase())
+        || new Set(value.capturedSessions).size !== value.capturedSessions.length)) ||
+      (value.baselines !== undefined && (!Array.isArray(value.baselines)
+        || !value.baselines.every((entry: unknown) => object(entry)
+          && uuid(entry.sessionId) && entry.sessionId === entry.sessionId.toLowerCase()
+          && validSet(entry.set) && entry.id === idFor(entry.sessionId, entry.set)
+          && safe(entry.serverVersion, 1) && time(entry.eventAt))
+        || new Set(value.baselines.map((entry: CapturedBaseline) => entry.id)).size !== value.baselines.length)) ||
       !value.recovery.every(
         (e: unknown) =>
           object(e) &&
@@ -234,6 +247,32 @@ export class SetJournal {
       eventAt,
     };
   }
+  /** Capture once: a later snapshot must never silently refresh a correction's baseline. */
+  async captureBaselines(sessionId: string, values: SetBaseline[]) {
+    if (!uuid(sessionId) || !Array.isArray(values)) throw new Error('Invalid workout baselines.');
+    const session = sessionId.toLowerCase();
+    const captured = values.map(value => {
+      if (!value || !safe(value.serverVersion, 1)) throw new Error('Invalid workout baseline.');
+      const input = this.prepare(sessionId, value.set, value.eventAt);
+      return { ...input, id: idFor(input.sessionId, input.set), serverVersion: value.serverVersion };
+    });
+    if (new Set(captured.map(value => value.id)).size !== captured.length)
+      throw new Error('Duplicate workout baseline.');
+    return this.lock(this.key, async () => {
+      const journal: SavedJournal = (await this.read()) ?? {
+        version: 1, ownerId: this.owner, origin: this.freshOrigin(), entries: [], recovery: [],
+      };
+      if (journal.capturedSessions?.includes(session)) return;
+      const existing = new Set([
+        ...journal.entries.map(entry => entry.write.id),
+        ...(journal.baselines ?? []).map(entry => entry.id),
+      ]);
+      const additions = captured.filter(entry => !existing.has(entry.id));
+      journal.capturedSessions = [...(journal.capturedSessions ?? []), session];
+      journal.baselines = [...(journal.baselines ?? []), ...additions];
+      await this.persist(journal);
+    });
+  }
   async save(
     sessionId: string,
     set: SetLog,
@@ -250,6 +289,7 @@ export class SetJournal {
       };
       const id = idFor(input.sessionId, input.set);
       const previous = journal.entries.find((e) => e.write.id === id);
+      const baseline = journal.baselines?.find(entry => entry.id === id);
       if (previous?.status === 'blocked')
         journal.recovery.push({ write: previous.write, code: previous.code! });
       const revision = (previous?.write.revision ?? 0) + 1;
@@ -258,11 +298,11 @@ export class SetJournal {
         id,
         ownerId: this.owner,
         ...input,
-        eventAt: previous?.write.eventAt ?? input.eventAt,
+        eventAt: previous?.write.eventAt ?? baseline?.eventAt ?? input.eventAt,
         origin: previous?.write.origin ?? journal.origin,
         revision,
         expectedVersion:
-          previous?.acknowledgedVersion || previous?.write.expectedVersion || 0,
+          previous ? previous.acknowledgedVersion || previous.write.expectedVersion : baseline?.serverVersion ?? 0,
       };
       const entry: Entry = {
         write,

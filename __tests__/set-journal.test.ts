@@ -350,3 +350,76 @@ it('captures legacy identity and payload before a caller can mutate its input', 
   await pending;
   expect((await journal.pending())[0]).toMatchObject({ id: original.id, set: original.set });
 });
+
+it('keeps a reopened set baseline and original completion time across restart', async () => {
+  const storage = disk();
+  await make(storage).captureBaselines(session, [{ set: set(), serverVersion: 7, eventAt: '2026-09-01T10:00:00.000Z' }]);
+  expect(await make(storage).pending()).toEqual([]);
+  const corrected = await make(storage).save(session, set(12), async () => {});
+  expect(corrected).toMatchObject({ revision: 1, expectedVersion: 7, eventAt: '2026-09-01T10:00:00.000Z', set: set(12) });
+});
+it('does not refresh a captured baseline beneath a later correction', async () => {
+  const storage = disk(), journal = make(storage);
+  await journal.captureBaselines(session, [{ set: set(), serverVersion: 7, eventAt: event }]);
+  await journal.captureBaselines(session, [{ set: set(10), serverVersion: 9, eventAt: '2026-10-06T11:00:00.000Z' }]);
+  expect(await journal.save(session, set(12), async () => {})).toMatchObject({ expectedVersion: 7, eventAt: event });
+});
+it('does not replace a pending or blocked local baseline during bootstrap', async () => {
+  const storage = disk(), journal = make(storage);
+  const pending = await journal.save(session, set(10), async () => {});
+  await journal.captureBaselines(session, [{ set: set(8), serverVersion: 7, eventAt: event }]);
+  expect(await journal.pending()).toEqual([pending]);
+  await journal.block(pending, 'PT409');
+  await journal.captureBaselines(session, [{ set: set(8), serverVersion: 9, eventAt: event }]);
+  expect(await journal.blocked()).toEqual([{ write: pending, code: 'PT409' }]);
+  expect(await journal.save(session, set(12), async () => {})).toMatchObject({ expectedVersion: 0 });
+});
+it('validates an entire baseline capture before changing storage', async () => {
+  const storage = disk(), journal = make(storage);
+  await expect(journal.captureBaselines(session, [
+    { set: set(), serverVersion: 7, eventAt: event },
+    { set: { ...set(), set_index: 2 }, serverVersion: 0, eventAt: event },
+  ])).rejects.toThrow();
+  expect(storage.values.size).toBe(0);
+});
+it('rejects duplicate baseline identities without replacing saved data', async () => {
+  const storage = disk(), journal = make(storage);
+  await journal.save(session, set(), async () => {});
+  const before = [...storage.values];
+  await expect(journal.captureBaselines(session, [
+    { set: set(), serverVersion: 7, eventAt: event },
+    { set: set(10), serverVersion: 9, eventAt: event },
+  ])).rejects.toThrow();
+  expect([...storage.values]).toEqual(before);
+});
+it('captures baseline inputs before they can be mutated while waiting for storage', async () => {
+  const storage = disk(), journal = make(storage);
+  const input = { set: set(), serverVersion: 7, eventAt: event };
+  const captured = journal.captureBaselines(session, [input]);
+  input.serverVersion = 99; input.eventAt = '2026-10-06T11:00:00.000Z'; input.set.reps = 99;
+  await captured;
+  expect(await journal.save(session, set(12), async () => {})).toMatchObject({ expectedVersion: 7, eventAt: event });
+});
+it('preserves corrupt baseline storage rather than resetting a reopened set', async () => {
+  const storage = disk(), journal = make(storage);
+  await journal.captureBaselines(session, [{ set: set(), serverVersion: 7, eventAt: event }]);
+  const key = [...storage.values.keys()][0];
+  const broken = JSON.parse(storage.values.get(key)!); broken.baselines[0].serverVersion = -1;
+  const raw = JSON.stringify(broken); storage.values.set(key, raw);
+  await expect(journal.save(session, set(12), async () => {})).rejects.toThrow(/preserved/);
+  expect(storage.values.get(key)).toBe(raw);
+});
+it('keeps acknowledged versions authoritative over the original captured baseline', async () => {
+  const storage = disk(), journal = make(storage);
+  await journal.captureBaselines(session, [{ set: set(), serverVersion: 7, eventAt: event }]);
+  const first = await journal.save(session, set(12), async () => {});
+  await journal.acknowledge(first, { status: 'applied', serverVersion: 8 });
+  const next = await journal.save(session, set(10), async () => {});
+  expect(next).toMatchObject({ expectedVersion: 8, revision: 2, eventAt: event });
+});
+it('keeps an initially absent set at version zero when a later device creates it', async () => {
+  const storage = disk();
+  await make(storage).captureBaselines(session, []);
+  await make(storage).captureBaselines(session, [{ set: set(), serverVersion: 7, eventAt: event }]);
+  expect(await make(storage).save(session, set(12), async () => {})).toMatchObject({ expectedVersion: 0 });
+});
