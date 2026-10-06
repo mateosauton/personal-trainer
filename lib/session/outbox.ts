@@ -16,7 +16,7 @@ export class Outbox {
 
   constructor(
     private readonly storage: OutboxStorage,
-    private readonly send: (operation: OutboxOperation) => Promise<void>,
+    private readonly send: (operation: OutboxOperation, signal: AbortSignal) => Promise<void>,
     private readonly key = 'office-gym.session-outbox.v1',
   ) {}
 
@@ -71,7 +71,23 @@ export class Outbox {
       if (!operation) return;
       // Hold the storage lock only for disk operations. Network stalls must
       // never prevent the next set from being saved on the device.
-      try { await this.send(operation); } catch { return; }
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const deadline = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error('Workout sync timed out.'));
+          }, 15_000);
+        });
+        await Promise.race([this.send(operation, controller.signal), deadline]);
+      } catch {
+        // Retain the entry even if an expired request acknowledges later.
+        // Another connectivity event or explicit retry can start a fresh send.
+        return;
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
       await this.exclusive(async () => {
         const items = await this.read();
         const index = items.findIndex((item) => item.id === operation.id

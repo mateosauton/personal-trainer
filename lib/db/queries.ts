@@ -155,13 +155,14 @@ export async function getTrainedDayKeys(userId: string): Promise<string[]> {
   return (data ?? []).flatMap((row) => typeof row.local_day === 'string' ? [row.local_day] : []);
 }
 
-export async function logSet(sessionId: string, set: SetLog, client = supabase) {
-  const { error } = await client
+export async function logSet(sessionId: string, set: SetLog, client = supabase, signal?: AbortSignal) {
+  const request = client
     .from('set_logs')
     .upsert(
       { session_id: sessionId, ...set },
       { onConflict: 'session_id,plan_item_id,set_index' },
     );
+  const { error } = await (signal ? request.abortSignal(signal) : request);
   if (error) throw error;
 }
 
@@ -169,12 +170,14 @@ export async function finishSession(
   sessionId: string,
   patch: { duration_s: number; rpe: number | null; notes?: string | null },
   client = supabase,
+  signal?: AbortSignal,
 ) {
-  const { error } = await client
+  const request = client
     .from('sessions')
     .update({ completed_at: new Date().toISOString(), ...patch })
     .eq('id', sessionId)
     .is('completed_at', null);
+  const { error } = await (signal ? request.abortSignal(signal) : request);
   if (error) throw error;
 }
 
@@ -207,12 +210,13 @@ export async function getProgress(userId: string): Promise<Map<string, ProgressR
   return new Map((data ?? []).map((row) => [row.exercise_id, row as ProgressRow]));
 }
 
-export async function upsertProgress(userId: string, rows: (ProgressRow & { exercise_id: string })[], client = supabase) {
+export async function upsertProgress(userId: string, rows: (ProgressRow & { exercise_id: string })[], client = supabase, signal?: AbortSignal) {
   if (rows.length === 0) return;
-  const { error } = await client.from('exercise_progress').upsert(
+  const request = client.from('exercise_progress').upsert(
     rows.map((r) => ({ user_id: userId, ...r, updated_at: new Date().toISOString() })),
     { onConflict: 'user_id,exercise_id' },
   );
+  const { error } = await (signal ? request.abortSignal(signal) : request);
   if (error) throw error;
 }
 

@@ -84,3 +84,32 @@ describe('Outbox', () => {
     expect(send.mock.calls.map((call) => call[0].payload.reps)).toEqual([10, 12]);
     expect(await outbox.pending()).toEqual([]);
   });
+
+it('times out a stalled send, keeps the operation, and allows another flush', async () => {
+  jest.useFakeTimers();
+  try {
+    const storage = memory();
+    let resolveOld!: () => void;
+    let signal!: AbortSignal;
+    const send = jest.fn().mockImplementationOnce((_operation, currentSignal) => {
+      signal = currentSignal;
+      return new Promise<void>((resolve) => { resolveOld = resolve; });
+    }).mockResolvedValue(undefined);
+    const outbox = new Outbox(storage, send);
+    await outbox.enqueue(operation);
+    const stalled = outbox.flush();
+    while (send.mock.calls.length === 0) await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(15000);
+    await stalled;
+    expect(signal.aborted).toBe(true);
+    expect(await outbox.pending()).toEqual([operation]);
+    // A late acknowledgement of the expired request must not remove the queue entry.
+    resolveOld();
+    await Promise.resolve();
+    expect(await outbox.pending()).toEqual([operation]);
+    await outbox.flush();
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(await outbox.pending()).toEqual([]);
+    expect(jest.getTimerCount()).toBe(0);
+  } finally { jest.useRealTimers(); }
+});

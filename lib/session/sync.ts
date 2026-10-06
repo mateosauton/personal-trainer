@@ -22,10 +22,11 @@ const requireAccount = (userId: string) => {
 function queueFor(userId: string): Outbox {
   let queue = queues.get(userId);
   if (!queue) {
-    queue = new Outbox(AsyncStorage, async (operation) => {
+    queue = new Outbox(AsyncStorage, async (operation, signal) => {
       requireAccount(userId);
       const { data, error } = await supabase.auth.getSession();
       if (error) throw error;
+      if (signal.aborted) throw new Error('Workout sync timed out.');
       requireAccount(userId);
       if (data.session?.user.id !== userId) throw new Error('The workout account changed.');
       // Capture this account's token. An in-flight A write remains an A write
@@ -33,14 +34,14 @@ function queueFor(userId: string): Outbox {
       const client = clientForAccessToken(data.session.access_token);
       if (operation.kind === 'set') {
         const { sessionId, set } = operation.payload as { sessionId: string; set: SetLog };
-        await logSet(sessionId, set, client);
+        await logSet(sessionId, set, client, signal);
       } else if (operation.kind === 'progress') {
         const { userId: owner, rows } = operation.payload as { userId: string; rows: ProgressRow[] };
         if (owner !== userId) throw new Error('Queued progress belongs to another account.');
-        await upsertProgress(userId, rows, client);
+        await upsertProgress(userId, rows, client, signal);
       } else {
         const { sessionId, durationS } = operation.payload as { sessionId: string; durationS: number };
-        await finishSession(sessionId, { duration_s: durationS, rpe: null }, client);
+        await finishSession(sessionId, { duration_s: durationS, rpe: null }, client, signal);
       }
     }, `office-gym.session-outbox.v2.${userId}`);
     queues.set(userId, queue);
