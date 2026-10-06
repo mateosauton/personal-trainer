@@ -1,6 +1,6 @@
 import * as Haptics from 'expo-haptics';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { AppState, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ExerciseMedia } from '@/components/ExerciseMedia';
 import { Body, Button, Chip, Heading, Muted, Overline, ProgressBar } from '@/components/ui';
@@ -66,10 +66,15 @@ export function RestPage({
     setRemaining(restSeconds);
     firedRef.current = false;
     if (restSeconds <= 0) return;
-    const id = setInterval(() => {
-      setRemaining((value) => (value <= 0 ? 0 : value - 1));
-    }, 1000);
-    return () => clearInterval(id);
+    // Timers may stop while the app is backgrounded. The deadline remains
+    // valid even when no interval callback ran during the rest.
+    const deadline = Date.now() + restSeconds * 1000;
+    const tick = () => setRemaining(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
+    const id = setInterval(tick, 1000);
+    const app = AppState.addEventListener('change', (state) => {
+      if (state === 'active') tick();
+    });
+    return () => { clearInterval(id); app.remove(); };
   }, [restSeconds]);
 
   // Buzz once at zero and then wait: auto-advancing would yank the screen away
