@@ -34,6 +34,7 @@ const { PGlite } = require(runtime);
     await db.query("insert into set_logs(session_id,plan_item_id,exercise_id,set_index,reps,weight_kg) values($1,$3,'legacy_press',1,8,80),($2,$3,'legacy_press',1,5,10)",[newerLegacy,olderUnfinished,legacyItem]);
     await db.query("insert into exercise_progress(user_id,exercise_id,last_weight_kg) values($1,'legacy_press',80)",[a]);
     await migrate('0005_session_progress_rpc.sql');
+    await migrate('0006_workout_reference_ownership.sql');
     await db.query('update sessions set completed_at=now() where id=$1',[olderUnfinished]);
     const session = async (started) => {
       const id = randomUUID();
