@@ -8,10 +8,22 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
-      }
+      },
+      "environment": "preview",
+      "channel": "preview"
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "environment": "production",
+      "channel": "production"
+    },
+    "release-test": {
+      "extends": "production",
+      "distribution": "internal",
+      "channel": "release-test",
+      "android": {
+        "buildType": "apk"
+      }
     }
   }
 }
