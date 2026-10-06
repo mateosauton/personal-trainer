@@ -6,6 +6,7 @@ const mockApply = jest.fn(async (_session, _expected, _updates, lines) => lines)
 const mockReceipt = jest.fn();
 const mockDay = jest.fn();
 const mockFlush = jest.fn().mockResolvedValue(undefined);
+const mockFailed = jest.fn().mockResolvedValue(0);
 const mockPending = jest.fn().mockResolvedValue(0);
 const mockLogs = jest.fn();
 const mockProgress = jest.fn();
@@ -29,7 +30,7 @@ jest.mock('@/lib/db/queries', () => ({
   getProgress: (...args: unknown[]) => mockProgress(...args),
 }));
 jest.mock('@/lib/session/sync', () => ({
-  flushOutbox: () => mockFlush(), pendingSyncCount: () => mockPending(),
+  failedSyncCount: () => mockFailed(), flushOutbox: () => mockFlush(), pendingSyncCount: () => mockPending(),
 }));
 jest.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }) }));
 
@@ -39,6 +40,7 @@ beforeEach(() => {
   mockReceipt.mockResolvedValue(null);
   mockDay.mockResolvedValue(mockPlan.days[0]);
   mockFlush.mockResolvedValue(undefined);
+  mockFailed.mockResolvedValue(0);
   mockPending.mockResolvedValue(0);
   mockLogs.mockResolvedValue([{ exercise_id: exerciseId, plan_item_id: 'item-1', set_index: 1,
     reps: 8, weight_kg: 60, is_bodyweight: false, added_load_kg: 0, rpe: null }]);
@@ -59,6 +61,7 @@ it('blocks summary and progression while workout writes are pending, then retrie
   expect(mockLogs).not.toHaveBeenCalled();
   expect(mockApply).not.toHaveBeenCalled();
   expect(screen.queryByText('Nice work.')).toBeNull();
+  mockFailed.mockResolvedValue(0);
   mockPending.mockResolvedValue(0);
   await act(async () => { fireEvent.press(screen.getByText('Retry')); });
   await waitFor(() => expect(screen.getByText('Nice work.')).toBeTruthy());
@@ -114,4 +117,12 @@ it('keeps failed transactional progression recoverable', async () => {
   expect(screen.queryByText('Nice work.')).toBeNull();
   fireEvent.press(screen.getByText('Retry'));
   await waitFor(() => expect(screen.getByText('Nice work.')).toBeTruthy());
+});
+
+it('does not apply progression or clear the snapshot when a set was rejected', async () => {
+  mockFailed.mockResolvedValue(1);
+  const screen = render(<Summary />);
+  await waitFor(() => expect(screen.getByText('Some sets could not sync. Retry workout sync from Home before saving this summary.')).toBeTruthy());
+  expect(mockApply).not.toHaveBeenCalled();
+  expect(require('@/lib/session/workout').workouts.clear).not.toHaveBeenCalled();
 });

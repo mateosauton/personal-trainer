@@ -1,5 +1,6 @@
+jest.mock('@/lib/session/sync', () => ({ getSyncStatus: async (ownerId: string) => ({ ownerId, pending: 0, rejected: 0 }), retrySync: jest.fn() }));
 jest.mock('@/lib/session/workout', () => ({ workouts: { read: jest.fn(async () => null) } }));
-import { render } from '@testing-library/react-native';
+import { act, render } from '@testing-library/react-native';
 
 import type { Plan, PlanDay } from '@/lib/types';
 
@@ -73,25 +74,28 @@ const baseState = {
 const Home = require('@/app/(tabs)/index').default;
 
 describe('Home', () => {
-  it('greets the user and offers the profile behind the avatar', () => {
+  it('greets the user and offers the profile behind the avatar', async () => {
     mockState.value = baseState;
     const { getByText, getByLabelText } = render(<Home />);
+    await act(async () => { await Promise.resolve(); });
 
     expect(getByText('Welcome Mateo!')).toBeTruthy();
     expect(getByLabelText('Open your profile')).toBeTruthy();
   });
 
-  it('shows the streak and the session count', () => {
+  it('shows the streak and the session count', async () => {
     mockState.value = baseState;
     const { getByText } = render(<Home />);
+    await act(async () => { await Promise.resolve(); });
 
     expect(getByText('3 days')).toBeTruthy();
     expect(getByText('6')).toBeTruthy();
   });
 
-  it("estimates today's session before it is done", () => {
+  it("estimates today's session before it is done", async () => {
     mockState.value = baseState;
     const { getByText } = render(<Home />);
+    await act(async () => { await Promise.resolve(); });
 
     expect(getByText('Start session')).toBeTruthy();
     expect(getByText('Est. reps')).toBeTruthy();
@@ -99,7 +103,7 @@ describe('Home', () => {
     expect(getByText('28')).toBeTruthy();
   });
 
-  it('switches to what actually happened once today is logged', () => {
+  it('switches to what actually happened once today is logged', async () => {
     mockState.value = {
       ...baseState,
       todaySessions: [
@@ -108,6 +112,7 @@ describe('Home', () => {
       todayTotals: { sets: 12, reps: 96, volumeKg: 4820 },
     };
     const { getByText, queryByText } = render(<Home />);
+    await act(async () => { await Promise.resolve(); });
 
     expect(getByText('Reps')).toBeTruthy();
     expect(getByText('96')).toBeTruthy();
@@ -117,15 +122,16 @@ describe('Home', () => {
 });
 
 describe('Home exercise strip', () => {
-  it('shows a thumbnail per movement in the session', () => {
+  it('shows a thumbnail per movement in the session', async () => {
     mockState.value = baseState;
     const { getByTestId } = render(<Home />);
+    await act(async () => { await Promise.resolve(); });
 
     expect(getByTestId('exercise-strip')).toBeTruthy();
     expect(getByTestId('exercise-thumb-Barbell_Bench_Press_-_Medium_Grip')).toBeTruthy();
   });
 
-  it('shows each exercise once and counts the rest past six', () => {
+  it('shows each exercise once and counts the rest past six', async () => {
     const ids = [
       'Barbell_Bench_Press_-_Medium_Grip', 'Barbell_Bench_Press_-_Medium_Grip',
       'Barbell_Shoulder_Press', 'Arnold_Dumbbell_Press', 'Alternating_Floor_Press',
@@ -147,6 +153,7 @@ describe('Home exercise strip', () => {
       },
     };
     const { getByTestId, getByText, queryAllByTestId } = render(<Home />);
+    await act(async () => { await Promise.resolve(); });
 
     // Seven distinct movements: six thumbnails and a "+1".
     expect(queryAllByTestId(/^exercise-thumb-/)).toHaveLength(6);

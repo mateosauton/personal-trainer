@@ -1,3 +1,4 @@
+jest.mock('@/lib/session/sync', () => ({ getSyncStatus: async (ownerId: string) => ({ ownerId, pending: 0, rejected: 0 }), retrySync: jest.fn() }));
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import Home from '@/app/(tabs)/index';
 const mockRead = jest.fn(),

@@ -1,8 +1,8 @@
 import { Outbox, type OutboxOperation } from '@/lib/session/outbox';
 
 const memory = () => {
-  let value: string | null = null;
-  return { getItem: jest.fn(async (_key: string) => value), setItem: jest.fn(async (_: string, next: string) => { value = next; }) };
+  const values = new Map<string, string>();
+  return { getItem: jest.fn(async (key: string) => values.get(key) ?? null), setItem: jest.fn(async (key: string, next: string) => { values.set(key, next); }) };
 };
 
 const operation: OutboxOperation = { id: 'set-1', kind: 'set', payload: { reps: 10 } };
@@ -58,7 +58,7 @@ describe('Outbox', () => {
   it('preserves corrupt stored data instead of overwriting it', async () => {
     const storage = memory();
     await storage.setItem('test', '{broken');
-    const outbox = new Outbox(storage, jest.fn());
+    const outbox = new Outbox(storage, jest.fn(), 'test');
     await expect(outbox.enqueue(operation)).rejects.toThrow(/queue|stored|saved/i);
     expect(await storage.getItem('test')).toBe('{broken');
   });
@@ -66,7 +66,7 @@ describe('Outbox', () => {
   it('rejects structurally invalid queue data without deleting it', async () => {
     const storage = memory();
     await storage.setItem('test', '{}');
-    const outbox = new Outbox(storage, jest.fn());
+    const outbox = new Outbox(storage, jest.fn(), 'test');
     await expect(outbox.pending()).rejects.toThrow(/queue|stored|saved/i);
     expect(await storage.getItem('test')).toBe('{}');
   });
