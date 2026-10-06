@@ -2,7 +2,7 @@ import { Outbox, type OutboxOperation } from '@/lib/session/outbox';
 
 const memory = () => {
   let value: string | null = null;
-  return { getItem: jest.fn(async () => value), setItem: jest.fn(async (_: string, next: string) => { value = next; }) };
+  return { getItem: jest.fn(async (_key: string) => value), setItem: jest.fn(async (_: string, next: string) => { value = next; }) };
 };
 
 const operation: OutboxOperation = { id: 'set-1', kind: 'set', payload: { reps: 10 } };
@@ -25,7 +25,7 @@ describe('Outbox', () => {
   it('does not drop an operation enqueued during a flush', async () => {
     const storage = memory();
     let release: () => void = () => {};
-    const send = jest.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    const send = jest.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; })).mockResolvedValue(undefined);
     const outbox = new Outbox(storage, send);
     await outbox.enqueue(operation);
     const flushing = outbox.flush();
@@ -34,6 +34,53 @@ describe('Outbox', () => {
     release();
     await flushing;
     await enqueued;
-    expect((await outbox.pending()).map((item) => item.id)).toEqual(['set-2']);
+    expect(await outbox.pending()).toEqual([]);
+    expect(send.mock.calls.map((call) => call[0].id)).toEqual(['set-1', 'set-2']);
   });
 });
+
+  it('persists a new set while a network send is stalled', async () => {
+    const storage = memory();
+    let release!: () => void;
+    const send = jest.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; })).mockResolvedValue(undefined);
+    const outbox = new Outbox(storage, send);
+    await outbox.enqueue(operation);
+    const flushing = outbox.flush();
+    while (send.mock.calls.length === 0) await Promise.resolve();
+    let persisted = false;
+    const enqueued = outbox.enqueue({ ...operation, id: 'set-2' }).then(() => { persisted = true; });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const savedBeforeNetwork = persisted;
+    release(); await flushing; await enqueued;
+    expect(savedBeforeNetwork).toBe(true);
+  });
+
+  it('preserves corrupt stored data instead of overwriting it', async () => {
+    const storage = memory();
+    await storage.setItem('test', '{broken');
+    const outbox = new Outbox(storage, jest.fn());
+    await expect(outbox.enqueue(operation)).rejects.toThrow(/queue|stored|saved/i);
+    expect(await storage.getItem('test')).toBe('{broken');
+  });
+
+  it('rejects structurally invalid queue data without deleting it', async () => {
+    const storage = memory();
+    await storage.setItem('test', '{}');
+    const outbox = new Outbox(storage, jest.fn());
+    await expect(outbox.pending()).rejects.toThrow(/queue|stored|saved/i);
+    expect(await storage.getItem('test')).toBe('{}');
+  });
+
+  it('replays an edit saved while the older set is in flight', async () => {
+    const storage = memory();
+    let release!: () => void;
+    const send = jest.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; })).mockResolvedValue(undefined);
+    const outbox = new Outbox(storage, send);
+    await outbox.enqueue(operation);
+    const flushing = outbox.flush();
+    while (send.mock.calls.length === 0) await Promise.resolve();
+    await outbox.enqueue({ ...operation, payload: { reps: 12 } });
+    release(); await flushing;
+    expect(send.mock.calls.map((call) => call[0].payload.reps)).toEqual([10, 12]);
+    expect(await outbox.pending()).toEqual([]);
+  });

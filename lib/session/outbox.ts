@@ -12,6 +12,7 @@ export interface OutboxStorage {
 /** Durable, serial replay queue. Operation IDs make retries safe for idempotent writes. */
 export class Outbox {
   private tail: Promise<void> = Promise.resolve();
+  private flushing: Promise<void> | null = null;
 
   constructor(
     private readonly storage: OutboxStorage,
@@ -22,7 +23,17 @@ export class Outbox {
   private async read(): Promise<OutboxOperation[]> {
     const raw = await this.storage.getItem(this.key);
     if (!raw) return [];
-    try { return JSON.parse(raw) as OutboxOperation[]; } catch { return []; }
+    let items: unknown;
+    try { items = JSON.parse(raw); } catch {
+      throw new Error('The saved workout queue could not be read. Its data has been preserved.');
+    }
+    if (!Array.isArray(items) || !items.every((item) =>
+      item && typeof item.id === 'string' && item.id.length > 0
+      && ['set', 'progress', 'complete'].includes(item.kind)
+      && item.payload && typeof item.payload === 'object' && !Array.isArray(item.payload))) {
+      throw new Error('The saved workout queue is invalid. Its data has been preserved.');
+    }
+    return items as OutboxOperation[];
   }
 
   private async write(items: OutboxOperation[]) {
@@ -47,18 +58,31 @@ export class Outbox {
     });
   }
 
-  async flush() {
-    await this.exclusive(async () => {
-      let items = await this.read();
-      while (items.length) {
-        try {
-          await this.send(items[0]);
-        } catch {
-          return;
+  flush(): Promise<void> {
+    if (!this.flushing) {
+      this.flushing = this.drain().finally(() => { this.flushing = null; });
+    }
+    return this.flushing;
+  }
+
+  private async drain() {
+    while (true) {
+      const operation = await this.exclusive(async () => (await this.read())[0]);
+      if (!operation) return;
+      // Hold the storage lock only for disk operations. Network stalls must
+      // never prevent the next set from being saved on the device.
+      try { await this.send(operation); } catch { return; }
+      await this.exclusive(async () => {
+        const items = await this.read();
+        const index = items.findIndex((item) => item.id === operation.id
+          && JSON.stringify(item) === JSON.stringify(operation));
+        // An edited set with the same ID needs another send; do not delete it
+        // because an older version finished while the edit was being saved.
+        if (index >= 0) {
+          items.splice(index, 1);
+          await this.write(items);
         }
-        items = items.slice(1);
-        await this.write(items);
-      }
-    });
+      });
+    }
   }
 }
