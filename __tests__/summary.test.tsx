@@ -1,3 +1,4 @@
+jest.mock('@/lib/session/workout', () => ({ workouts: { clear: jest.fn(async () => undefined) } }));
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import Summary from '@/app/session/[dayId]/summary';
 

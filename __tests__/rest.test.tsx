@@ -36,3 +36,12 @@ it('refreshes immediately on foreground and buzzes once at the deadline', () => 
   screen.unmount();
   expect(remove).toHaveBeenCalled();
 });
+
+it('keeps the original rest deadline after remounting', () => {
+  const restUntilMs = Date.now() + 90000;
+  const first = render(<RestPage {...props} restUntilMs={restUntilMs} />);
+  first.unmount();
+  act(() => { jest.setSystemTime(Date.now() + 60000); });
+  const resumed = render(<RestPage {...props} restUntilMs={restUntilMs} />);
+  expect(resumed.getByText('0:30')).toBeTruthy();
+});

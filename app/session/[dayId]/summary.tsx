@@ -5,25 +5,42 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import Animated, { FadeIn, ReduceMotion } from 'react-native-reanimated';
 
 import { DoodlePop } from '@/components/Doodle';
-import { Body, Button, Card, Chip, Display, Heading, Muted, Overline, Screen } from '@/components/ui';
+import {
+  Body,
+  Button,
+  Card,
+  Chip,
+  Display,
+  Heading,
+  Muted,
+  Overline,
+  Screen,
+} from '@/components/ui';
 import { notify } from '@/lib/alerts';
 import { useAuth, useUserId } from '@/lib/auth';
 import { getExercise } from '@/lib/catalog';
 import {
-  applySessionProgress, getSessionProgressResult, getSessionPlanDay, getProgress, getSetLogs, type ProgressRow, type SessionSummaryLine,
+  applySessionProgress,
+  getSessionProgressResult,
+  getSessionPlanDay,
+  getProgress,
+  getSetLogs,
+  type ProgressRow,
+  type SessionSummaryLine,
 } from '@/lib/db/queries';
 import { flushOutbox, pendingSyncCount } from '@/lib/session/sync';
+import { workouts } from '@/lib/session/workout';
 import { nextLoad } from '@/lib/progression';
 import { colors, space, type } from '@/lib/theme';
 import { motion } from '@/lib/motion';
 import { effectiveLoadKg, estimateOneRepMax, formatWeight } from '@/lib/units';
 import type { Units } from '@/lib/types';
 
-
-
 export default function SessionSummary() {
   const { dayId, sessionId, elapsed } = useLocalSearchParams<{
-    dayId: string; sessionId: string; elapsed: string;
+    dayId: string;
+    sessionId: string;
+    elapsed: string;
   }>();
   const userId = useUserId();
   const { profile } = useAuth();
@@ -47,13 +64,17 @@ export default function SessionSummary() {
       // A failed send leaves operations queued even though flush resolves.
       // Never derive future loads from a partial server view of this workout.
       await flushOutbox();
-      if (await pendingSyncCount() > 0) {
-        throw new Error('Your workout is still syncing. Reconnect and retry to see all your sets.');
+      if ((await pendingSyncCount()) > 0) {
+        throw new Error(
+          'Your workout is still syncing. Reconnect and retry to see all your sets.',
+        );
       }
       if (cancelled) return;
       const previous = await getSessionProgressResult(sessionId);
       if (cancelled) return;
       if (previous !== null) {
+        await workouts.clear(userId, sessionId);
+        if (cancelled) return;
         setLines(previous);
         setLoading(false);
         return;
@@ -62,9 +83,14 @@ export default function SessionSummary() {
         getSetLogs(sessionId),
         getSessionPlanDay(sessionId, userId),
       ]);
-      if (!day) throw new Error('Could not load the original workout day. Please retry.');
+      if (!day)
+        throw new Error(
+          'Could not load the original workout day. Please retry.',
+        );
       const itemById = new Map(
-        (day?.blocks ?? []).flatMap((b) => b.items.map((i) => [i.id, { item: i, block: b }])),
+        (day?.blocks ?? []).flatMap((b) =>
+          b.items.map((i) => [i.id, { item: i, block: b }]),
+        ),
       );
 
       // Group the flat set list back into one line per exercise.
@@ -83,8 +109,13 @@ export default function SessionSummary() {
 
         for (const [exerciseId, sets] of grouped) {
           const exercise = getExercise(exerciseId);
-          const loads = sets.map((s) => effectiveLoadKg(s, profile?.bodyweight_kg ?? null));
-          const volumeKg = sets.reduce((sum, s, i) => sum + (loads[i] ?? 0) * (s.reps ?? 0), 0);
+          const loads = sets.map((s) =>
+            effectiveLoadKg(s, profile?.bodyweight_kg ?? null),
+          );
+          const volumeKg = sets.reduce(
+            (sum, s, i) => sum + (loads[i] ?? 0) * (s.reps ?? 0),
+            0,
+          );
           const topLoadKg = loads.reduce<number | null>(
             (best, l) => (l != null && (best == null || l > best) ? l : best),
             null,
@@ -98,21 +129,29 @@ export default function SessionSummary() {
 
           const known = progress.get(exerciseId);
           const context = itemById.get(sets[0].plan_item_id ?? '');
-          const workingLoad = sets[0].is_bodyweight ? sets[0].added_load_kg : sets[0].weight_kg;
+          const workingLoad = sets[0].is_bodyweight
+            ? sets[0].added_load_kg
+            : sets[0].weight_kg;
 
-          const verdict = context && exercise
-            ? nextLoad(
-                sets.map((s) => ({ reps: s.reps, rpe: s.rpe })),
-                context.item.reps_high,
-                context.item.reps_low,
-                exercise.pattern,
-                workingLoad,
-                { last_weight_kg: known?.last_weight_kg ?? null, miss_streak: known?.miss_streak ?? 0 },
-                units,
-              )
-            : null;
+          const verdict =
+            context && exercise
+              ? nextLoad(
+                  sets.map((s) => ({ reps: s.reps, rpe: s.rpe })),
+                  context.item.reps_high,
+                  context.item.reps_low,
+                  exercise.pattern,
+                  workingLoad,
+                  {
+                    last_weight_kg: known?.last_weight_kg ?? null,
+                    miss_streak: known?.miss_streak ?? 0,
+                  },
+                  units,
+                )
+              : null;
 
-          const isPr = topLoadKg != null && (known?.best_weight_kg == null || topLoadKg > known.best_weight_kg);
+          const isPr =
+            topLoadKg != null &&
+            (known?.best_weight_kg == null || topLoadKg > known.best_weight_kg);
 
           built.push({
             exerciseId,
@@ -130,7 +169,9 @@ export default function SessionSummary() {
               exercise_id: exerciseId,
               last_weight_kg: verdict?.last_weight_kg ?? workingLoad,
               last_reps: sets[sets.length - 1].reps,
-              best_weight_kg: isPr ? topLoadKg : (known?.best_weight_kg ?? null),
+              best_weight_kg: isPr
+                ? topLoadKg
+                : (known?.best_weight_kg ?? null),
               best_e1rm: Math.max(e1rm, known?.best_e1rm ?? 0) || null,
               miss_streak: verdict?.miss_streak ?? 0,
             });
@@ -140,13 +181,22 @@ export default function SessionSummary() {
         if (!cancelled) {
           let saved: SessionSummaryLine[];
           try {
-            saved = await applySessionProgress(sessionId,
-              updates.map((row) => ({ exercise_id: row.exercise_id, state: progress.get(row.exercise_id) ?? null })),
-              updates, built);
+            saved = await applySessionProgress(
+              sessionId,
+              updates.map((row) => ({
+                exercise_id: row.exercise_id,
+                state: progress.get(row.exercise_id) ?? null,
+              })),
+              updates,
+              built,
+            );
           } catch (error) {
-            if ((error as { code?: string }).code === '40001' && attempt < 2) continue;
+            if ((error as { code?: string }).code === '40001' && attempt < 2)
+              continue;
             throw error;
           }
+          if (cancelled) return;
+          await workouts.clear(userId, sessionId);
           if (cancelled) return;
           setLines(saved);
           setLoading(false);
@@ -158,7 +208,11 @@ export default function SessionSummary() {
       }
     })().catch((error: unknown) => {
       if (!cancelled) {
-        setError(error instanceof Error ? error.message : 'Could not load your workout. Please retry.');
+        setError(
+          error instanceof Error
+            ? error.message
+            : 'Could not load your workout. Please retry.',
+        );
         setLoading(false);
       }
     });
@@ -193,8 +247,16 @@ export default function SessionSummary() {
       <Screen scroll={false} style={styles.center}>
         <Heading>Summary unavailable</Heading>
         <Body style={{ marginTop: space.md }}>{error}</Body>
-        <Button title="Retry" onPress={() => setRetry((value) => value + 1)} style={{ marginTop: space.lg }} />
-        <Button title="Back to home" variant="ghost" onPress={() => router.replace('/(tabs)')} />
+        <Button
+          title="Retry"
+          onPress={() => setRetry((value) => value + 1)}
+          style={{ marginTop: space.lg }}
+        />
+        <Button
+          title="Back to home"
+          variant="ghost"
+          onPress={() => router.replace('/(tabs)')}
+        />
       </Screen>
     );
   }
@@ -207,21 +269,30 @@ export default function SessionSummary() {
       <Overline>Session complete</Overline>
       <Display style={{ marginTop: space.sm }}>Nice work.</Display>
 
-      <Animated.View entering={FadeIn.duration(motion.base).reduceMotion(ReduceMotion.System)}>
-      <Card style={{ marginTop: space.xl }}>
-        <View style={styles.stats}>
-          <Stat label="Minutes" value={`${Math.max(1, Math.round(durationS / 60))}`} />
-          <Stat label="Sets" value={`${totalSets}`} />
-          <Stat label="Volume" value={formatWeight(totalVolume, units)} />
-        </View>
-      </Card>
+      <Animated.View
+        entering={FadeIn.duration(motion.base).reduceMotion(
+          ReduceMotion.System,
+        )}
+      >
+        <Card style={{ marginTop: space.xl }}>
+          <View style={styles.stats}>
+            <Stat
+              label="Minutes"
+              value={`${Math.max(1, Math.round(durationS / 60))}`}
+            />
+            <Stat label="Sets" value={`${totalSets}`} />
+            <Stat label="Volume" value={formatWeight(totalVolume, units)} />
+          </View>
+        </Card>
       </Animated.View>
 
       <View style={{ gap: space.md, marginTop: space.xl }}>
         {lines.map((line, index) => (
           <Animated.View
             key={line.exerciseId}
-            entering={FadeIn.delay(index * 55).duration(motion.base).reduceMotion(ReduceMotion.System)}
+            entering={FadeIn.delay(index * 55)
+              .duration(motion.base)
+              .reduceMotion(ReduceMotion.System)}
             style={styles.line}
           >
             <View style={{ flex: 1, gap: 2 }}>
@@ -239,13 +310,22 @@ export default function SessionSummary() {
                 <Chip label={prLabel(line.topLoadKg, units)} selected />
               </DoodlePop>
             ) : null}
-            {!line.isPr && line.verdict === 'progress' ? <Chip label="↑ next" /> : null}
-            {!line.isPr && line.verdict === 'deload' ? <Chip label="↓ next" /> : null}
+            {!line.isPr && line.verdict === 'progress' ? (
+              <Chip label="↑ next" />
+            ) : null}
+            {!line.isPr && line.verdict === 'deload' ? (
+              <Chip label="↓ next" />
+            ) : null}
           </Animated.View>
         ))}
       </View>
 
-      <Button title="Done" onPress={save} loading={saving} style={{ marginTop: space.xl }} />
+      <Button
+        title="Done"
+        onPress={save}
+        loading={saving}
+        style={{ marginTop: space.xl }}
+      />
     </Screen>
   );
 }

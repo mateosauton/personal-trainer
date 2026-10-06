@@ -284,3 +284,12 @@ export async function applySessionProgress(
   if (error) throw error;
   return data as SessionSummaryLine[];
 }
+
+
+export async function getSessionResumeDetails(sessionId: string, userId: string) {
+  const { data, error } = await supabase.from('sessions').select('started_at, completed_at, duration_s')
+    .eq('id', sessionId).eq('user_id', userId).maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error('Workout not found.');
+  return data as { started_at: string; completed_at: string | null; duration_s: number | null };
+}

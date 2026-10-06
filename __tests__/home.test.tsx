@@ -1,3 +1,4 @@
+jest.mock('@/lib/session/workout', () => ({ workouts: { read: jest.fn(async () => null) } }));
 import { render } from '@testing-library/react-native';
 
 import type { Plan, PlanDay } from '@/lib/types';

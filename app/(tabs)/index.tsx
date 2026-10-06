@@ -1,16 +1,30 @@
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { ExerciseStrip } from '@/components/ExerciseStrip';
 import { Header } from '@/components/Header';
 import { Streak } from '@/components/Streak';
-import { Body, Button, Card, Heading, Muted, Overline, Screen } from '@/components/ui';
+import {
+  Body,
+  Button,
+  Card,
+  Heading,
+  Muted,
+  Overline,
+  Screen,
+} from '@/components/ui';
 import { useAuth, useUserId } from '@/lib/auth';
 import { getExercise } from '@/lib/catalog';
-import { bodyPartLabel, estimateDay, estimateVolumeKg } from '@/lib/plan/estimate';
+import {
+  bodyPartLabel,
+  estimateDay,
+  estimateVolumeKg,
+} from '@/lib/plan/estimate';
 import { colors, space, type } from '@/lib/theme';
 import { formatHeight, formatWeight } from '@/lib/units';
+import { workouts } from '@/lib/session/workout';
+import type { SavedWorkout } from '@/lib/session/workout-store';
 import { useDashboard } from '@/lib/useDashboard';
 
 /**
@@ -22,14 +36,84 @@ export default function Home() {
   const userId = useUserId();
   const { profile } = useAuth();
   const router = useRouter();
+  const [savedWorkout, setSavedWorkout] = useState<SavedWorkout | null>(null);
+  const [resumeError, setResumeError] = useState<string | null>(null);
+  const [resumeAttempt, setResumeAttempt] = useState(0);
   const bodyweightKg = profile?.bodyweight_kg ?? null;
   const {
-    plan, nextDay, completedCount, trainedDays, streak,
-    todaySessions, todayTotals, lastLoadKg, loading, error, reload,
+    plan,
+    nextDay,
+    completedCount,
+    trainedDays,
+    streak,
+    todaySessions,
+    todayTotals,
+    lastLoadKg,
+    loading,
+    error,
+    reload,
   } = useDashboard(userId, bodyweightKg);
 
   // Coming back from a finished session must move the rotation on.
-  useFocusEffect(useCallback(() => reload(), [reload]));
+  useFocusEffect(
+    useCallback(() => {
+      reload();
+      setResumeAttempt((n) => n + 1);
+    }, [reload]),
+  );
+  useEffect(() => {
+    let cancelled = false;
+    workouts
+      .read(userId)
+      .then((saved) => {
+        if (!cancelled) {
+          setSavedWorkout(saved);
+          setResumeError(null);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled)
+          setResumeError(
+            error instanceof Error
+              ? error.message
+              : 'Could not read your saved workout.',
+          );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, resumeAttempt]);
+  const ownWorkout = savedWorkout?.ownerId === userId ? savedWorkout : null;
+  const resumeCard = ownWorkout ? (
+    <Card style={{ marginTop: space.lg, gap: space.md }}>
+      <Overline>Saved workout</Overline>
+      <Body>{ownWorkout.day.name}</Body>
+      <Button
+        title={
+          ownWorkout.endedAtMs != null
+            ? 'View workout summary'
+            : 'Resume workout'
+        }
+        onPress={() =>
+          router.push({
+            pathname: '/session/[dayId]/run',
+            params: {
+              dayId: ownWorkout.day.id,
+              sessionId: ownWorkout.sessionId,
+            },
+          })
+        }
+      />
+    </Card>
+  ) : resumeError ? (
+    <Card style={{ marginTop: space.lg, gap: space.md }}>
+      <Body>{resumeError}</Body>
+      <Button
+        title="Retry saved workout"
+        onPress={() => setResumeAttempt((n) => n + 1)}
+      />
+    </Card>
+  ) : null;
 
   const units = profile?.units ?? 'kg';
   const name = profile?.display_name ?? null;
@@ -40,12 +124,15 @@ export default function Home() {
   const measurements = [
     profile?.height_cm != null ? formatHeight(profile.height_cm, units) : null,
     bodyweightKg != null ? formatWeight(bodyweightKg, units) : null,
-  ].filter(Boolean).join(' · ');
+  ]
+    .filter(Boolean)
+    .join(' · ');
   const subtitle = measurements || undefined;
 
   if (loading) {
     return (
-      <Screen scroll={false} style={styles.center}>
+      <Screen scroll={false}>
+        {resumeCard}
         <ActivityIndicator color={colors.accent} />
       </Screen>
     );
@@ -54,11 +141,19 @@ export default function Home() {
   if (error || !plan || !nextDay) {
     return (
       <Screen>
-        <Header name={name} avatarUrl={profile?.avatar_url ?? null} subtitle={subtitle} />
+        <Header
+          name={name}
+          avatarUrl={profile?.avatar_url ?? null}
+          subtitle={subtitle}
+        />
+        {resumeCard}
         <Card style={{ marginTop: space.xl, gap: space.md }}>
           <Overline>No plan yet</Overline>
           <Body>{error ?? 'Build one from your profile to get started.'}</Body>
-          <Button title="Go to profile" onPress={() => router.push('/profile')} />
+          <Button
+            title="Go to profile"
+            onPress={() => router.push('/profile')}
+          />
         </Card>
       </Screen>
     );
@@ -72,7 +167,9 @@ export default function Home() {
   const minutes = trainedToday
     ? Math.max(
         1,
-        Math.round(todaySessions.reduce((sum, s) => sum + (s.duration_s ?? 0), 0) / 60),
+        Math.round(
+          todaySessions.reduce((sum, s) => sum + (s.duration_s ?? 0), 0) / 60,
+        ),
       )
     : estimate.minutes;
   const reps = trainedToday ? todayTotals.reps : estimate.reps;
@@ -93,18 +190,31 @@ export default function Home() {
 
   return (
     <Screen>
-      <Header name={name} avatarUrl={profile?.avatar_url ?? null} subtitle={subtitle} />
+      <Header
+        name={name}
+        avatarUrl={profile?.avatar_url ?? null}
+        subtitle={subtitle}
+      />
 
+      {resumeCard}
       <View style={{ marginTop: space.xl }}>
-        <Streak streak={streak} total={completedCount} trainedDays={trainedDays} />
+        <Streak
+          streak={streak}
+          total={completedCount}
+          trainedDays={trainedDays}
+        />
       </View>
 
       <Card style={styles.today}>
         <View style={styles.todayHead}>
           <View style={{ gap: 2, flex: 1 }}>
-            <Overline>{trainedToday ? "Today's session" : 'Up next today'}</Overline>
+            <Overline>
+              {trainedToday ? "Today's session" : 'Up next today'}
+            </Overline>
             <Body style={styles.dayName} numberOfLines={1}>
-              {trainedToday ? (todaySessions[0]?.plan_days?.name ?? nextDay.name) : nextDay.name}
+              {trainedToday
+                ? (todaySessions[0]?.plan_days?.name ?? nextDay.name)
+                : nextDay.name}
             </Body>
             <Muted numberOfLines={1}>{bodyPartLabel(estimate.bodyParts)}</Muted>
           </View>
@@ -113,7 +223,10 @@ export default function Home() {
         <ExerciseStrip exercises={todayExercises} />
 
         <View style={styles.stats}>
-          <Stat label={trainedToday ? 'Minutes' : 'Est. min'} value={`${minutes}`} />
+          <Stat
+            label={trainedToday ? 'Minutes' : 'Est. min'}
+            value={`${minutes}`}
+          />
           <Stat label={trainedToday ? 'Reps' : 'Est. reps'} value={`${reps}`} />
           <Stat
             label={trainedToday ? 'Volume' : 'Est. volume'}
@@ -125,19 +238,25 @@ export default function Home() {
       <View style={styles.list}>
         {workBlocks.map((block) => (
           <View key={block.id} style={styles.row}>
-            <Body style={styles.rowTitle}>{block.title.replace(/^Block \d+ · /, '')}</Body>
+            <Body style={styles.rowTitle}>
+              {block.title.replace(/^Block \d+ · /, '')}
+            </Body>
             <Muted numberOfLines={2}>
-              {block.items.map((i) => getExercise(i.exercise_id)?.name ?? i.exercise_id).join(' · ')}
+              {block.items
+                .map((i) => getExercise(i.exercise_id)?.name ?? i.exercise_id)
+                .join(' · ')}
             </Muted>
           </View>
         ))}
       </View>
 
-      <Button
-        title={trainedToday ? 'Start another session' : 'Start session'}
-        onPress={() => router.push(`/session/${nextDay.id}`)}
-        style={{ marginTop: space.xl }}
-      />
+      {!ownWorkout && (
+        <Button
+          title={trainedToday ? 'Start another session' : 'Start session'}
+          onPress={() => router.push(`/session/${nextDay.id}`)}
+          style={{ marginTop: space.xl }}
+        />
+      )}
     </Screen>
   );
 }
@@ -158,6 +277,11 @@ const styles = StyleSheet.create({
   dayName: { ...type.heading },
   stats: { flexDirection: 'row', gap: space.md },
   list: { marginTop: space.xl, gap: space.md },
-  row: { borderLeftWidth: 2, borderLeftColor: colors.accent, paddingLeft: space.md, gap: 2 },
+  row: {
+    borderLeftWidth: 2,
+    borderLeftColor: colors.accent,
+    paddingLeft: space.md,
+    gap: 2,
+  },
   rowTitle: { ...type.body, fontWeight: '700' },
 });
