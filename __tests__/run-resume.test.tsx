@@ -304,3 +304,37 @@ it('durably stages an unchanged unknown older rest before advancing offline', as
   await waitFor(() => expect(saved.cursor).toBe(1));
   expect(mockStageLegacy).toHaveBeenCalledWith('A', expect.objectContaining({ cursor: 0, draft: expect.objectContaining({ reps: 8 }) }));
 });
+
+
+it('persists zero rest between superset exercises and the prescribed rest at the round boundary', async () => {
+  saved = { ...saved, phase: 'work', draft: null, savedDraft: null, restUntilMs: null };
+  const block = saved.day.blocks[0];
+  block.kind = 'superset';
+  block.rounds = 2;
+  block.items.push({ ...block.items[0], id: 'item-2', exercise_id: 'unknown-2', item_index: 1 });
+  const screen = render(<Run />);
+  await screen.findByText('Complete set');
+  fireEvent.press(screen.getByText('Complete set'));
+  await screen.findByText('Next set');
+  expect(saved.restUntilMs!).toBeLessThanOrEqual(Date.now());
+  expect(screen.getByText('0:00')).toBeTruthy();
+  fireEvent.press(screen.getByText('Next set'));
+  await screen.findByText('Complete set');
+  fireEvent.press(screen.getByText('Complete set'));
+  await screen.findByText('Skip rest');
+  expect(saved.restUntilMs! - Date.now()).toBeGreaterThan(85000);
+  expect(saved.restUntilMs! - Date.now()).toBeLessThanOrEqual(90000);
+});
+
+
+it('ignores an older intra-round rest deadline when resuming a superset', async () => {
+  saved = { ...saved, draft: saved.savedDraft, restUntilMs: Date.now() + 90000 };
+  const block = saved.day.blocks[0];
+  block.kind = 'superset';
+  block.rounds = 2;
+  block.items.push({ ...block.items[0], id: 'item-2', exercise_id: 'unknown-2', item_index: 1 });
+  const screen = render(<Run />);
+  await screen.findByText('Next set');
+  expect(screen.getByText('0:00')).toBeTruthy();
+  expect(screen.queryByText('Skip rest')).toBeNull();
+});

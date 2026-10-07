@@ -38,7 +38,7 @@ import {
   queueCompletion,
   queueSet,
 } from '@/lib/session/sync';
-import { buildQueue, partnerOf, type QueueEntry } from '@/lib/session/queue';
+import { buildQueue, partnerOf, restAfter, type QueueEntry } from '@/lib/session/queue';
 import { colors, radius, space, type } from '@/lib/theme';
 import { motion } from '@/lib/motion';
 import { displayToKg, formatWeight, kgToDisplay } from '@/lib/units';
@@ -312,7 +312,7 @@ export default function SessionRun() {
         phase: 'resting',
         draft: seed,
         savedDraft: seed,
-        restUntilMs: Date.now() + entry.block.rest_seconds * 1000,
+        restUntilMs: Date.now() + restAfter(entry) * 1000,
       });
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch (error) {
@@ -558,8 +558,8 @@ export default function SessionRun() {
             units={units}
             bodyweightCaptured={workout?.bodyweightKg !== undefined}
             bodyweightKg={workout?.bodyweightKg !== undefined ? workout.bodyweightKg : profile?.bodyweight_kg ?? null}
-            restSeconds={entry.block.rest_seconds}
-            restUntilMs={active?.restUntilMs}
+            restSeconds={restAfter(entry)}
+            restUntilMs={restAfter(entry) > 0 ? active?.restUntilMs : null}
             draft={draft}
             onChange={changeDraft}
             next={upNext}
