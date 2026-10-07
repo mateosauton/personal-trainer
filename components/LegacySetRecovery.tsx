@@ -6,8 +6,9 @@ import { buildQueue } from '@/lib/session/queue';
 import type { RejectedOperation } from '@/lib/session/outbox';
 import { reviewLegacySetConflict, resolveLegacySetConflict, type LegacySetConflictReview } from '@/lib/session/sync';
 import type { SetLog } from '@/lib/types';
+import { measurementLabel } from '@/lib/session/set-values';
 import { colors, radius, space } from '@/lib/theme';
-const describe = (set: SetLog) => `${set.reps ?? 'No'} reps · ${set.is_bodyweight
+const describe = (set: SetLog) => `${measurementLabel(set)} · ${set.is_bodyweight
   ? `bodyweight + ${set.added_load_kg} kg` : set.weight_kg === null ? 'No load' : `${set.weight_kg} kg`}`;
 
 /** Mounted with an account/capture key; pending results cannot survive a new capture. */
@@ -66,8 +67,8 @@ export function LegacySetRecovery({ userId, captured, onResolved }: {
           <Body>Server: {review.server ? describe(review.server.set) : 'No saved server set'}</Body>
           {local?.savedDraft && entry?.item.id === review.saved.set.plan_item_id
             && entry.set === review.saved.set.set_index && local.sessionId === review.saved.sessionId ?
-            <Body>Last saved rest value: {local.savedDraft.reps} reps · {local.savedDraft.asBodyweight ? 'bodyweight + ' : ''}{local.savedDraft.weight} {local.units}</Body> : null}
-          {unsent ? <Body>Unsent rest draft: {unsent.reps} reps · {unsent.asBodyweight ? 'bodyweight + ' : ''}{unsent.weight} {local!.units}. Your choice will replace this draft; a recovery copy is kept.</Body> : null}
+            <Body>Last saved rest value: {measurementLabel(local.savedDraft)} · {local.savedDraft.asBodyweight ? 'bodyweight + ' : ''}{local.savedDraft.weight} {local.units}</Body> : null}
+          {unsent ? <Body>Unsent rest draft: {measurementLabel(unsent)} · {unsent.asBodyweight ? 'bodyweight + ' : ''}{unsent.weight} {local!.units}. Your choice will replace this draft; a recovery copy is kept.</Body> : null}
           {review.captured.code === 'PT410' ? <Body>This workout is finalized. Your older edit is preserved for review.</Body> : (
             <>
               {review.server ? <>

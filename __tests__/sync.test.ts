@@ -875,3 +875,21 @@ it('defers a queued finish if a set rejects after completion was queued and retr
   expect(mockFinishSession).toHaveBeenCalledTimes(1);
   expect(await api.getSyncStatus(conflictOwner)).toMatchObject({ rejected: 0, pending: 0 });
 });
+
+
+it('retains duration in offline retry and replays the same ordered payload', async () => {
+  const owner = '00000001-1111-4111-8111-000000000001';
+  const session = '00000008-1111-4111-8111-000000000008';
+  signedIn(owner); setSyncAccount(owner);
+  mockLogSet.mockRejectedValue(new Error('offline'));
+  const timed = { ...set, reps: null, seconds: 40 };
+  await queueSet(owner, session, timed); await flushOutbox();
+  expect(await pendingSyncCount()).toBe(1);
+  const first = mockLogSet.mock.calls[0][0];
+  expect(first.set).toEqual(timed);
+  setSyncAccount(null); setSyncAccount(owner);
+  mockLogSet.mockResolvedValue({ status: 'duplicate', serverVersion: 1 });
+  await flushOutbox();
+  expect(mockLogSet.mock.calls.at(-1)[0]).toEqual(first);
+  expect(await pendingSyncCount()).toBe(0);
+});

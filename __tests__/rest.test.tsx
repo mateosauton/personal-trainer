@@ -1,4 +1,4 @@
-import { act, render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 import { AppState, type AppStateStatus } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { RestPage } from '@/components/RestPage';
@@ -44,4 +44,23 @@ it('keeps the original rest deadline after remounting', () => {
   act(() => { jest.setSystemTime(Date.now() + 60000); });
   const resumed = render(<RestPage {...props} restUntilMs={restUntilMs} />);
   expect(resumed.getByText('0:30')).toBeTruthy();
+});
+
+
+it('edits a timed set in seconds without creating repetitions', () => {
+  const onChange = jest.fn();
+  const screen = render(<RestPage {...props} targetReps="40s" draft={{ ...props.draft, reps: 0, seconds: 40 }} onChange={onChange} />);
+  expect(screen.getByText('Seconds')).toBeTruthy();
+  fireEvent.press(screen.getAllByLabelText('Increase')[0]);
+  expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ seconds: 41, reps: 0 }));
+});
+
+
+it('keeps older rep data until seconds correction is explicitly selected', () => {
+  const onChange = jest.fn();
+  const screen = render(<RestPage {...props} targetReps="40s" targetSeconds={40} onChange={onChange} />);
+  expect(screen.getByText('Reps')).toBeTruthy();
+  expect(onChange).not.toHaveBeenCalled();
+  fireEvent.press(screen.getByText('Record seconds'));
+  expect(onChange).toHaveBeenCalledWith({ ...props.draft, reps: 0, seconds: 40 });
 });

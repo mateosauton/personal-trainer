@@ -123,3 +123,17 @@ it('preserves a captured bodyweight across restart and rejects corrupt values', 
     ).rejects.toThrow('preserved');
   }
 });
+
+
+it('rejects an invalid duration draft without replacing a saved workout', async () => {
+  const disk = memory();
+  const store = new WorkoutStore(disk);
+  await store.create(fixture());
+  const before = new Map(disk.values);
+  await expect(store.update('A', 'session-A', { cursor: 0, phase: 'work' }, {
+    phase: 'resting', restUntilMs: 91000,
+    draft: { reps: 0, seconds: -1, weight: 0, asBodyweight: false },
+    savedDraft: { reps: 0, seconds: -1, weight: 0, asBodyweight: false },
+  })).rejects.toThrow('saved workout could not be read');
+  expect(disk.values).toEqual(before);
+});

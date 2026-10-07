@@ -127,8 +127,12 @@ export default function SessionSummary() {
         const built: SessionSummaryLine[] = [];
         const updates: ProgressRow[] = [];
 
-        for (const [exerciseId, sets] of grouped) {
+        for (let [exerciseId, sets] of grouped) {
           const exercise = getExercise(exerciseId);
+          const allSets = sets;
+          const hasTimed = allSets.some(s => s.seconds != null || itemById.get(s.plan_item_id ?? '')?.item.seconds != null);
+          const seconds = allSets.reduce((sum, s) => sum + (s.seconds ?? 0), 0);
+          sets = sets.filter(s => s.seconds == null && itemById.get(s.plan_item_id ?? '')?.item.seconds == null);
           const loads = sets.map((s) => effectiveLoadKg(s, bodyweightKg));
           const volumeKg = sets.reduce(
             (sum, s, i) => sum + (loads[i] ?? 0) * (s.reps ?? 0),
@@ -146,10 +150,10 @@ export default function SessionSummary() {
           }, 0);
 
           const known = progress.get(exerciseId);
-          const context = itemById.get(sets[0].plan_item_id ?? '');
-          const workingLoad = sets[0].is_bodyweight
+          const context = itemById.get(sets[0]?.plan_item_id ?? '');
+          const workingLoad = sets[0]?.is_bodyweight
             ? sets[0].added_load_kg
-            : sets[0].weight_kg;
+            : sets[0]?.weight_kg ?? null;
 
           const verdict =
             context && exercise
@@ -174,7 +178,8 @@ export default function SessionSummary() {
           built.push({
             exerciseId,
             name: exercise?.name ?? exerciseId,
-            sets: sets.length,
+            sets: allSets.length,
+            ...(hasTimed ? { seconds } : {}),
             volumeKg,
             topLoadKg,
             verdict: verdict?.verdict ?? null,
@@ -319,7 +324,9 @@ export default function SessionSummary() {
                 {line.name}
               </Body>
               <Muted>
-                {line.sets} sets · top {formatWeight(line.topLoadKg, units)}
+                {line.seconds != null
+                  ? `${line.sets} sets · ${line.seconds > 0 ? `${line.seconds}s timed` : 'Duration not recorded'}`
+                  : `${line.sets} sets · top ${formatWeight(line.topLoadKg, units)}`}
               </Muted>
             </View>
             {line.isPr ? (

@@ -423,3 +423,18 @@ it('keeps an initially absent set at version zero when a later device creates it
   await make(storage).captureBaselines(session, [{ set: set(), serverVersion: 7, eventAt: event }]);
   expect(await make(storage).save(session, set(12), async () => {})).toMatchObject({ expectedVersion: 0 });
 });
+
+
+it('preserves timed seconds through a crash before enqueue and journal recovery', async () => {
+  const storage = disk();
+  const timed = { ...set(), reps: null, seconds: 40 };
+  await expect(make(storage).save(session, timed, async () => { throw new Error('offline'); })).rejects.toThrow('offline');
+  const enqueue = jest.fn(async () => {});
+  await make(storage).recover(enqueue);
+  expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ set: timed }));
+});
+it.each([0, -1, 40.5, 86401])('preserves invalid duration %s without publishing it', async seconds => {
+  const storage = disk();
+  await expect(make(storage).save(session, { ...set(), reps: null, seconds }, async () => {})).rejects.toThrow('Invalid saved set');
+  expect(storage.setItem).not.toHaveBeenCalled();
+});
