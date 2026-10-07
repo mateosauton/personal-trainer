@@ -103,9 +103,10 @@ describe('Home', () => {
     expect(getByText('28')).toBeTruthy();
   });
 
-  it('switches to what actually happened once today is logged', async () => {
+  it('keeps completed totals separate from the next workout after rotation', async () => {
     mockState.value = {
       ...baseState,
+      nextDay: { ...day, id: 'day-2', name: 'Push B' },
       todaySessions: [
         { id: 's1', started_at: new Date().toISOString(), duration_s: 2400, rpe: 8, plan_days: { name: 'Push A', focus: 'Chest' } },
       ],
@@ -117,7 +118,13 @@ describe('Home', () => {
     expect(getByText('Reps')).toBeTruthy();
     expect(getByText('96')).toBeTruthy();
     expect(getByText('40')).toBeTruthy(); // 2400s of session
-    expect(queryByText('Est. reps')).toBeNull();
+    expect(getByText("Today's training")).toBeTruthy();
+    expect(getByText('Up next')).toBeTruthy();
+    expect(getByText('Push A')).toBeTruthy();
+    expect(getByText('Push B')).toBeTruthy();
+    expect(getByText('Est. reps')).toBeTruthy();
+    expect(getByText('28')).toBeTruthy();
+    expect(queryByText("Today's session")).toBeNull();
   });
 });
 

@@ -165,27 +165,18 @@ export default function Home() {
   const estimate = estimateDay(nextDay);
   const trainedToday = todayTotals != null && todaySessions.length > 0;
 
-  // Before the session these are projections; once today is logged the same
-  // three slots show what actually happened.
-  const minutes = trainedToday
-    ? Math.max(
-        1,
-        Math.round(
-          todaySessions.reduce((sum, s) => sum + (s.duration_s ?? 0), 0) / 60,
-        ),
-      )
-    : estimate.minutes;
-  const reps = trainedToday ? todayTotals.reps : estimate.reps;
-  const volumeKg = trainedToday
-    ? todayTotals.volumeKg
-    : estimateVolumeKg(nextDay, lastLoadKg, bodyweightKg);
+  const completedMinutes = Math.max(
+    1,
+    Math.round(todaySessions.reduce((sum, s) => sum + (s.duration_s ?? 0), 0) / 60),
+  );
+  const volumeKg = estimateVolumeKg(nextDay, lastLoadKg, bodyweightKg);
 
   const workBlocks = nextDay.blocks.filter((b) => b.kind !== 'warmup');
 
   // One thumbnail per movement, in the order it comes up. Deduped: a circuit
   // that revisits an exercise should not put the same picture up twice.
   const seen = new Set<string>();
-  const todayExercises = workBlocks
+  const nextExercises = workBlocks
     .flatMap((b) => b.items)
     .filter((item) => !seen.has(item.exercise_id) && seen.add(item.exercise_id))
     .map((item) => getExercise(item.exercise_id))
@@ -209,31 +200,48 @@ export default function Home() {
         />
       </View>
 
+      {trainedToday && (
+        <Card style={styles.today}>
+          <Overline>Today's training</Overline>
+          <Body style={styles.dayName}>
+            {todaySessions.length === 1
+              ? (todaySessions[0]?.plan_days?.name ?? 'Completed workout')
+              : `${todaySessions.length} sessions`}
+          </Body>
+          <View style={styles.stats}>
+            <Stat label="Minutes" value={`${completedMinutes}`} />
+            <Stat label="Reps" value={`${todayTotals.reps}`} />
+            <Stat
+              label="Volume"
+              value={todayTotals.volumeKg > 0 ? formatWeight(todayTotals.volumeKg, units) : '—'}
+            />
+          </View>
+        </Card>
+      )}
+
       <Card style={styles.today}>
         <View style={styles.todayHead}>
           <View style={{ gap: 2, flex: 1 }}>
             <Overline>
-              {trainedToday ? "Today's session" : 'Up next today'}
+              {trainedToday ? 'Up next' : 'Up next today'}
             </Overline>
             <Body style={styles.dayName} numberOfLines={1}>
-              {trainedToday
-                ? (todaySessions[0]?.plan_days?.name ?? nextDay.name)
-                : nextDay.name}
+              {nextDay.name}
             </Body>
             <Muted numberOfLines={1}>{bodyPartLabel(estimate.bodyParts)}</Muted>
           </View>
         </View>
 
-        <ExerciseStrip exercises={todayExercises} />
+        <ExerciseStrip exercises={nextExercises} />
 
         <View style={styles.stats}>
           <Stat
-            label={trainedToday ? 'Minutes' : 'Est. min'}
-            value={`${minutes}`}
+            label="Est. min"
+            value={`${estimate.minutes}`}
           />
-          <Stat label={trainedToday ? 'Reps' : 'Est. reps'} value={`${reps}`} />
+          <Stat label="Est. reps" value={`${estimate.reps}`} />
           <Stat
-            label={trainedToday ? 'Volume' : 'Est. volume'}
+            label="Est. volume"
             value={volumeKg > 0 ? formatWeight(volumeKg, units) : '—'}
           />
         </View>
