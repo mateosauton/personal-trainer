@@ -11,6 +11,7 @@ import { profileGate } from '@/lib/auth-gate';
 import { Button, Body, Screen } from '@/components/ui';
 import { colors } from '@/lib/theme';
 import { notify } from '@/lib/alerts';
+import { cleanupExports } from '@/lib/export-file';
 
 const Splash = () => (
   <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
@@ -29,6 +30,10 @@ const Splash = () => (
  * asking the router to go somewhere is what left the app on a dead spinner.
  */
 function Routes() {
+  useEffect(() => {
+    // Cache cleanup must not prevent sign-in if the filesystem is unavailable.
+    try { cleanupExports(); } catch { /* Retry at the next export/startup. */ }
+  }, []);
   const { session, profileState, loading, refreshProfile, signOut, recoveringPassword, processingAuthLink, authError, retrySession } = useAuth();
   const reportError = (error: unknown) => notify('Could not complete the action', error instanceof Error ? error.message : 'Please retry.');
   if (processingAuthLink || (loading && !recoveringPassword)) return <Splash />;
