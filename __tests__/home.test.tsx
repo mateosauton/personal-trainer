@@ -1,4 +1,6 @@
-import { render } from '@testing-library/react-native';
+jest.mock('@/lib/session/sync', () => ({ getSyncStatus: async (ownerId: string) => ({ ownerId, pending: 0, rejected: 0 }), retrySync: jest.fn(), getSetConflicts: async () => [], getLegacySetConflicts: async () => [] }));
+jest.mock('@/lib/session/workout', () => ({ workouts: { read: jest.fn(async () => null) } }));
+import { act, render } from '@testing-library/react-native';
 
 import type { Plan, PlanDay } from '@/lib/types';
 
@@ -72,25 +74,28 @@ const baseState = {
 const Home = require('@/app/(tabs)/index').default;
 
 describe('Home', () => {
-  it('greets the user and offers the profile behind the avatar', () => {
+  it('greets the user and offers the profile behind the avatar', async () => {
     mockState.value = baseState;
     const { getByText, getByLabelText } = render(<Home />);
+    await act(async () => { await Promise.resolve(); });
 
     expect(getByText('Welcome Mateo!')).toBeTruthy();
     expect(getByLabelText('Open your profile')).toBeTruthy();
   });
 
-  it('shows the streak and the session count', () => {
+  it('shows the streak and the session count', async () => {
     mockState.value = baseState;
     const { getByText } = render(<Home />);
+    await act(async () => { await Promise.resolve(); });
 
     expect(getByText('3 days')).toBeTruthy();
     expect(getByText('6')).toBeTruthy();
   });
 
-  it("estimates today's session before it is done", () => {
+  it("estimates today's session before it is done", async () => {
     mockState.value = baseState;
     const { getByText } = render(<Home />);
+    await act(async () => { await Promise.resolve(); });
 
     expect(getByText('Start session')).toBeTruthy();
     expect(getByText('Est. reps')).toBeTruthy();
@@ -98,33 +103,42 @@ describe('Home', () => {
     expect(getByText('28')).toBeTruthy();
   });
 
-  it('switches to what actually happened once today is logged', () => {
+  it('keeps completed totals separate from the next workout after rotation', async () => {
     mockState.value = {
       ...baseState,
+      nextDay: { ...day, id: 'day-2', name: 'Push B' },
       todaySessions: [
         { id: 's1', started_at: new Date().toISOString(), duration_s: 2400, rpe: 8, plan_days: { name: 'Push A', focus: 'Chest' } },
       ],
       todayTotals: { sets: 12, reps: 96, volumeKg: 4820 },
     };
     const { getByText, queryByText } = render(<Home />);
+    await act(async () => { await Promise.resolve(); });
 
     expect(getByText('Reps')).toBeTruthy();
     expect(getByText('96')).toBeTruthy();
     expect(getByText('40')).toBeTruthy(); // 2400s of session
-    expect(queryByText('Est. reps')).toBeNull();
+    expect(getByText("Today's training")).toBeTruthy();
+    expect(getByText('Up next')).toBeTruthy();
+    expect(getByText('Push A')).toBeTruthy();
+    expect(getByText('Push B')).toBeTruthy();
+    expect(getByText('Est. reps')).toBeTruthy();
+    expect(getByText('28')).toBeTruthy();
+    expect(queryByText("Today's session")).toBeNull();
   });
 });
 
 describe('Home exercise strip', () => {
-  it('shows a thumbnail per movement in the session', () => {
+  it('shows a thumbnail per movement in the session', async () => {
     mockState.value = baseState;
     const { getByTestId } = render(<Home />);
+    await act(async () => { await Promise.resolve(); });
 
     expect(getByTestId('exercise-strip')).toBeTruthy();
     expect(getByTestId('exercise-thumb-Barbell_Bench_Press_-_Medium_Grip')).toBeTruthy();
   });
 
-  it('shows each exercise once and counts the rest past six', () => {
+  it('shows each exercise once and counts the rest past six', async () => {
     const ids = [
       'Barbell_Bench_Press_-_Medium_Grip', 'Barbell_Bench_Press_-_Medium_Grip',
       'Barbell_Shoulder_Press', 'Arnold_Dumbbell_Press', 'Alternating_Floor_Press',
@@ -146,6 +160,7 @@ describe('Home exercise strip', () => {
       },
     };
     const { getByTestId, getByText, queryAllByTestId } = render(<Home />);
+    await act(async () => { await Promise.resolve(); });
 
     // Seven distinct movements: six thumbnails and a "+1".
     expect(queryAllByTestId(/^exercise-thumb-/)).toHaveLength(6);

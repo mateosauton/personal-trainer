@@ -7,12 +7,6 @@
     "icon": "./assets/icon.png",
     "scheme": "officegym",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0A0A0B"
-    },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "co.officegym.trainer",
@@ -27,7 +21,6 @@
         "monochromeImage": "./assets/android-icon-monochrome.png",
         "backgroundColor": "#0A0A0B"
       },
-      "edgeToEdgeEnabled": true,
       "package": "co.officegym.trainer"
     },
     "web": {
@@ -36,7 +29,16 @@
       "output": "single"
     },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      "expo-image",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#0A0A0B"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
@@ -49,7 +51,7 @@
     },
     "owner": "mrsauron",
     "runtimeVersion": {
-      "policy": "appVersion"
+      "policy": "fingerprint"
     },
     "updates": {
       "url": "https://u.expo.dev/aa04a2aa-93a1-4e8f-ad57-84ed3e8c2bf5"

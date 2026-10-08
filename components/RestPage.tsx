@@ -1,19 +1,31 @@
 import * as Haptics from 'expo-haptics';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  AppState,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { ExerciseMedia } from '@/components/ExerciseMedia';
-import { Body, Button, Chip, Heading, Muted, Overline, ProgressBar } from '@/components/ui';
+import {
+  Body,
+  Button,
+  Chip,
+  Heading,
+  Muted,
+  Overline,
+  ProgressBar,
+} from '@/components/ui';
 import { colors, radius, space, type } from '@/lib/theme';
 import { displayToKg, formatWeight, step } from '@/lib/units';
 import type { Exercise, Units } from '@/lib/types';
 
 /** What the user says they just did. Weight is in display units, not kg. */
-export interface SetDraft {
-  reps: number;
-  weight: number;
-  asBodyweight: boolean;
-}
+export type { WorkoutDraft as SetDraft } from '@/lib/session/set-values';
+import type { WorkoutDraft as SetDraft } from '@/lib/session/set-values';
 
 export interface UpNext {
   exercise: Exercise | null;
@@ -27,9 +39,12 @@ interface Props {
   exercise: Exercise | null;
   setLabel: string;
   targetReps: string;
+  targetSeconds?: number | null;
   units: Units;
   bodyweightKg: number | null;
+  bodyweightCaptured?: boolean;
   restSeconds: number;
+  restUntilMs?: number | null;
   draft: SetDraft;
   onChange: (next: SetDraft) => void;
   /** Null when the set just finished was the last one of the session. */
@@ -50,9 +65,12 @@ export function RestPage({
   exercise,
   setLabel,
   targetReps,
+  targetSeconds,
   units,
   bodyweightKg,
+  bodyweightCaptured = false,
   restSeconds,
+  restUntilMs,
   draft,
   onChange,
   next,
@@ -63,14 +81,23 @@ export function RestPage({
   const firedRef = useRef(false);
 
   useEffect(() => {
-    setRemaining(restSeconds);
+    const deadline = restUntilMs ?? Date.now() + restSeconds * 1000;
+    const tick = () =>
+      setRemaining(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
+    tick();
     firedRef.current = false;
     if (restSeconds <= 0) return;
-    const id = setInterval(() => {
-      setRemaining((value) => (value <= 0 ? 0 : value - 1));
-    }, 1000);
-    return () => clearInterval(id);
-  }, [restSeconds]);
+    // Timers may stop while the app is backgrounded. The deadline remains
+    // valid even when no interval callback ran during the rest.
+    const id = setInterval(tick, 1000);
+    const app = AppState.addEventListener('change', (state) => {
+      if (state === 'active') tick();
+    });
+    return () => {
+      clearInterval(id);
+      app.remove();
+    };
+  }, [restSeconds, restUntilMs]);
 
   // Buzz once at zero and then wait: auto-advancing would yank the screen away
   // from someone still walking back to the rack.
@@ -86,12 +113,17 @@ export function RestPage({
 
   const nudgeWeight = (delta: number) => {
     Haptics.selectionAsync();
-    onChange({ ...draft, weight: Math.max(0, Math.round((draft.weight + delta) * 10) / 10) });
+    onChange({
+      ...draft,
+      weight: Math.max(0, Math.round((draft.weight + delta) * 10) / 10),
+    });
   };
 
   const nudgeReps = (delta: number) => {
     Haptics.selectionAsync();
-    onChange({ ...draft, reps: Math.max(1, draft.reps + delta) });
+    onChange(draft.seconds != null
+      ? { ...draft, reps: 0, seconds: Math.min(86400, Math.max(1, draft.seconds + delta)) }
+      : { ...draft, reps: Math.min(1000, Math.max(1, draft.reps + delta)) });
   };
 
   const effectiveKg = draft.asBodyweight
@@ -100,7 +132,11 @@ export function RestPage({
       : null
     : displayToKg(draft.weight, units);
 
-  const advanceLabel = next ? (done ? 'Next set' : 'Skip rest') : 'Finish session';
+  const advanceLabel = next
+    ? done
+      ? 'Next set'
+      : 'Skip rest'
+    : 'Finish session';
 
   return (
     <ScrollView
@@ -113,7 +149,9 @@ export function RestPage({
         <Text style={styles.clock}>
           {minutes}:{String(secs).padStart(2, '0')}
         </Text>
-        <ProgressBar value={restSeconds <= 0 ? 1 : 1 - remaining / restSeconds} />
+        <ProgressBar
+          value={restSeconds <= 0 ? 1 : 1 - remaining / restSeconds}
+        />
       </View>
 
       <View style={styles.card}>
@@ -123,11 +161,15 @@ export function RestPage({
         </Heading>
         <Muted style={{ marginTop: space.xs }}>Target {targetReps}</Muted>
 
+        {targetSeconds != null && draft.seconds == null ? <View style={{ gap: space.sm, marginTop: space.md }}>
+          <Muted>This older set was saved as repetitions. Record seconds to correct it.</Muted>
+          <Button title="Record seconds" variant="surface" onPress={() => onChange({ ...draft, reps: 0, seconds: targetSeconds })} />
+        </View> : null}
         <View style={styles.field}>
-          <Overline>Reps</Overline>
+          <Overline>{draft.seconds != null ? 'Seconds' : 'Reps'}</Overline>
           <View style={styles.stepperRow}>
             <Stepper label="−" onPress={() => nudgeReps(-1)} />
-            <Text style={styles.numeral}>{draft.reps}</Text>
+            <Text style={styles.numeral}>{draft.seconds ?? draft.reps}</Text>
             <Stepper label="+" onPress={() => nudgeReps(1)} />
           </View>
         </View>
@@ -149,7 +191,9 @@ export function RestPage({
           <View style={styles.stepperRow}>
             <Stepper label="−" onPress={() => nudgeWeight(-step(units))} />
             <Text style={styles.numeral}>
-              {draft.weight % 1 === 0 ? draft.weight.toFixed(0) : draft.weight.toFixed(1)}
+              {draft.weight % 1 === 0
+                ? draft.weight.toFixed(0)
+                : draft.weight.toFixed(1)}
               <Text style={styles.unit}> {units}</Text>
             </Text>
             <Stepper label="+" onPress={() => nudgeWeight(step(units))} />
@@ -158,7 +202,9 @@ export function RestPage({
             <Muted style={{ marginTop: space.xs }}>
               {bodyweightKg != null
                 ? `Effective load ${formatWeight(effectiveKg, units)} (bodyweight + added)`
-                : 'Add your bodyweight in Profile to track effective load.'}
+                : bodyweightCaptured
+                  ? 'No bodyweight saved for this workout. Add it in Profile for future workouts.'
+                  : 'Add your bodyweight in Profile to track effective load.'}
             </Muted>
           ) : null}
         </View>
@@ -169,7 +215,11 @@ export function RestPage({
         {next ? (
           <View style={styles.upNextRow}>
             {next.exercise ? (
-              <ExerciseMedia exercise={next.exercise} paused style={styles.thumb} />
+              <ExerciseMedia
+                exercise={next.exercise}
+                paused
+                style={styles.thumb}
+              />
             ) : (
               <View style={[styles.thumb, styles.thumbEmpty]} />
             )}
@@ -201,7 +251,13 @@ export function RestPage({
   );
 }
 
-const Stepper = ({ label, onPress }: { label: string; onPress: () => void }) => (
+const Stepper = ({
+  label,
+  onPress,
+}: {
+  label: string;
+  onPress: () => void;
+}) => (
   <Pressable
     accessibilityRole="button"
     accessibilityLabel={label === '+' ? 'Increase' : 'Decrease'}
@@ -216,7 +272,12 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   content: { paddingTop: space.lg, paddingBottom: space.xl },
   clockBlock: { gap: space.xs },
-  clock: { ...type.display, fontSize: 56, lineHeight: 60, color: colors.accent },
+  clock: {
+    ...type.display,
+    fontSize: 56,
+    lineHeight: 60,
+    color: colors.accent,
+  },
   card: {
     marginTop: space.lg,
     backgroundColor: colors.surface,
@@ -226,8 +287,16 @@ const styles = StyleSheet.create({
     padding: space.lg,
   },
   field: { marginTop: space.lg, gap: space.sm },
-  labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  stepperRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  labelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  stepperRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   stepper: {
     width: 56,
     height: 56,
@@ -249,7 +318,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  upNextRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, marginTop: space.sm },
+  upNextRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    marginTop: space.sm,
+  },
   thumb: { width: 64, height: 64, borderRadius: radius.sm },
   thumbEmpty: { backgroundColor: colors.surface },
   upNextName: { ...type.body, fontWeight: '700' },

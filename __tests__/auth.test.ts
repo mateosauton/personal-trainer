@@ -6,3 +6,12 @@ describe('profileGate', () => {
     expect(profileGate(true, { status: 'ready', profile: null })).toBe('onboarding');
   });
 });
+
+// Signed-out users must never enter screens that assert a session.
+it.each([
+  { status: 'loading' as const },
+  { status: 'ready' as const, profile: null },
+  { status: 'error' as const, error: new Error('offline') },
+])('keeps the signed-out gate closed for $status profile state', (state) => {
+  expect(profileGate(false, state)).toBe('signedOut');
+});
