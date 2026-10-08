@@ -336,3 +336,15 @@ it('keeps unknown captured bodyweight unknown instead of retroactively using a n
   await waitFor(() => expect(mockApply).toHaveBeenCalled());
   expect(mockApply.mock.calls[0][3][0].topLoadKg).toBeNull();
 });
+
+
+it('shows timed history without applying repetition progression', async () => {
+  mockDay.mockResolvedValue({ ...mockPlan.days[0], blocks: [{ kind: 'straight', items: [{ id: 'item-1', reps_low: 6, reps_high: 8, seconds: 40 }] }] });
+  mockLogs.mockResolvedValue([{ exercise_id: exerciseId, plan_item_id: 'item-1', set_index: 1,
+    reps: null, seconds: 40, weight_kg: 60, is_bodyweight: false, added_load_kg: 0, rpe: null }]);
+  const screen = render(<Summary />);
+  await waitFor(() => expect(mockApply).toHaveBeenCalled());
+  expect(mockApply.mock.calls[0][2]).toEqual([]);
+  expect(mockApply.mock.calls[0][3][0]).toMatchObject({ seconds: 40, volumeKg: 0, isPr: false, verdict: null });
+  expect(screen.getByText('1 sets · 40s timed')).toBeTruthy();
+});

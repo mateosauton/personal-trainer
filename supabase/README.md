@@ -43,8 +43,9 @@ Timed set persistence is added by `20261007173759_timed_set_writes.sql` after
 `0007`. It stores `set_logs.seconds` with null reps, validates timed plan
 membership, and keeps missing/null seconds out of old receipt payloads so
 queued rep writes remain replayable. Existing history is not converted.
-The client still needs duration editing, recovery and summary support before
-this resolves #33 or a timed-set release can be verified.
+The paired client adds duration editing, recovery and summary support.
+Verify the native seconds editor and outage/restart replay before closing #33
+or promoting a timed-set release.
 
 Run the duration regression against a disposable local database after migrations:
 

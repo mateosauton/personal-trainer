@@ -103,6 +103,7 @@ export interface SetLog {
   exercise_id: string;
   set_index: number;
   reps: number | null;
+  seconds?: number | null;
   weight_kg: number | null;
   is_bodyweight: boolean;
   added_load_kg: number;

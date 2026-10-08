@@ -24,11 +24,8 @@ import { displayToKg, formatWeight, step } from '@/lib/units';
 import type { Exercise, Units } from '@/lib/types';
 
 /** What the user says they just did. Weight is in display units, not kg. */
-export interface SetDraft {
-  reps: number;
-  weight: number;
-  asBodyweight: boolean;
-}
+export type { WorkoutDraft as SetDraft } from '@/lib/session/set-values';
+import type { WorkoutDraft as SetDraft } from '@/lib/session/set-values';
 
 export interface UpNext {
   exercise: Exercise | null;
@@ -42,6 +39,7 @@ interface Props {
   exercise: Exercise | null;
   setLabel: string;
   targetReps: string;
+  targetSeconds?: number | null;
   units: Units;
   bodyweightKg: number | null;
   bodyweightCaptured?: boolean;
@@ -67,6 +65,7 @@ export function RestPage({
   exercise,
   setLabel,
   targetReps,
+  targetSeconds,
   units,
   bodyweightKg,
   bodyweightCaptured = false,
@@ -122,7 +121,9 @@ export function RestPage({
 
   const nudgeReps = (delta: number) => {
     Haptics.selectionAsync();
-    onChange({ ...draft, reps: Math.max(1, draft.reps + delta) });
+    onChange(draft.seconds != null
+      ? { ...draft, reps: 0, seconds: Math.min(86400, Math.max(1, draft.seconds + delta)) }
+      : { ...draft, reps: Math.min(1000, Math.max(1, draft.reps + delta)) });
   };
 
   const effectiveKg = draft.asBodyweight
@@ -160,11 +161,15 @@ export function RestPage({
         </Heading>
         <Muted style={{ marginTop: space.xs }}>Target {targetReps}</Muted>
 
+        {targetSeconds != null && draft.seconds == null ? <View style={{ gap: space.sm, marginTop: space.md }}>
+          <Muted>This older set was saved as repetitions. Record seconds to correct it.</Muted>
+          <Button title="Record seconds" variant="surface" onPress={() => onChange({ ...draft, reps: 0, seconds: targetSeconds })} />
+        </View> : null}
         <View style={styles.field}>
-          <Overline>Reps</Overline>
+          <Overline>{draft.seconds != null ? 'Seconds' : 'Reps'}</Overline>
           <View style={styles.stepperRow}>
             <Stepper label="−" onPress={() => nudgeReps(-1)} />
-            <Text style={styles.numeral}>{draft.reps}</Text>
+            <Text style={styles.numeral}>{draft.seconds ?? draft.reps}</Text>
             <Stepper label="+" onPress={() => nudgeReps(1)} />
           </View>
         </View>
