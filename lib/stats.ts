@@ -5,6 +5,7 @@ import { effectiveLoadKg } from './units';
 /** A logged set as it comes back from `set_logs`. */
 export interface LoggedSet {
   reps: number | null;
+  seconds?: number | null;
   weight_kg: number | null;
   is_bodyweight: boolean;
   added_load_kg: number;
@@ -72,7 +73,7 @@ export function sessionTotals(logs: LoggedSet[], bodyweightKg: number | null): T
   let reps = 0;
   let volumeKg = 0;
   for (const log of logs) {
-    const setReps = log.reps ?? 0;
+    const setReps = log.seconds != null ? 0 : log.reps ?? 0;
     reps += setReps;
     const load = effectiveLoadKg(log, bodyweightKg);
     if (load != null) volumeKg += load * setReps;

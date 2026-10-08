@@ -330,7 +330,7 @@ export async function getSetLogsForSessions(sessionIds: string[]) {
   if (sessionIds.length === 0) return [];
   const { data, error } = await supabase
     .from('set_logs')
-    .select('session_id, exercise_id, reps, weight_kg, is_bodyweight, added_load_kg')
+    .select('session_id, exercise_id, reps, seconds, weight_kg, is_bodyweight, added_load_kg')
     .in('session_id', sessionIds);
   if (error) throw error;
   return data ?? [];
@@ -360,6 +360,7 @@ export interface SessionSummaryLine {
   name: string;
   sets: number;
   volumeKg: number;
+  seconds?: number;
   topLoadKg: number | null;
   verdict: 'progress' | 'hold' | 'deload' | null;
   isPr: boolean;

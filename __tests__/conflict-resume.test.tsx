@@ -166,3 +166,30 @@ it('preserves an unchanged old rest offline and finishes only after historical r
   const journal = JSON.parse(mockValues.get(`office-gym.set-journal.v1.${owner}`)!);
   expect(journal.legacyComparisons[0].draftCopy).toMatchObject({ draft: { reps: 8 }, savedDraft: { reps: 8 }, units: 'kg' });
 });
+
+
+it('keeps the selected server duration through conflict resolution and restarted rest', async () => {
+  mockValues.clear(); setSyncAccount(owner);
+  const saved = fixture();
+  saved.day.blocks[0].items[0].seconds = 40;
+  saved.draft = { reps: 0, seconds: 45, weight: 60, asBodyweight: false };
+  saved.savedDraft = { reps: 0, seconds: 40, weight: 60, asBodyweight: false };
+  await workouts.create(saved);
+  const set = { plan_item_id: item, exercise_id: 'unknown', set_index: 1, reps: null, seconds: 40,
+    weight_kg: 60, is_bodyweight: false, added_load_kg: 0, rpe: null };
+  mockSnapshot.mockResolvedValue({ logs: [{ id: '00000099-1111-4111-8111-000000000099', ...set, completed_at: '2026-09-01T10:00:00.000Z' }],
+    versions: [{ logId: '00000099-1111-4111-8111-000000000099', serverVersion: 7 }] });
+  mockLog.mockRejectedValue({ code: 'PT409' });
+  await queueSet(owner, session, set); await flushOutbox();
+  const [blocked] = await getSetConflicts(owner);
+  mockServer.mockResolvedValue({ serverVersion: 4, set: { ...set, seconds: 50 }, eventAt: '2026-10-06T11:00:00Z' });
+  const review = await reviewSetConflict(owner, blocked.write);
+  mockLog.mockResolvedValue({ status: 'applied', serverVersion: 5 });
+  await resolveSetConflict(owner, review, 'server'); await flushOutbox();
+  expect((await workouts.read(owner))?.draft).toMatchObject({ seconds: 50, reps: 0 });
+  const resumed = render(<Run />);
+  await resumed.findByText('50');
+  expect(resumed.getByText('Seconds')).toBeTruthy();
+  const journal = JSON.parse(mockValues.get(`office-gym.set-journal.v1.${owner}`)!);
+  expect(journal.comparisons[0].draftCopy.draft).toMatchObject({ seconds: 45, reps: 0 });
+});

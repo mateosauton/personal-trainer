@@ -5,6 +5,7 @@ import { Body, Button, Card, Overline } from '@/components/ui';
 import { getSyncStatus, retrySync, getSetConflicts, getLegacySetConflicts, reviewSetConflict, resolveSetConflict, type SetConflictReview } from '@/lib/session/sync';
 import type { BlockedWrite } from '@/lib/session/set-journal';
 import type { SetLog } from '@/lib/types';
+import { measurementLabel } from '@/lib/session/set-values';
 import { exerciseName } from '@/lib/catalog';
 import { buildQueue } from '@/lib/session/queue';
 import { space } from '@/lib/theme';
@@ -22,7 +23,7 @@ type State = {
 export function SyncRecovery({ userId }: { userId: string }) {
   return <AccountSyncRecovery key={userId} userId={userId} />;
 }
-const setDescription = (set: SetLog) => `${set.reps ?? 'No'} reps · ${set.is_bodyweight
+const setDescription = (set: SetLog) => `${measurementLabel(set)} · ${set.is_bodyweight
   ? `bodyweight + ${set.added_load_kg} kg` : `${set.weight_kg ?? 'No load'}${set.weight_kg === null ? '' : ' kg'}`}`;
 function AccountSyncRecovery({ userId }: { userId: string }) {
   const [state, setState] = useState<State | null>(null);
@@ -136,7 +137,7 @@ function AccountSyncRecovery({ userId }: { userId: string }) {
           <Overline>{exerciseName(review.write.set.exercise_id)} · Set {review.write.set.set_index}</Overline>
           <Body>Saved: {setDescription(review.write.set)}</Body>
           <Body>Server: {review.server ? setDescription(review.server.set) : 'No saved server set'}</Body>
-          {unsentDraft ? <Body>Unsent rest draft: {unsentDraft.reps} reps · {unsentDraft.asBodyweight ? 'bodyweight + ' : ''}{unsentDraft.weight} {local!.units}. Your choice will replace this draft; a recovery copy is kept.</Body> : null}
+          {unsentDraft ? <Body>Unsent rest draft: {measurementLabel(unsentDraft)} · {unsentDraft.asBodyweight ? 'bodyweight + ' : ''}{unsentDraft.weight} {local!.units}. Your choice will replace this draft; a recovery copy is kept.</Body> : null}
           {review.code === 'PT410' ? (
             <Body>This workout is finalized. Your saved edit is preserved for review.</Body>
           ) : (

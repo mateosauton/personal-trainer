@@ -86,3 +86,11 @@ describe('calendar helpers', () => {
     expect(daysSinceLast(new Set(), TODAY)).toBeNull();
   });
 });
+
+
+it('counts mixed timed and rep sets without counting seconds as reps or volume', () => {
+  expect(sessionTotals([
+    { reps: null, seconds: 40, weight_kg: 60, is_bodyweight: false, added_load_kg: 0 },
+    { reps: 8, weight_kg: 60, is_bodyweight: false, added_load_kg: 0 },
+  ], null)).toEqual({ sets: 2, reps: 8, volumeKg: 480 });
+});

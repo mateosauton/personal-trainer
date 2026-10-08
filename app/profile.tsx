@@ -10,6 +10,7 @@ import { NumberField } from '@/components/NumberField';
 import { Button, Card, Chip, Display, Muted, Overline, Screen } from '@/components/ui';
 import { confirm, notify } from '@/lib/alerts';
 import { useAuth, useUserId } from '@/lib/auth';
+import { exportAccountData } from '@/lib/account-export';
 import { savePlan, updateProfile, uploadAvatar } from '@/lib/db/queries';
 import { ALL_EQUIPMENT, generatePlan } from '@/lib/plan/generate';
 import { colors, radius, space, type, webFocusRing } from '@/lib/theme';
@@ -36,6 +37,18 @@ export default function ProfileTab() {
   );
   const [saving, setSaving] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const exportData = async () => {
+    setExporting(true);
+    try {
+      await exportAccountData(userId);
+    } catch (error) {
+      notify('Could not export', error instanceof Error ? error.message : 'Please retry.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const number = (value: string) => {
     const parsed = Number.parseFloat(value);
@@ -212,6 +225,11 @@ export default function ProfileTab() {
         loading={regenerating}
         style={{ marginTop: space.md }}
       />
+      <Card style={{ marginTop: space.lg, gap: space.md }}>
+        <Overline>Your data</Overline>
+        <Muted>Save your synced profile, plans and workout history as JSON. Unsynced changes and photo files are not included.</Muted>
+        <Button title="Export synced data" variant="surface" onPress={exportData} loading={exporting} />
+      </Card>
       <Button variant="ghost" title="Sign out" onPress={() => { void signOut().catch((error: unknown) => notify('Could not sign out', error instanceof Error ? error.message : 'Please retry.')); }} style={{ marginTop: space.sm }} />
 
       <Attribution />

@@ -338,3 +338,15 @@ it('ignores an older intra-round rest deadline when resuming a superset', async 
   expect(screen.getByText('0:00')).toBeTruthy();
   expect(screen.queryByText('Skip rest')).toBeNull();
 });
+
+
+it('seeds and queues the prescribed timed duration instead of rep history', async () => {
+  saved = { ...saved, phase: 'work', draft: null, savedDraft: null, restUntilMs: null };
+  saved.day.blocks[0].items[0].seconds = 40;
+  const screen = render(<Run />);
+  await screen.findByText('Complete set');
+  fireEvent.press(screen.getByText('Complete set'));
+  await screen.findByText('Skip rest');
+  expect(mockSet).toHaveBeenCalledWith('A', 'session-A', expect.objectContaining({ seconds: 40, reps: null }));
+  expect(saved.draft).toMatchObject({ seconds: 40, reps: 0 });
+});

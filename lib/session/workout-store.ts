@@ -3,11 +3,8 @@ import type { PlanDay, Units } from '@/lib/types';
 import { buildQueue } from './queue';
 import { nativeJournalLock, type JournalLock } from './set-journal';
 
-export interface WorkoutDraft {
-  reps: number;
-  weight: number;
-  asBodyweight: boolean;
-}
+import { validDraft, validSeconds, type WorkoutDraft } from './set-values';
+export type { WorkoutDraft } from './set-values';
 export interface SavedWorkout {
   version: 1;
   recoveryCopies?: Pick<SavedWorkout, 'cursor' | 'phase' | 'draft' | 'savedDraft' | 'progress' | 'restUntilMs' | 'endedAtMs'>[];
@@ -51,12 +48,7 @@ const finite = (value: unknown): value is number =>
 const integer = (value: unknown, min = 0, max = 100) =>
   finite(value) && Number.isInteger(value) && value >= min && value <= max;
 const text = (value: unknown) => typeof value === 'string' && value.length > 0;
-const draft = (value: unknown) =>
-  record(value) &&
-  integer(value.reps, 0, 1000) &&
-  finite(value.weight) &&
-  value.weight >= 0 &&
-  typeof value.asBodyweight === 'boolean';
+
 
 export function validateWorkout(
   value: unknown,
@@ -116,7 +108,8 @@ export function validateWorkout(
         !text(i.exercise_id) ||
         !integer(i.sets, 1) ||
         !integer(i.reps_low, 0, 1000) ||
-        !integer(i.reps_high, 0, 1000)
+        !integer(i.reps_high, 0, 1000) ||
+        (i.seconds != null && !validSeconds(i.seconds))
       )
         return invalid();
   }
@@ -135,8 +128,8 @@ export function validateWorkout(
     value.cursor > buildQueue(value.day as unknown as PlanDay).length ||
     (value.cursor === buildQueue(value.day as unknown as PlanDay).length) !==
       (value.endedAtMs !== null) ||
-    (value.draft !== null && !draft(value.draft)) ||
-    (value.savedDraft !== null && !draft(value.savedDraft)) ||
+    (value.draft !== null && !validDraft(value.draft)) ||
+    (value.savedDraft !== null && !validDraft(value.savedDraft)) ||
     (value.restUntilMs !== null && !finite(value.restUntilMs)) ||
     (value.phase === 'resting' &&
       (value.draft === null ||

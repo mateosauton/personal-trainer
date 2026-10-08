@@ -19,6 +19,7 @@ import { storageLock } from './storage-lock';
 import { archiveLegacyProgress } from './legacy-progress';
 import { workouts } from './workout';
 import { buildQueue } from './queue';
+import { draftMeasurement } from './set-values';
 import { kgToDisplay, displayToKg } from '@/lib/units';
 import { validateWorkout, type SavedWorkout, type WorkoutPatch } from './workout-store';
 
@@ -408,9 +409,9 @@ export async function resolveSetConflict(userId: string, review: SetConflictRevi
   if (local?.sessionId === review.write.sessionId && local.phase === 'resting'
     && entry?.item.id === chosen.plan_item_id && entry.set === chosen.set_index) {
     const kg = chosen.is_bodyweight ? chosen.added_load_kg : chosen.weight_kg;
-    if (chosen.reps === null || kg === null)
+    if ((chosen.reps === null && chosen.seconds == null) || kg === null)
       throw new Error('This set has incomplete reps or load. Your saved draft is preserved.');
-    const draft = { reps: chosen.reps, weight: kgToDisplay(kg, local.units), asBodyweight: chosen.is_bodyweight };
+    const draft = { reps: chosen.reps ?? 0, ...(chosen.seconds != null ? { seconds: chosen.seconds } : {}), weight: kgToDisplay(kg, local.units), asBodyweight: chosen.is_bodyweight };
     const previous = local.progress.find(row => row.exercise_id === chosen.exercise_id);
     const row = { exercise_id: chosen.exercise_id, last_weight_kg: kg, last_reps: chosen.reps,
       best_weight_kg: previous?.best_weight_kg ?? null, best_e1rm: previous?.best_e1rm ?? null,
@@ -441,7 +442,7 @@ export async function stageLegacyRestRecovery(userId: string, expected: SavedWor
     throw new Error('This saved rest is unavailable for recovery.');
   const kg = displayToKg(local.draft.weight, local.units);
   const set: SetLog = { plan_item_id: entry.item.id.toLowerCase(), exercise_id: entry.item.exercise_id,
-    set_index: entry.set, reps: local.draft.reps, weight_kg: local.draft.asBodyweight ? null : kg,
+    set_index: entry.set, ...draftMeasurement(local.draft), weight_kg: local.draft.asBodyweight ? null : kg,
     is_bodyweight: local.draft.asBodyweight, added_load_kg: local.draft.asBodyweight ? kg : 0, rpe: null };
   const sessionId = local.sessionId.toLowerCase();
   const id = `set:${sessionId}:${set.plan_item_id}:${set.set_index}`;
@@ -558,8 +559,8 @@ export async function resolveLegacySetConflict(userId: string, review: LegacySet
   if (local?.sessionId === review.saved.sessionId && local.phase === 'resting'
     && entry?.item.id === chosen.plan_item_id && entry.set === chosen.set_index) {
     const kg = chosen.is_bodyweight ? chosen.added_load_kg : chosen.weight_kg;
-    if (chosen.reps === null || kg === null) throw new Error('This set has incomplete reps or load. Your saved draft is preserved.');
-    const draft = { reps: chosen.reps, weight: kgToDisplay(kg, local.units), asBodyweight: chosen.is_bodyweight };
+    if ((chosen.reps === null && chosen.seconds == null) || kg === null) throw new Error('This set has incomplete reps or load. Your saved draft is preserved.');
+    const draft = { reps: chosen.reps ?? 0, ...(chosen.seconds != null ? { seconds: chosen.seconds } : {}), weight: kgToDisplay(kg, local.units), asBodyweight: chosen.is_bodyweight };
     const previous = local.progress.find(row => row.exercise_id === chosen.exercise_id);
     patch = { draft, progress: [...local.progress.filter(row => row.exercise_id !== chosen.exercise_id),
       { exercise_id: chosen.exercise_id, last_weight_kg: kg, last_reps: chosen.reps,

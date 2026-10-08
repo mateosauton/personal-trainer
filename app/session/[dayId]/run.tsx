@@ -45,11 +45,13 @@ import { displayToKg, formatWeight, kgToDisplay } from '@/lib/units';
 import { workouts } from '@/lib/session/workout';
 import type { SavedWorkout } from '@/lib/session/workout-store';
 import type { SetLog } from '@/lib/types';
+import { draftMeasurement } from '@/lib/session/set-values';
 
 const sameDraft = (a: SetDraft | null, b: SetDraft | null) =>
   a != null &&
   b != null &&
   a.reps === b.reps &&
+  (a.seconds ?? null) === (b.seconds ?? null) &&
   a.weight === b.weight &&
   a.asBodyweight === b.asBodyweight;
 
@@ -160,7 +162,7 @@ export default function SessionRun() {
         const kg = displayToKg(value.weight, saved.units);
         const observed: SetLog[] = [{
           plan_item_id: restingEntry.item.id, exercise_id: restingEntry.item.exercise_id,
-          set_index: restingEntry.set, reps: value.reps,
+          set_index: restingEntry.set, ...draftMeasurement(value),
           weight_kg: value.asBodyweight ? null : kg, is_bodyweight: value.asBodyweight,
           added_load_kg: value.asBodyweight ? kg : 0, rpe: null,
         }];
@@ -263,7 +265,7 @@ export default function SessionRun() {
       plan_item_id: target.item.id,
       exercise_id: target.item.exercise_id,
       set_index: target.set,
-      reps: value.reps,
+      ...draftMeasurement(value),
       weight_kg: value.asBodyweight ? null : kg,
       is_bodyweight: value.asBodyweight,
       added_load_kg: value.asBodyweight ? kg : 0,
@@ -287,7 +289,7 @@ export default function SessionRun() {
     next.set(target.item.exercise_id, {
       exercise_id: target.item.exercise_id,
       last_weight_kg: kg,
-      last_reps: value.reps,
+      last_reps: draftMeasurement(value).reps,
       best_weight_kg: previous?.best_weight_kg ?? null,
       best_e1rm: previous?.best_e1rm ?? null,
       miss_streak: previous?.miss_streak ?? 0,
@@ -297,7 +299,8 @@ export default function SessionRun() {
   const completeSet = async () => {
     if (!entry || !active || busy) return;
     const seed: SetDraft = {
-      reps: known?.last_reps ?? entry.item.reps_high ?? 10,
+      reps: entry.item.seconds != null ? 0 : known?.last_reps ?? entry.item.reps_high ?? 10,
+      ...(entry.item.seconds != null ? { seconds: entry.item.seconds } : {}),
       weight:
         known?.last_weight_kg != null
           ? Math.round(kgToDisplay(known.last_weight_kg, units) * 10) / 10
@@ -555,6 +558,7 @@ export default function SessionRun() {
             exercise={exercise ?? null}
             setLabel={`Set ${entry.set} of ${entry.setsTotal}`}
             targetReps={targetReps}
+            targetSeconds={entry.item.seconds}
             units={units}
             bodyweightCaptured={workout?.bodyweightKg !== undefined}
             bodyweightKg={workout?.bodyweightKg !== undefined ? workout.bodyweightKg : profile?.bodyweight_kg ?? null}

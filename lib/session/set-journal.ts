@@ -1,4 +1,4 @@
-import type { WorkoutDraft } from './workout-store';
+import { validDraft, validSeconds, type WorkoutDraft } from './set-values';
 import type { SetLog } from '@/lib/types';
 import type { OutboxStorage } from './outbox';
 
@@ -92,6 +92,7 @@ export const validSet = (v: unknown): v is SetLog =>
   bounded(v.set_index, 1000, true) &&
   v.set_index >= 1 &&
   (v.reps === null || bounded(v.reps, 1000, true)) &&
+  (v.seconds == null || (validSeconds(v.seconds) && v.reps === null)) &&
   (v.weight_kg === null || bounded(v.weight_kg, 100000)) &&
   typeof v.is_bodyweight === 'boolean' &&
   bounded(v.added_load_kg, 100000) &&
@@ -105,6 +106,7 @@ const canonicalSet = (set: SetLog): SetLog => {
     exercise_id: set.exercise_id,
     set_index: set.set_index,
     reps: set.reps,
+    ...(set.seconds != null ? { seconds: set.seconds } : {}),
     weight_kg: set.weight_kg,
     is_bodyweight: set.is_bodyweight,
     added_load_kg: set.added_load_kg,
@@ -126,9 +128,7 @@ const validWrite = (v: unknown, owner: string): v is JournalWrite =>
 const same = (a: JournalWrite, b: JournalWrite) =>
   JSON.stringify(a) === JSON.stringify(b);
 
-const validDraftCopy = (value: unknown) => value === null || (object(value)
-  && bounded(value.reps, 1000, true) && typeof value.weight === 'number'
-  && Number.isFinite(value.weight) && value.weight >= 0 && typeof value.asBodyweight === 'boolean');
+const validDraftCopy = (value: unknown) => value === null || validDraft(value);
 const validComparison = (value: unknown, owner: string): value is SetComparison =>
   object(value) && validWrite(value.saved, owner)
   && ['saved', 'server'].includes(value.choice)
