@@ -217,7 +217,6 @@ export function RestPage({
             {next.exercise ? (
               <ExerciseMedia
                 exercise={next.exercise}
-                paused
                 style={styles.thumb}
               />
             ) : (

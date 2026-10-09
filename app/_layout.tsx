@@ -90,7 +90,7 @@ function Routes() {
         <Stack.Screen
           name="session"
           options={{
-            animation: 'slide_from_bottom',
+            animation: 'none',
             presentation: 'fullScreenModal',
             gestureEnabled: false,
           }}

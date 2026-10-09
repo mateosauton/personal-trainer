@@ -2,11 +2,6 @@ import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
-import Animated, {
-  ReduceMotion,
-  SlideInRight,
-  SlideOutLeft,
-} from 'react-native-reanimated';
 
 import { ExerciseMedia } from '@/components/ExerciseMedia';
 import { Icon } from '@/components/Icon';
@@ -40,7 +35,6 @@ import {
 } from '@/lib/session/sync';
 import { buildQueue, partnerOf, restAfter, type QueueEntry } from '@/lib/session/queue';
 import { colors, radius, space, type } from '@/lib/theme';
-import { motion } from '@/lib/motion';
 import { displayToKg, formatWeight, kgToDisplay } from '@/lib/units';
 import { workouts } from '@/lib/session/workout';
 import type { SavedWorkout } from '@/lib/session/workout-store';
@@ -546,14 +540,7 @@ export default function SessionRun() {
           onPress={() => { void reviewSavedSet(); }} />
       </> : null}
       {resting ? (
-        <Animated.View
-          key={`rest:${entry.key}`}
-          entering={SlideInRight.duration(motion.base)
-            .springify()
-            .damping(motion.settle.damping)
-            .reduceMotion(ReduceMotion.System)}
-          style={styles.flex}
-        >
+        <View key={`rest:${entry.key}`} style={styles.flex}>
           <RestPage
             exercise={exercise ?? null}
             setLabel={`Set ${entry.set} of ${entry.setsTotal}`}
@@ -570,20 +557,10 @@ export default function SessionRun() {
             onAdvance={leaveRest}
             advancing={busy}
           />
-        </Animated.View>
+        </View>
       ) : (
         <>
-          <Animated.View
-            key={entry.key}
-            entering={SlideInRight.duration(motion.base)
-              .springify()
-              .damping(motion.settle.damping)
-              .reduceMotion(ReduceMotion.System)}
-            exiting={SlideOutLeft.duration(motion.fast).reduceMotion(
-              ReduceMotion.System,
-            )}
-            style={styles.body}
-          >
+          <View key={entry.key} style={styles.body}>
             {exercise ? (
               <ExerciseMedia exercise={exercise} style={styles.media} />
             ) : null}
@@ -609,7 +586,7 @@ export default function SessionRun() {
                 </Body>
               </View>
             ) : null}
-          </Animated.View>
+          </View>
 
           <View style={styles.footer}>
             <Overline style={{ textAlign: 'center' }}>

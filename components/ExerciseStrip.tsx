@@ -8,12 +8,7 @@ import type { Exercise } from '@/lib/types';
 /** Past this many the row stops being a glance and starts being a list. */
 const MAX = 6;
 
-/**
- * A row of thumbnails for the movements in a session: what you are about to do,
- * recognisable before the names are read. The stills are held on their start
- * frame -- a strip of six looping crossfades would pull the eye off the button
- * underneath.
- */
+/** Static thumbnails make a session's movements recognisable at a glance. */
 export function ExerciseStrip({
   exercises,
   max = MAX,
@@ -40,7 +35,6 @@ export function ExerciseStrip({
           key={exercise.id}
           testID={`exercise-thumb-${exercise.id}`}
           exercise={exercise}
-          paused
           style={{ ...styles.thumb, ...box }}
         />
       ))}
