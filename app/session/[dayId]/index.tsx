@@ -197,7 +197,6 @@ export default function SessionOverview() {
                     <ExerciseMedia
                       exercise={exercise}
                       style={styles.thumb}
-                      paused
                     />
                     <View style={{ flex: 1, gap: 2 }}>
                       <Body style={styles.itemName} numberOfLines={2}>

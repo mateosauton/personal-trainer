@@ -150,7 +150,7 @@ export default function PlanTab() {
                 accessibilityLabel={`${day.name} details`}
                 style={styles.cardHead}
               >
-                {cover ? <ExerciseMedia exercise={cover} style={styles.thumb} paused /> : null}
+                {cover ? <ExerciseMedia exercise={cover} style={styles.thumb} /> : null}
                 <View style={{ flex: 1, gap: 2 }}>
                   <Overline style={isNext ? { color: colors.accent } : undefined}>
                     {isNext ? 'Up next' : `Day ${day.day_index + 1}`}
