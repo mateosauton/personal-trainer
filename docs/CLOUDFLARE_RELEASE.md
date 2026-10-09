@@ -9,7 +9,7 @@ Supabase remains the backend. Native releases use Expo/EAS.
 - Worker: `personal-trainer`.
 - Repository: `mateosauton/personal-trainer`, production branch `master`.
 - Root directory: `/`.
-- Node: 22.
+- Node: 22, selected by `.nvmrc`.
 - Deploy command: `npx wrangler deploy`.
 - Preview command: `npx wrangler versions upload`.
 - Exclude `master`, `gh-pages`, and `cdn` from non-production builds.

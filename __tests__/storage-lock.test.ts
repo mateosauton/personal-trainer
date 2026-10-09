@@ -2,7 +2,9 @@ import { Platform } from 'react-native';
 import { storageLock } from '@/lib/session/storage-lock';
 it('fails closed on web if Web Locks are unavailable', async () => {
   const previous = Platform.OS;
+  const nav = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: {} });
   try {
     const work = jest.fn(async () => 1);
     await expect(storageLock('fixture', work)).rejects.toThrow('Web Locks');
@@ -12,6 +14,8 @@ it('fails closed on web if Web Locks are unavailable', async () => {
       configurable: true,
       value: previous,
     });
+    if (nav) Object.defineProperty(globalThis, 'navigator', nav);
+    else Reflect.deleteProperty(globalThis, 'navigator');
   }
 });
 it('passes a storage-scoped exclusive lock to the browser API', async () => {
