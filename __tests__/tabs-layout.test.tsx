@@ -1,4 +1,6 @@
 import { render } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
+import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 
 const capturedOptions: { current: Record<string, unknown> | null } = { current: null };
 
@@ -23,8 +25,12 @@ import TabsLayout from '@/app/(tabs)/_layout';
 
 describe('TabsLayout', () => {
   it('uses a compact, raised navigation dock', () => {
-    render(<TabsLayout />);
-    const bar = capturedOptions.current?.tabBarStyle as Record<string, number | string>;
+    render(
+      <SafeAreaInsetsContext.Provider value={{ top: 0, right: 0, bottom: 0, left: 0 }}>
+        <TabsLayout />
+      </SafeAreaInsetsContext.Provider>,
+    );
+    const bar = StyleSheet.flatten(capturedOptions.current?.tabBarStyle as object) as Record<string, number | string>;
 
     expect(bar.height).toBe(64);
     expect(bar.position).toBe('absolute');
