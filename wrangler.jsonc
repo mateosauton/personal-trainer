@@ -7,6 +7,6 @@
     "not_found_handling": "single-page-application"
   },
   "build": {
-    "command": "npx expo export --platform web"
+    "command": "npm run check:web && npm run build:web"
   }
 }
