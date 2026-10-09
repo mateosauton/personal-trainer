@@ -26,7 +26,7 @@ export default function TabsLayout() {
         headerShown: false,
         tabBarStyle: styles.bar,
         tabBarShowLabel: true,
-        sceneStyle: { backgroundColor: colors.bg },
+        sceneStyle: { backgroundColor: colors.bg, paddingBottom: 64 + space.lg },
       }}
     >
       <Tabs.Screen
