@@ -1,17 +1,23 @@
 # Workout recovery
 
-An active workout is saved on the device under its account ID. Home offers Resume workout even when the dashboard cannot load. Beginning another workout returns to the saved workout until its summary has been saved.
+The account's last usable plan and progression are cached on the device. Home and Plan can open the last confirmed next workout while offline. Recent changes from another device appear after reconnecting. A first plan still requires online setup.
 
-Before opening the player, the overview saves the new session snapshot. A failed local save offers Retry start using the same session ID.
+Begin saves a workout snapshot and client-assigned UUID before any server request. The snapshot includes the original day, units, bodyweight, progression, local training date and timezone. Retrying Begin resumes the same saved workout. Failed local storage prevents a network start.
 
-The snapshot contains the original training day, units, exercise progression, current set, drafts, rest deadline, and start/end times. Cursor changes are persisted before the player advances. Restarting the app restores that snapshot without fetching the plan. Rest timers use the original deadline; workout duration includes time spent paused and stops when the last set is completed.
+The outbox replays `start_session` before sets. The additive `20261022224931_idempotent_session_start.sql` migration makes repeated starts acknowledge the same UUID and captured context. It derives ownership from authentication and rejects changed or foreign starts. Retired owned plan days remain valid for a workout begun from an offline cache.
 
-A successful server progression receipt clears the matching snapshot. Failed summary synchronization keeps it for retry. A completed session opened without a snapshot goes directly to its summary. Account changes cancel pending navigation and hide the previous account's workout.
+Cursor changes, drafts, recorded sets and timer deadlines remain durable. Restart restores the original snapshot without reloading the plan. Paused timers retain their offsets, and a completed workout keeps its frozen active duration.
 
-Storage errors keep the current step visible. Invalid snapshots are preserved rather than silently deleted, and the UI offers retry. Explicit recovery/export for damaged snapshots remains follow-up work.
+Ending a workout leaves a durable finalization intent in that snapshot. Account sync reconstructs missing start, set and finalization operations after restart. Finalization waits for acknowledged sets, checks the server's complete version snapshot, and saves progression plus its existing idempotent receipt. It runs independently of the summary screen. Conflicting sets block finalization and stay available for explicit review.
 
-## Verification and remaining work
+The summary immediately displays recorded local sets while offline. Pending results do not claim a personal record or a next-load change. Confirmed progression receipts are saved locally before clearing the matching workout snapshot. A concurrent local change or failed storage write preserves the draft. Beginning another workout returns to the saved workout until finalization succeeds.
 
-Automated checks cover restarting storage, offline restoration, corrected sets, saved units, elapsed rest deadlines, stable completion duration, failed persistence, and account-switch navigation. These component checks do not establish a full flow on an installed native build.
+Transient sync failures retry up to six times with exponential backoff and jitter, capped at 30 seconds between attempts. Enqueue, connectivity and foreground events can start a new retry cycle. Backgrounding, sign-out and account changes stop scheduled retries. Delivery resumes when the app becomes active.
 
-Starting a new workout and calculating a new summary still require the backend. This change does not resolve delayed server writes overwriting newer set corrections. Production schema changes, native authentication redirects, and a fresh native release verification remain launch gates.
+## Verification and deployment
+
+Recovery tests cover offline starts, parent-before-set replay, missing queue reconstruction, lost responses, local storage failures, screen-independent finalization, receipt reuse, pause duration and account isolation. Component checks cover cached-plan entry and pending summaries. Database checks cover ownership, invalid context, replay and immutable start identity.
+
+`npm run test:recovery-db` uses disposable PGlite databases by default. Set `PT_LIFECYCLE_DB_URL` and `PT_ORDERING_DB_URL` to local PostgreSQL to run separate-connection start and set-ordering races. CI supplies a disposable PostgreSQL service. These checks do not verify hosted Auth, production schema or installed native behavior.
+
+Deploy the additive migration before releasing this client. This PR does not apply production SQL or publish an app update. Existing saved workouts and old completion queue entries remain readable. Invalid saved data is preserved for recovery.

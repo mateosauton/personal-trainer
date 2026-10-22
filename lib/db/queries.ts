@@ -315,11 +315,12 @@ export interface ProgressRow {
 }
 
 /** Prefills the weight sheet, so the common case is one tap to accept. */
-export async function getProgress(userId: string): Promise<Map<string, ProgressRow>> {
-  const { data, error } = await supabase
+export async function getProgress(userId: string, client = supabase, signal?: AbortSignal): Promise<Map<string, ProgressRow>> {
+  const request = client
     .from('exercise_progress')
     .select('exercise_id, last_weight_kg, last_reps, best_weight_kg, best_e1rm, miss_streak')
     .eq('user_id', userId);
+  const { data, error } = await (signal ? request.abortSignal(signal) : request);
   if (error) throw error;
   return new Map((data ?? []).map((row) => [row.exercise_id, row as ProgressRow]));
 }
@@ -417,12 +418,13 @@ export async function getSetLogsForSessions(sessionIds: string[]) {
 
 
 /** The session's original day remains valid after the active plan changes. */
-export async function getSessionPlanDay(sessionId: string, userId: string): Promise<PlanDay | null> {
-  const { data, error } = await supabase.from('sessions').select(`
+export async function getSessionPlanDay(sessionId: string, userId: string, client = supabase, signal?: AbortSignal): Promise<PlanDay | null> {
+  const request = client.from('sessions').select(`
     plan_days (id, day_index, name, focus, plans(split),
       plan_blocks (id, block_index, kind, title, rounds, rest_seconds,
         plan_items (id, item_index, exercise_id, sets, reps_low, reps_high, seconds, tempo, notes)))
-  `).eq('id', sessionId).eq('user_id', userId).maybeSingle();
+  `).eq('id', sessionId).eq('user_id', userId);
+  const { data, error } = await (signal ? request.abortSignal(signal) : request).maybeSingle();
   if (error) throw error;
   if (!data?.plan_days) return null;
   const raw = data.plan_days as unknown as Omit<PlanDay, 'blocks'> & {
@@ -452,9 +454,10 @@ export interface SessionSummaryLine {
   isPr: boolean;
 }
 
-export async function getSessionProgressResult(sessionId: string): Promise<SessionSummaryLine[] | null> {
-  const { data, error } = await supabase.from('session_progress_results')
-    .select('result').eq('session_id', sessionId).maybeSingle();
+export async function getSessionProgressResult(sessionId: string, client = supabase, signal?: AbortSignal): Promise<SessionSummaryLine[] | null> {
+  const request = client.from('session_progress_results')
+    .select('result').eq('session_id', sessionId);
+  const { data, error } = await (signal ? request.abortSignal(signal) : request).maybeSingle();
   if (error) throw error;
   return data?.result as SessionSummaryLine[] | null ?? null;
 }
@@ -465,10 +468,13 @@ export async function applySessionProgress(
   updates: ProgressRow[],
   result: SessionSummaryLine[],
   setVersions: SetSnapshotVersion[],
+  client = supabase,
+  signal?: AbortSignal,
 ): Promise<SessionSummaryLine[]> {
-  const { data, error } = await supabase.rpc('apply_session_progress', {
+  const request = client.rpc('apply_session_progress', {
     p_session_id: sessionId, p_expected: expected, p_updates: updates, p_result: result, p_set_versions: setVersions,
   });
+  const { data, error } = await (signal ? request.abortSignal(signal) : request);
   if (error) throw error;
   return data as SessionSummaryLine[];
 }

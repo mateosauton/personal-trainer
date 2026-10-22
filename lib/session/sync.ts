@@ -9,10 +9,20 @@ import {
   checkLegacySet,
   getSetWriteState,
   getSessionSetSnapshot,
+  getSessionProgressResult,
+  getProgress,
+  applySessionProgress,
+  type ProgressRow,
   type SetWriteState,
 } from '@/lib/db/queries';
 import { clientForAccessToken, supabase } from '@/lib/db/supabase';
-import type { SetLog } from '@/lib/types';
+import type { PlanDay, SetLog, Units } from '@/lib/types';
+import { dayKey } from '@/lib/stats';
+import { startSessionOnce } from '@/lib/db/workout-lifecycle';
+import { finalizeWorkout } from './finalize';
+import { LifecycleStore } from './lifecycle-store';
+import { createSyncRetry } from './retry';
+import { planCache } from './plan-cache';
 import { Outbox, type OutboxOperation, type RejectedOperation } from './outbox';
 import { SetJournal, type JournalWrite, type BlockedWrite, type LegacySetCapture, validLegacyCapture, validSet } from './set-journal';
 import { storageLock } from './storage-lock';
@@ -21,12 +31,16 @@ import { workouts } from './workout';
 import { buildQueue } from './queue';
 import { draftMeasurement } from './set-values';
 import { kgToDisplay, displayToKg } from '@/lib/units';
-import { validateWorkout, type SavedWorkout, type WorkoutPatch } from './workout-store';
+import { validateWorkout, workoutDurationSeconds, type SavedWorkout, type WorkoutPatch } from './workout-store';
 
 let activeAccount: string | null = null;
 let accountGeneration = 0;
 const queues = new Map<string, Outbox>();
 const journals = new Map<string, SetJournal>();
+const lifecycle = new LifecycleStore(AsyncStorage);
+const flushes = new Map<string, Promise<void>>();
+const rerunFlush = new Set<string>();
+const retrySchedulers = new Map<string, ReturnType<typeof createSyncRetry>>();
 const permanentCodes = [
   '23502',
   '23503',
@@ -56,7 +70,11 @@ function journalFor(userId: string) {
 
 /** Call synchronously on auth transitions, before changing visible routes. */
 export function setSyncAccount(userId: string | null) {
-  if (activeAccount !== userId) accountGeneration++;
+  if (activeAccount !== userId) {
+    accountGeneration++;
+    for (const scheduler of retrySchedulers.values()) scheduler.stop();
+    retrySchedulers.clear();
+  }
   activeAccount = userId;
 }
 
@@ -72,21 +90,39 @@ function queueFor(userId: string): Outbox {
       AsyncStorage,
       async (operation, signal) => {
         requireAccount(userId);
+        const generation = accountGeneration;
+        const guard = () => {
+          requireAccount(userId);
+          if (generation !== accountGeneration) throw new Error('The workout account changed.');
+          if (signal.aborted) throw new Error('Workout sync timed out.');
+        };
         const { data, error } = await supabase.auth.getSession();
         if (error) throw error;
-        if (signal.aborted) throw new Error('Workout sync timed out.');
-        requireAccount(userId);
+        guard();
         if (data.session?.user.id !== userId)
           throw new Error('The workout account changed.');
         // Capture this account's token. An in-flight A write remains an A write
         // even if the shared auth client switches to B before fetch begins.
         const client = clientForAccessToken(data.session.access_token);
-        if (operation.kind === 'set') {
+        if (operation.kind === 'start') {
+          const input = operation.payload as unknown as Parameters<typeof startSessionOnce>[0];
+          await startSessionOnce(input, client, signal);
+          guard();
+          const saved = await workouts.read(userId);
+          guard();
+          if (saved?.sessionId === input.sessionId) await lifecycle.acknowledgeStart(saved);
+          guard();
+        } else if (operation.kind === 'set') {
           const { sessionId, set, write } = operation.payload as {
             sessionId: string;
             set: SetLog;
             write?: JournalWrite;
           };
+          const saved = await workouts.read(userId);
+          guard();
+          if (saved?.sessionId === sessionId && !(await lifecycle.hasStarted(saved)))
+            throw new Error('Your workout start is waiting to sync. Its sets are preserved.');
+          guard();
           if (write) {
             if (
               write.ownerId !== userId ||
@@ -99,8 +135,7 @@ function queueFor(userId: string): Outbox {
               );
             try {
               const result = await logSetVersioned(write, client, signal);
-              if (signal.aborted) throw new Error('Workout sync timed out.');
-              requireAccount(userId);
+              guard();
               await journalFor(userId).acknowledge(write, result);
             } catch (error) {
               const code = (error as { code?: string })?.code;
@@ -137,19 +172,49 @@ function queueFor(userId: string): Outbox {
             operation,
             storageLock,
           );
-        } else {
+        } else if (operation.kind === 'complete' || operation.kind === 'finalize') {
           const { sessionId, durationS } = operation.payload as {
             sessionId: string;
             durationS: number;
           };
           if (await hasRejectedSets(userId, sessionId))
             throw Object.assign(new Error('Review saved sets before finishing this workout.'), { code: 'PTREVIEW' });
+          guard();
+          const saved = await workouts.read(userId);
+          guard();
+          if (saved?.sessionId === sessionId && !(await lifecycle.hasStarted(saved)))
+            throw new Error('Your workout start is waiting to sync.');
+          guard();
           await finishSession(
             sessionId,
             { duration_s: durationS, rpe: null },
             client,
             signal,
           );
+          guard();
+          if (operation.kind === 'finalize' && saved?.sessionId === sessionId) {
+            if (saved.endedAtMs === null) throw new Error('Your workout has not ended.');
+            const lines = await finalizeWorkout(saved, {
+              guard,
+              getReceipt: (id, abort) => getSessionProgressResult(id, client, abort),
+              getSnapshot: (id, abort) => getSessionSetSnapshot(id, client, abort),
+              getProgress: (owner, abort) => getProgress(owner, client, abort),
+              applyProgress: (id, expected, updates, result, versions, abort) =>
+                applySessionProgress(id, expected, updates, result, versions, client, abort),
+            }, signal);
+            guard();
+            // Save the display receipt before releasing the only local recovery copy.
+            await lifecycle.saveReceipt(saved, { lines, units: saved.units, durationS });
+            guard();
+            // A receipt can also represent an older/historical session. Cache
+            // authoritative current progression, never the proposed client patch.
+            const confirmedProgress = await getProgress(userId, client, signal);
+            guard();
+            await planCache.advanceAfterSession(userId, saved.day.id, [...confirmedProgress.values()]);
+            guard();
+            await workouts.clear(userId, sessionId, saved);
+            guard();
+          }
         }
       },
       `office-gym.session-outbox.v2.${userId}`,
@@ -171,8 +236,49 @@ const enqueue = async (userId: string, operation: OutboxOperation) => {
   const queue = queueFor(userId);
   await queue.enqueue(operation);
   requireAccount(userId);
-  void flushAccount(userId).catch(() => undefined);
+  requestFlush(userId);
 };
+
+function requestFlush(userId: string) {
+  const scheduler = retrySchedulers.get(userId);
+  if (scheduler) scheduler.trigger();
+  else {
+    if (flushes.has(userId)) rerunFlush.add(userId);
+    void flushAccount(userId).catch(() => undefined);
+  }
+}
+
+/** The local snapshot is the durable start intent; no network prerequisite. */
+export function startWorkout(userId: string, day: PlanDay,
+  context: { units: Units; bodyweightKg: number | null; progress: ProgressRow[] }): Promise<SavedWorkout> {
+  requireAccount(userId);
+  const generation = accountGeneration;
+  const guard = () => {
+    requireAccount(userId);
+    if (generation !== accountGeneration) throw new Error('The workout account changed.');
+  };
+  return storageLock(`office-gym.start-workout.v1.${userId}`, async () => {
+    const existing = await workouts.read(userId);
+    guard();
+    if (existing) { requestFlush(userId); return existing; }
+    const now = new Date();
+    const saved = await workouts.create({
+      version: 1, ownerId: userId, sessionId: Crypto.randomUUID(), day,
+      ...context, cursor: 0, phase: 'work', draft: null, savedDraft: null,
+      restUntilMs: null, startedAtMs: now.getTime(), endedAtMs: null,
+      start: { localDay: dayKey(now), tz: Intl.DateTimeFormat().resolvedOptions().timeZone },
+    });
+    guard();
+    requestFlush(userId);
+    return saved;
+  });
+}
+export async function getLocalSessionReceipt(userId: string, sessionId: string) {
+  requireAccount(userId);
+  const receipt = await lifecycle.getReceipt(userId, sessionId);
+  requireAccount(userId);
+  return receipt;
+}
 
 const enqueueWrite = (userId: string, write: JournalWrite) =>
   enqueue(userId, {
@@ -250,8 +356,23 @@ export async function bootstrapSetBaselines(userId: string, sessionId: string, o
     ]);
   } finally { if (timer !== undefined) clearTimeout(timer); }
 }
-async function flushAccount(userId: string) {
+async function drainAccount(userId: string) {
   requireAccount(userId);
+  const generation = accountGeneration;
+  const guard = () => {
+    requireAccount(userId);
+    if (generation !== accountGeneration) throw new Error('The workout account changed.');
+  };
+  const saved = await workouts.read(userId);
+  guard();
+  if (saved?.start && !(await lifecycle.hasStarted(saved))) {
+    guard();
+    await queueFor(userId).enqueue({ id: `start:${saved.sessionId}`, kind: 'start', payload: {
+      sessionId: saved.sessionId, planDayId: saved.day.id, startedAt: new Date(saved.startedAtMs).toISOString(),
+      localDay: saved.start.localDay, tz: saved.start.tz,
+    } });
+  }
+  guard();
   await journalFor(userId).recover(async (write) => {
     requireAccount(userId);
     await queueFor(userId).enqueue({
@@ -260,8 +381,29 @@ async function flushAccount(userId: string) {
       payload: { sessionId: write.sessionId, set: write.set, write },
     });
   });
-  requireAccount(userId);
+  guard();
+  if (saved?.endedAtMs != null) {
+    await queueFor(userId).enqueue({ id: `finalize:${saved.sessionId}`, kind: 'finalize', payload: {
+      sessionId: saved.sessionId, durationS: workoutDurationSeconds(saved),
+    } });
+  }
+  guard();
   await queueFor(userId).flush();
+}
+function flushAccount(userId: string): Promise<void> {
+  const existing = flushes.get(userId);
+  if (existing) return existing;
+  const flushing = (async () => {
+    do {
+      rerunFlush.delete(userId);
+      await drainAccount(userId);
+    } while (rerunFlush.has(userId) && activeAccount === userId);
+  })().finally(() => {
+    if (flushes.get(userId) === flushing) flushes.delete(userId);
+    if (rerunFlush.delete(userId) && activeAccount === userId) requestFlush(userId);
+  });
+  flushes.set(userId, flushing);
+  return flushing;
 }
 
 async function hasRejectedSets(userId: string, sessionId: string) {
@@ -274,10 +416,23 @@ async function hasRejectedSets(userId: string, sessionId: string) {
     || blocked.some(entry => entry.write.sessionId === sessionId);
 }
 export async function queueCompletion(userId: string, sessionId: string, durationS: number) {
-  if (await hasRejectedSets(userId, sessionId)) throw new Error('Review saved sets before finishing this workout.');
-  await queueFor(userId).retryRejected(entry => entry.code === 'PTREVIEW' && entry.operation.kind === 'complete'
+  requireAccount(userId);
+  const generation = accountGeneration;
+  const guard = () => {
+    requireAccount(userId);
+    if (generation !== accountGeneration) throw new Error('The workout account changed.');
+  };
+  const saved = await workouts.read(userId);
+  guard();
+  const ended = saved?.sessionId === sessionId && saved.endedAtMs !== null;
+  // An ended draft remains a durable finalization intent while conflicts await review.
+  if (await hasRejectedSets(userId, sessionId) && !ended) throw new Error('Review saved sets before finishing this workout.');
+  guard();
+  await queueFor(userId).retryRejected(entry => entry.code === 'PTREVIEW' && ['complete', 'finalize'].includes(entry.operation.kind)
     && entry.operation.payload.sessionId === sessionId);
-  return enqueue(userId, { id: `complete:${sessionId}`, kind: 'complete', payload: { sessionId, durationS } });
+  guard();
+  const kind = ended ? 'finalize' : 'complete';
+  return enqueue(userId, { id: `${kind}:${sessionId}`, kind, payload: { sessionId, durationS } });
 }
 
 const belongsToSession = (operation: OutboxOperation, sessionId?: string) =>
@@ -593,18 +748,31 @@ export async function resolveLegacySetConflict(userId: string, review: LegacySet
 
 /** Install for the authenticated account only. Old callbacks cannot replay a new account. */
 export function startOutboxSync(userId: string) {
-  const flush = () => {
-    if (activeAccount === userId)
-      void flushAccount(userId).catch(() => undefined);
+  const generation = accountGeneration;
+  let foreground = AppState.currentState !== 'background' && AppState.currentState !== 'inactive';
+  const install = () => {
+    const scheduler = createSyncRetry({
+      isActive: () => foreground && activeAccount === userId && accountGeneration === generation,
+      attempt: async () => { await flushAccount(userId); return (await readStatus(userId)).pending > 0; },
+    });
+    retrySchedulers.set(userId, scheduler);
+    return scheduler;
   };
+  let scheduler = install();
+  const flush = () => scheduler.trigger();
   const network = NetInfo.addEventListener((state) => {
     if (state.isConnected) flush();
   });
   const app = AppState.addEventListener('change', (state) => {
-    if (state === 'active') flush();
+    if (activeAccount !== userId || accountGeneration !== generation) return;
+    foreground = state === 'active';
+    if (foreground) { scheduler.stop(); scheduler = install(); flush(); }
+    else scheduler.stop();
   });
   flush();
   return () => {
+    scheduler.stop();
+    if (retrySchedulers.get(userId) === scheduler) retrySchedulers.delete(userId);
     network();
     app.remove();
   };

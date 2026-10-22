@@ -23,6 +23,7 @@ jest.mock('@/lib/session/workout', () => ({
   },
 }));
 const mockComplete = jest.fn();
+const mockFlush = jest.fn();
 const mockReplace = jest.fn();
 const mockRouter = { replace: mockReplace, back: jest.fn() };
 const day = {
@@ -66,7 +67,7 @@ jest.mock('@/lib/db/queries', () => ({
 jest.mock('@/lib/session/sync', () => ({
   bootstrapSetBaselines: async () => undefined,
   queueCompletion: (...args: unknown[]) => mockComplete(...args),
-  flushOutbox: async () => undefined,
+  flushOutbox: (...args: unknown[]) => mockFlush(...args),
   pendingSyncCount: async () => 0,
   queueSet: async () => undefined,
 }));
@@ -83,6 +84,7 @@ beforeEach(() => {
   mockSaved = null;
   mockPlan.mockResolvedValue({ days: [day] });
   mockComplete.mockResolvedValue(undefined);
+  mockFlush.mockReset().mockResolvedValue(undefined);
 });
 
 it('shows and retries a failed workout load', async () => {
@@ -121,4 +123,15 @@ it('retries a failed completion without discarding the finished workout', async 
   expect(mockComplete.mock.calls.map((call) => call[2])).toEqual([10, 10]);
   expect(mockReplace.mock.calls[0][0].params.elapsed).toBe('10');
   clock.mockRestore();
+});
+
+it('opens summary after completion is durable while network delivery remains pending', async () => {
+  mockFlush.mockReturnValue(new Promise(() => {}));
+  const screen = render(<Run />);
+  await waitFor(() => expect(screen.getByText('Done')).toBeTruthy());
+  fireEvent.press(screen.getByText('Done'));
+  await waitFor(() => expect(mockReplace).toHaveBeenCalledWith(expect.objectContaining({
+    pathname: '/session/[dayId]/summary',
+  })));
+  expect(mockComplete).toHaveBeenCalledTimes(1);
 });

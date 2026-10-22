@@ -8,6 +8,8 @@ import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import Summary from '@/app/session/[dayId]/summary';
 
 const mockWorkoutRead = jest.fn();
+const mockLocalReceipt = jest.fn();
+const mockQueueComplete = jest.fn();
 const mockApply = jest.fn(
   async (_session, _expected, _updates, lines, _versions?: unknown) => lines,
 );
@@ -65,7 +67,10 @@ jest.mock('@/lib/db/queries', () => ({
   },
   getProgress: (...args: unknown[]) => mockProgress(...args),
 }));
+jest.mock('@/lib/db/supabase', () => ({ clientForAccessToken: jest.fn(() => ({})) }));
 jest.mock('@/lib/session/sync', () => ({
+  getLocalSessionReceipt: (...args: unknown[]) => mockLocalReceipt(...args),
+  queueCompletion: (...args: unknown[]) => mockQueueComplete(...args),
   failedSyncCount: () => mockFailed(),
   flushOutbox: () => mockFlush(),
   pendingSyncCount: () => mockPending(),
@@ -83,6 +88,8 @@ beforeEach(() => {
     async (_session, _expected, _updates, lines) => lines,
   );
   mockWorkoutRead.mockResolvedValue(null);
+  mockLocalReceipt.mockReset().mockResolvedValue(null);
+  mockQueueComplete.mockReset().mockResolvedValue(undefined);
   mockProfile.units = 'lb';
   mockProfile.bodyweight_kg = 80;
   mockReceipt.mockResolvedValue(null);
@@ -194,7 +201,7 @@ it('reloads the baseline when another workout changed progression', async () => 
   expect(mockApply.mock.calls[1][1][0].state).toEqual(known);
   expect(mockApply.mock.calls[1][2][0].miss_streak).toBe(0);
   expect(mockApply.mock.calls[1][3][0].verdict).toBe('deload');
-  expect(mockDay).toHaveBeenCalledWith('session-1', 'user-1');
+  expect(mockDay).toHaveBeenCalledWith('session-1', 'user-1', undefined, expect.any(AbortSignal));
 });
 
 it('keeps failed transactional progression recoverable', async () => {
@@ -347,4 +354,91 @@ it('shows timed history without applying repetition progression', async () => {
   expect(mockApply.mock.calls[0][2]).toEqual([]);
   expect(mockApply.mock.calls[0][3][0]).toMatchObject({ seconds: 40, volumeKg: 0, isPr: false, verdict: null });
   expect(screen.getByText('1 sets · 40s timed')).toBeTruthy();
+});
+
+const completedWorkout = () => ({
+  version: 1, ownerId: 'user-1', sessionId: 'session-1', units: 'kg', bodyweightKg: 80,
+  day: mockPlan.days[0], progress: [], cursor: 1, phase: 'work', draft: null,
+  savedDraft: null, restUntilMs: null, startedAtMs: 0, endedAtMs: 120000,
+  recordedSets: [['item-1:1', { exercise_id: exerciseId, plan_item_id: 'item-1',
+    set_index: 1, reps: 8, weight_kg: 60, is_bodyweight: false, added_load_kg: 0, rpe: null }]],
+});
+
+it('shows observed saved metrics immediately while an offline flush is still pending', async () => {
+  mockWorkoutRead.mockResolvedValue(completedWorkout());
+  mockFlush.mockReturnValue(new Promise(() => {}));
+  const screen = render(<Summary />);
+  await waitFor(() => expect(screen.getByText('Nice work.')).toBeTruthy());
+  expect(screen.getByText('480 kg')).toBeTruthy();
+  expect(screen.getByText('1 sets · top 60 kg')).toBeTruthy();
+  expect(screen.getByText('Saved on this device. Waiting to sync.')).toBeTruthy();
+  expect(screen.queryByText('PR 60 kg')).toBeNull();
+  expect(screen.queryByText('↑ next')).toBeNull();
+  expect(mockQueueComplete).toHaveBeenCalledWith('user-1', 'session-1', 120);
+  expect(mockApply).not.toHaveBeenCalled();
+  expect(require('@/lib/session/workout').workouts.clear).not.toHaveBeenCalled();
+});
+
+it('retains the saved workout when background completion fails and Done is pressed', async () => {
+  const saved = completedWorkout();
+  mockWorkoutRead.mockResolvedValue(saved);
+  mockQueueComplete.mockRejectedValue(new Error('Storage unavailable'));
+  const screen = render(<Summary />);
+  await waitFor(() => expect(screen.getByText('Nice work.')).toBeTruthy());
+  expect(screen.getByText('480 kg')).toBeTruthy();
+  fireEvent.press(screen.getByText('Done'));
+  expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+  expect(require('@/lib/session/workout').workouts.clear).not.toHaveBeenCalled();
+  expect(mockApply).not.toHaveBeenCalled();
+  expect(saved.recordedSets).toHaveLength(1);
+});
+
+it('reuses the confirmed local receipt without waiting for pending network work', async () => {
+  mockPending.mockResolvedValue(1);
+  mockFlush.mockReturnValue(new Promise(() => {}));
+  mockLocalReceipt.mockResolvedValue({ units: 'kg', durationS: 600, lines: [{
+    exerciseId, name: 'Bench Press', sets: 1, volumeKg: 480, topLoadKg: 60, verdict: 'progress', isPr: true,
+  }] });
+  const screen = render(<Summary />);
+  await waitFor(() => expect(screen.getByText('PR 60 kg')).toBeTruthy());
+  expect(screen.getByText('10')).toBeTruthy();
+  expect(screen.queryByText('Saved on this device. Waiting to sync.')).toBeNull();
+  expect(mockWorkoutRead).not.toHaveBeenCalled();
+  expect(mockFlush).not.toHaveBeenCalled();
+  expect(mockApply).not.toHaveBeenCalled();
+});
+
+it('restores the pending summary from its completed snapshot after restart', async () => {
+  mockWorkoutRead.mockResolvedValue(completedWorkout());
+  mockFlush.mockReturnValue(new Promise(() => {}));
+  const first = render(<Summary />);
+  await waitFor(() => expect(first.getByText('480 kg')).toBeTruthy());
+  first.unmount();
+  const reopened = render(<Summary />);
+  await waitFor(() => expect(reopened.getByText('480 kg')).toBeTruthy());
+  expect(reopened.getByText('Saved on this device. Waiting to sync.')).toBeTruthy();
+  expect(mockApply).not.toHaveBeenCalled();
+  expect(require('@/lib/session/workout').workouts.clear).not.toHaveBeenCalled();
+});
+
+it('updates an observed summary from its confirmed receipt after background sync', async () => {
+  mockWorkoutRead.mockResolvedValue(completedWorkout());
+  mockLocalReceipt.mockResolvedValueOnce(null).mockResolvedValue({ units: 'kg', durationS: 120, lines: [{
+    exerciseId, name: 'Bench Press', sets: 1, volumeKg: 480, topLoadKg: 60, verdict: 'progress', isPr: true,
+  }] });
+  const screen = render(<Summary />);
+  await waitFor(() => expect(screen.getByText('PR 60 kg')).toBeTruthy());
+  expect(screen.queryByText('Saved on this device. Waiting to sync.')).toBeNull();
+  expect(mockApply).not.toHaveBeenCalled();
+});
+
+it('keeps observed metrics visible when a saved set needs review', async () => {
+  mockWorkoutRead.mockResolvedValue(completedWorkout());
+  mockFailed.mockResolvedValue(1);
+  mockQueueComplete.mockRejectedValue(new Error('Review saved sets before finishing this workout.'));
+  const screen = render(<Summary />);
+  await waitFor(() => expect(screen.getByText('Some saved sets need review. Open Home to resolve them.')).toBeTruthy());
+  expect(screen.getByText('480 kg')).toBeTruthy();
+  expect(screen.queryByText('PR 60 kg')).toBeNull();
+  expect(mockApply).not.toHaveBeenCalled();
 });

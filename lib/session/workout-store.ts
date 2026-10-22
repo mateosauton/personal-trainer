@@ -31,6 +31,8 @@ export interface SavedWorkout {
   savedDraft: WorkoutDraft | null;
   restUntilMs: number | null;
   startedAtMs: number;
+  /** Creation intent survives a crash before the first server request. Older workouts already exist remotely. */
+  start?: { localDay: string; tz: string };
   endedAtMs: number | null;
   timing?: WorkoutTiming;
   /** UI copy of journaled sets, retained for offline feedback after a restart. */
@@ -39,6 +41,14 @@ export interface SavedWorkout {
 interface Storage {
   getItem(key: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<void>;
+}
+/** Frozen active duration, including persisted pause offsets. */
+export function workoutDurationSeconds(workout: SavedWorkout): number {
+  const ended = workout.endedAtMs ?? Date.now();
+  const timing = workout.timing;
+  return Math.max(1, timing
+    ? Math.floor(timing.plannedSeconds + ((timing.session.pausedAt ?? ended) - timing.session.endAt) / 1000)
+    : Math.floor((ended - workout.startedAtMs) / 1000));
 }
 export type WorkoutPatch = Partial<
   Pick<
@@ -108,6 +118,9 @@ export function validateWorkout(
     || (value.timing.restSeconds !== undefined && (!finite(value.timing.restSeconds) || value.timing.restSeconds < 0))
     || (value.timing.recovering !== undefined && typeof value.timing.recovering !== 'boolean')))
     return invalid();
+  if (value.start !== undefined && (!record(value.start)
+    || typeof value.start.localDay !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.start.localDay)
+    || !text(value.start.tz))) return invalid();
   if (value.recordedSets !== undefined && (!Array.isArray(value.recordedSets)
     || value.recordedSets.some((entry: unknown) => !Array.isArray(entry) || entry.length !== 2
       || !text(entry[0]) || !validSet(entry[1])))) return invalid();
@@ -265,9 +278,12 @@ export class WorkoutStore {
       return next;
     });
   }
-  clear(owner: string, session: string) {
+  clear(owner: string, session: string, expected?: SavedWorkout) {
     return this.exclusive(owner, async () => {
       const current = await this.load(owner);
+      if (current?.sessionId === session && expected !== undefined
+        && JSON.stringify(current) !== JSON.stringify(expected))
+        throw new Error('Your workout changed during sync. Its saved data is preserved.');
       if (current?.sessionId === session)
         await this.storage.setItem(keyFor(owner), 'null');
     });

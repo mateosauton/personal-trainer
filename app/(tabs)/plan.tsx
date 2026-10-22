@@ -27,7 +27,7 @@ export default function PlanTab() {
   const { profile } = useAuth();
   const router = useRouter();
   const bodyweightKg = profile?.bodyweight_kg ?? null;
-  const { plan, nextDay, sessions, trainedDays, loading, reload } = useDashboard(
+  const { plan, nextDay, sessions, trainedDays, loading, usingCachedPlan, error, reload } = useDashboard(
     userId,
     bodyweightKg,
   );
@@ -97,8 +97,16 @@ export default function PlanTab() {
       <Display style={{ marginTop: space.sm }}>{plan.name}</Display>
       <Muted style={{ marginTop: space.sm }}>
         {isGymRoutine(plan) ? `${plan.days.length}-session rotation` : `${plan.days.length} days a week`}
-        {' · '}{plan.weeks} week block · {sessions.length} logged
+        {' · '}{plan.weeks} week block{!usingCachedPlan && !error ? ` · ${sessions.length} logged` : ''}
       </Muted>
+      {(usingCachedPlan || error) && (
+        <Card style={{ marginTop: space.lg, gap: space.sm }}>
+          <Muted>{usingCachedPlan
+            ? 'Using your saved plan. History will load when you reconnect.'
+            : 'Your plan is ready. Training history could not be loaded.'}</Muted>
+          <Button title="Retry connection" variant="ghost" onPress={reload} />
+        </Card>
+      )}
       {isGymRoutine(plan) ? (
         <Muted style={{ marginTop: space.sm }}>
           47 min target · Push A → Pull A → Legs A → Push B → Pull B → Legs B.
@@ -106,14 +114,14 @@ export default function PlanTab() {
         </Muted>
       ) : <GymRoutineCard userId={userId} onActivated={reload} />}
 
-      <View
+      {!usingCachedPlan && !error && <View
         style={{ marginTop: space.xl }}
         onLayout={(e) => {
           calendarY.current = e.nativeEvent.layout.y;
         }}
       >
         <Calendar trainedDays={trainedDays} selected={selected} onSelect={setSelected} />
-      </View>
+      </View>}
 
       {selected && daySessions.length > 0 ? (
         <Card style={styles.dayCard}>

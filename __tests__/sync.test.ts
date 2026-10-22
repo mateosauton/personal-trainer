@@ -16,7 +16,6 @@ let mockUUIDSequence = 0;
 jest.mock(
   'expo-crypto',
   () => ({ randomUUID: () => `${String(++mockUUIDSequence).padStart(8, '0')}-1111-4111-8111-999999999999` }),
-  { virtual: true },
 );
 const mockFinishSession = jest.fn();
 const mockGetSession = jest.fn();

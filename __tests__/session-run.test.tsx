@@ -45,6 +45,9 @@ jest.mock('@/lib/session/workout', () => ({ workouts: {
   },
   withSnapshot: async (_owner: string, _snapshot: unknown, action: () => Promise<unknown>) => action(),
 } }));
+jest.mock('@/lib/session/plan-cache', () => ({ planCache: {
+  read: async () => null, write: async () => undefined, clear: async () => undefined,
+} }));
 jest.mock('@/components/ExerciseMedia', () => ({ ExerciseMedia: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),

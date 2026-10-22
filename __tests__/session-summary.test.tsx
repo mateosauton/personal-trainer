@@ -42,7 +42,10 @@ jest.mock('@/lib/db/queries', () => ({
     last_weight_kg: 10, last_reps: 4, best_weight_kg: 20, best_e1rm: null, miss_streak: 0,
   }]])),
 }));
+jest.mock('@/lib/db/supabase', () => ({ clientForAccessToken: jest.fn(() => ({})) }));
 jest.mock('@/lib/session/sync', () => ({
+  getLocalSessionReceipt: async () => null,
+  queueCompletion: async () => undefined,
   flushOutbox: async () => undefined,
   failedSyncCount: async () => 0,
   pendingSyncCount: async () => 0,
@@ -66,7 +69,7 @@ it('shows both-side tonnage without doubling reps used for load progression', as
   await waitFor(() => expect(screen.getByText('160 kg')).toBeTruthy());
   expect(mockApplySessionProgress).toHaveBeenCalledWith('session', expect.any(Array), [expect.objectContaining({
     last_reps: 4, last_weight_kg: 10, best_e1rm: 10 * (1 + 4 / 30),
-  })], expect.any(Array), expect.any(Array));
+  })], expect.any(Array), expect.any(Array), undefined, expect.any(AbortSignal));
   expect(mockLogs.map((log) => log.reps)).toEqual([4, 4]);
 });
 

@@ -1,6 +1,6 @@
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import Animated, { FadeIn, ReduceMotion } from 'react-native-reanimated';
 
@@ -18,27 +18,27 @@ import {
 } from '@/components/ui';
 import { notify } from '@/lib/alerts';
 import { useAuth, useUserId } from '@/lib/auth';
-import { getExercise } from '@/lib/catalog';
 import {
   applySessionProgress,
   getSessionProgressResult,
   getSessionPlanDay,
   getProgress,
   getSessionSetSnapshot,
-  type ProgressRow,
   type SessionSummaryLine,
 } from '@/lib/db/queries';
 import {
   failedSyncCount,
   flushOutbox,
+  getLocalSessionReceipt,
+  queueCompletion,
   pendingSyncCount,
 } from '@/lib/session/sync';
 import { workouts } from '@/lib/session/workout';
-import { nextLoad } from '@/lib/progression';
-import { sessionTotals } from '@/lib/stats';
+import { calculateSessionSummary, finalizeWorkout } from '@/lib/session/finalize';
+import { clientForAccessToken } from '@/lib/db/supabase';
 import { colors, space, type } from '@/lib/theme';
 import { motion } from '@/lib/motion';
-import { effectiveLoadKg, estimateOneRepMax, formatWeight } from '@/lib/units';
+import { formatWeight } from '@/lib/units';
 import type { Units } from '@/lib/types';
 
 export default function SessionSummary() {
@@ -48,7 +48,7 @@ export default function SessionSummary() {
     elapsed: string;
   }>();
   const userId = useUserId();
-  const { profile } = useAuth();
+  const { profile, session } = useAuth();
   const router = useRouter();
 
   const [lines, setLines] = useState<SessionSummaryLine[]>([]);
@@ -57,192 +57,150 @@ export default function SessionSummary() {
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
 
-  const durationS = Number.parseInt(elapsed ?? '0', 10) || 0;
+  const routeDurationS = Number.parseInt(elapsed ?? '0', 10) || 0;
+  const [durationS, setDurationS] = useState(routeDurationS);
+  const [syncState, setSyncState] = useState<'pending' | 'review' | null>(null);
+  const identity = `${userId}:${sessionId}`;
+  const currentIdentity = useRef(identity);
+  currentIdentity.current = identity;
   const profileUnits = profile?.units ?? 'kg';
   const [units, setUnits] = useState<Units>(profileUnits);
 
   useEffect(() => {
     let cancelled = false;
+    let polling: ReturnType<typeof setInterval> | undefined;
+    let refreshing = false;
+    const controller = new AbortController();
+    const guard = () => {
+      if (cancelled || currentIdentity.current !== identity || controller.signal.aborted)
+        throw Object.assign(new Error('Workout summary closed.'), { name: 'AbortError' });
+    };
+    const showConfirmed = (confirmed: SessionSummaryLine[], confirmedUnits: Units, seconds: number) => {
+      guard();
+      setLines(confirmed);
+      setUnits(confirmedUnits);
+      setDurationS(seconds);
+      setSyncState(null);
+      setLoading(false);
+      if (polling !== undefined) clearInterval(polling);
+      polling = undefined;
+    };
+    const refreshLocalReceipt = async () => {
+      if (refreshing || cancelled) return;
+      refreshing = true;
+      try {
+        guard();
+        const receipt = await getLocalSessionReceipt(userId, sessionId);
+        guard();
+        if (receipt) {
+          showConfirmed(receipt.lines, receipt.units, receipt.durationS);
+          return;
+        }
+        const failed = await failedSyncCount(sessionId);
+        guard();
+        setSyncState(failed > 0 ? 'review' : 'pending');
+      } finally { refreshing = false; }
+    };
     setLoading(true);
     setError(null);
+    setSyncState(null);
+    setDurationS(routeDurationS);
 
     (async () => {
-      // A failed send leaves operations queued even though flush resolves.
-      // Never derive future loads from a partial server view of this workout.
-      await flushOutbox();
-      if ((await failedSyncCount(sessionId)) > 0) {
-        throw new Error(
-          'Some sets could not sync. Retry workout sync from Home before saving this summary.',
-        );
-      }
-      if ((await pendingSyncCount(sessionId)) > 0) {
-        throw new Error(
-          'Your workout is still syncing. Reconnect and retry to see all your sets.',
-        );
-      }
-      if (cancelled) return;
-      const previous = await getSessionProgressResult(sessionId);
-      if (cancelled) return;
-      if (previous !== null) {
-        setUnits(profileUnits);
-        await workouts.clear(userId, sessionId);
-        if (cancelled) return;
-        setLines(previous);
-        setLoading(false);
+      // A confirmed local receipt is available without contacting the backend.
+      const receipt = await getLocalSessionReceipt(userId, sessionId);
+      guard();
+      if (receipt) {
+        showConfirmed(receipt.lines, receipt.units, receipt.durationS);
         return;
       }
       const local = await workouts.read(userId);
-      if (cancelled) return;
-      const captured = local?.sessionId === sessionId ? local : null;
-      const calculationUnits = captured?.units ?? profileUnits;
-      const bodyweightKg =
-        captured?.bodyweightKg !== undefined
-          ? captured.bodyweightKg
-          : (profile?.bodyweight_kg ?? null);
-      setUnits(calculationUnits);
-      const day = await getSessionPlanDay(sessionId, userId);
-      if (!day)
-        throw new Error(
-          'Could not load the original workout day. Please retry.',
-        );
-      const itemById = new Map(
-        (day?.blocks ?? []).flatMap((b) =>
-          b.items.map((i) => [i.id, { item: i, block: b }]),
-        ),
-      );
-
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        // A stale snapshot retry must refresh sets as well as progression.
-        const [snapshot, progress] = await Promise.all([
-          getSessionSetSnapshot(sessionId),
-          getProgress(userId),
-        ]);
-        if (cancelled) return;
-        const logs = snapshot.logs;
-        const grouped = new Map<string, typeof logs>();
-        for (const log of logs) {
-          const list = grouped.get(log.exercise_id) ?? [];
-          list.push(log);
-          grouped.set(log.exercise_id, list);
-        }
-        const built: SessionSummaryLine[] = [];
-        const updates: ProgressRow[] = [];
-
-        for (let [exerciseId, sets] of grouped) {
-          const exercise = getExercise(exerciseId);
-          const allSets = sets;
-          const hasTimed = allSets.some(s => s.seconds != null || itemById.get(s.plan_item_id ?? '')?.item.seconds != null);
-          const seconds = allSets.reduce((sum, s) => sum + (s.seconds ?? 0), 0);
-          sets = sets.filter(s => s.seconds == null && itemById.get(s.plan_item_id ?? '')?.item.seconds == null);
-          const loads = sets.map((s) => effectiveLoadKg(s, bodyweightKg));
-          const { volumeKg } = sessionTotals(sets, bodyweightKg);
-          const topLoadKg = loads.reduce<number | null>(
-            (best, l) => (l != null && (best == null || l > best) ? l : best),
-            null,
-          );
-
-          const e1rm = sets.reduce((best, s, i) => {
-            const load = loads[i];
-            if (load == null || !s.reps) return best;
-            return Math.max(best, estimateOneRepMax(load, s.reps));
-          }, 0);
-
-          const known = progress.get(exerciseId);
-          const context = itemById.get(sets[0]?.plan_item_id ?? '');
-          const workingLoad = sets[0]?.is_bodyweight
-            ? sets[0].added_load_kg
-            : sets[0]?.weight_kg ?? null;
-
-          const verdict =
-            context && exercise
-              ? nextLoad(
-                  sets.map((s) => ({ reps: s.reps, rpe: s.rpe })),
-                  context.item.reps_high,
-                  context.item.reps_low,
-                  exercise.pattern,
-                  workingLoad,
-                  {
-                    last_weight_kg: known?.last_weight_kg ?? null,
-                    miss_streak: known?.miss_streak ?? 0,
-                  },
-                  calculationUnits,
-                )
-              : null;
-
-          const isPr =
-            topLoadKg != null &&
-            (known?.best_weight_kg == null || topLoadKg > known.best_weight_kg);
-
-          built.push({
-            exerciseId,
-            name: exercise?.name ?? exerciseId,
-            sets: allSets.length,
-            ...(hasTimed ? { seconds } : {}),
-            volumeKg,
-            topLoadKg,
-            verdict: verdict?.verdict ?? null,
-            isPr,
-          });
-
-          // Warm-ups carry no load and should never move a working weight.
-          if (context && context.block.kind !== 'warmup') {
-            updates.push({
-              exercise_id: exerciseId,
-              last_weight_kg: verdict?.last_weight_kg ?? workingLoad,
-              last_reps: sets[sets.length - 1].reps,
-              best_weight_kg: isPr
-                ? topLoadKg
-                : (known?.best_weight_kg ?? null),
-              best_e1rm: Math.max(e1rm, known?.best_e1rm ?? 0) || null,
-              miss_streak: verdict?.miss_streak ?? 0,
-            });
-          }
-        }
-
-        if (!cancelled) {
-          let saved: SessionSummaryLine[];
+      guard();
+      const captured = local?.ownerId === userId && local.sessionId === sessionId ? local : null;
+      if (captured?.endedAtMs != null) {
+        const observed = calculateSessionSummary(captured.day,
+          (captured.recordedSets ?? []).map(([, set]) => set),
+          new Map(captured.progress.map(row => [row.exercise_id, row])),
+          captured.units, captured.bodyweightKg ?? null);
+        // These are observed metrics, not a confirmed progression result or PR.
+        setLines(observed.lines.map(line => ({ ...line, verdict: null, isPr: false })));
+        setUnits(captured.units);
+        const seconds = Math.max(1, captured.timing
+          ? Math.floor(captured.timing.plannedSeconds + ((captured.timing.session.pausedAt
+            ?? captured.endedAtMs) - captured.timing.session.endAt) / 1000)
+          : Math.floor((captured.endedAtMs - captured.startedAtMs) / 1000));
+        setDurationS(seconds);
+        setSyncState('pending');
+        setLoading(false);
+        polling = setInterval(() => { void refreshLocalReceipt().catch(() => undefined); }, 5000);
+        void refreshLocalReceipt().catch(() => undefined);
+        // Keep the saved snapshot until sync has durably stored its confirmed receipt.
+        void (async () => {
           try {
-            saved = await applySessionProgress(
-              sessionId,
-              updates.map((row) => ({
-                exercise_id: row.exercise_id,
-                state: progress.get(row.exercise_id) ?? null,
-              })),
-              updates,
-              built,
-              snapshot.versions,
-            );
-          } catch (error) {
-            if ((error as { code?: string }).code === '40001' && attempt < 2)
-              continue;
-            throw error;
+            await queueCompletion(userId, sessionId, seconds);
+            guard();
+            await flushOutbox();
+          } catch {
+            // The local preview and durable workout remain available for recovery.
+          } finally {
+            await refreshLocalReceipt().catch(() => undefined);
           }
-          if (cancelled) return;
-          await workouts.clear(userId, sessionId);
-          if (cancelled) return;
-          setLines(saved);
-          setLoading(false);
-          if (saved.some((l) => l.isPr)) {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          }
-          return;
-        }
+        })();
+        return;
       }
-    })().catch((error: unknown) => {
-      if (!cancelled) {
-        setError(
-          error instanceof Error
-            ? error.message
-            : 'Could not load your workout. Please retry.',
-        );
+
+      // Historical summaries still require a complete acknowledged server snapshot.
+      await flushOutbox();
+      guard();
+      if ((await failedSyncCount(sessionId)) > 0)
+        throw new Error('Some sets could not sync. Retry workout sync from Home before saving this summary.');
+      guard();
+      if ((await pendingSyncCount(sessionId)) > 0)
+        throw new Error('Your workout is still syncing. Reconnect and retry to see all your sets.');
+      guard();
+      const client = session?.access_token ? clientForAccessToken(session.access_token) : undefined;
+      const previous = await getSessionProgressResult(sessionId, client, controller.signal);
+      guard();
+      const calculationUnits = captured?.units ?? profileUnits;
+      if (previous !== null) {
+        await workouts.clear(userId, sessionId, captured ?? undefined);
+        guard();
+        showConfirmed(previous, calculationUnits, routeDurationS);
+        return;
+      }
+      const day = await getSessionPlanDay(sessionId, userId, client, controller.signal);
+      guard();
+      if (!day) throw new Error('Could not load the original workout day. Please retry.');
+      const saved = await finalizeWorkout({ ownerId: userId, sessionId, day, units: calculationUnits,
+        bodyweightKg: captured?.bodyweightKg !== undefined ? captured.bodyweightKg : profile?.bodyweight_kg ?? null,
+      }, {
+        guard,
+        // The receipt was checked before loading its original day.
+        getReceipt: async () => previous,
+        getSnapshot: (id, signal) => getSessionSetSnapshot(id, client, signal),
+        getProgress: (owner, signal) => getProgress(owner, client, signal),
+        applyProgress: (id, expected, updates, result, versions, signal) =>
+          applySessionProgress(id, expected, updates, result, versions, client, signal),
+      }, controller.signal);
+      guard();
+      await workouts.clear(userId, sessionId, captured ?? undefined);
+      guard();
+      showConfirmed(saved, calculationUnits, routeDurationS);
+      if (saved.some(line => line.isPr))
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    })().catch((failure: unknown) => {
+      if (!cancelled && currentIdentity.current === identity) {
+        setError(failure instanceof Error ? failure.message : 'Could not load your workout. Please retry.');
         setLoading(false);
       }
     });
 
     return () => {
       cancelled = true;
+      controller.abort();
+      if (polling !== undefined) clearInterval(polling);
     };
-  }, [sessionId, userId, dayId, profile?.bodyweight_kg, profileUnits, retry]);
+  }, [sessionId, userId, dayId, profile?.bodyweight_kg, profileUnits, session?.access_token, retry]);
 
   const save = async () => {
     setSaving(true);
@@ -290,6 +248,11 @@ export default function SessionSummary() {
     <Screen>
       <Overline>Session complete</Overline>
       <Display style={{ marginTop: space.sm }}>Nice work.</Display>
+      {syncState ? <Body style={{ marginTop: space.md }}>
+        {syncState === 'review'
+          ? 'Some saved sets need review. Open Home to resolve them.'
+          : 'Saved on this device. Waiting to sync.'}
+      </Body> : null}
 
       <Animated.View
         entering={FadeIn.duration(motion.base).reduceMotion(

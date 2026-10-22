@@ -52,3 +52,13 @@ it('hides the prior account workout immediately during account switching', async
   expect(screen.queryByText('Resume workout')).toBeNull();
   await waitFor(() => expect(mockRead).toHaveBeenCalledWith('B'));
 });
+
+it('opens an ended workout summary directly after its disk snapshot may have been finalized', async () => {
+  mockRead.mockResolvedValue({ ...saved, startedAtMs: 1000, endedAtMs: 121000,
+    timing: { plannedSeconds: 60, session: { endAt: 121000, pausedAt: null }, block: null, blockId: 'finished' } });
+  const screen = render(<Home />);
+  await waitFor(() => expect(screen.getByText('View workout summary')).toBeTruthy());
+  fireEvent.press(screen.getByText('View workout summary'));
+  expect(mockPush).toHaveBeenCalledWith({ pathname: '/session/[dayId]/summary',
+    params: { dayId: 'original-day', sessionId: 'saved-session', elapsed: '60' } });
+});
