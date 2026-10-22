@@ -10,6 +10,8 @@ const mockGetInitialURL = jest.fn();
 const mockCompleteAuthFromUrl = jest.fn();
 const mockGetItem = jest.fn();
 const mockSetItem = jest.fn();
+const mockSignOut = jest.fn();
+const mockAccount = jest.fn();
 let mockAuthChange: (event: string, session: Session | null) => void;
 let mockURLChange: (event: { url: string }) => void;
 
@@ -21,13 +23,20 @@ jest.mock('@/lib/db/supabase', () => ({
         mockAuthChange = callback;
         return { data: { subscription: { unsubscribe: jest.fn() } } };
       },
-      signOut: jest.fn().mockResolvedValue({ error: null }),
+      signOut: (...args: unknown[]) => mockSignOut(...args),
     },
   },
 }));
 
 jest.mock('@/lib/db/queries', () => ({ getProfile: (userId: string) => mockGetProfile(userId) }));
-jest.mock('@/lib/deep-link', () => ({ completeAuthFromUrl: (url: string) => mockCompleteAuthFromUrl(url) }));
+jest.mock('@/lib/deep-link', () => ({
+  completeAuthFromUrl: (url: string) => mockCompleteAuthFromUrl(url),
+  isRecoveryLink: (url: string) => url.includes('reset-password'),
+}));
+jest.mock('@/lib/session/sync', () => ({
+  setSyncAccount: (...args: unknown[]) => mockAccount(...args),
+  startOutboxSync: jest.fn(() => jest.fn()),
+}));
 jest.mock('@react-native-async-storage/async-storage', () => ({
   getItem: (key: string) => mockGetItem(key),
   setItem: (key: string, value: string) => mockSetItem(key, value),
@@ -64,6 +73,7 @@ function mountAuth() {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockSignOut.mockResolvedValue({ error: null });
   mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
   mockGetInitialURL.mockResolvedValue(null);
   mockCompleteAuthFromUrl.mockResolvedValue(false);
@@ -78,7 +88,7 @@ describe('AuthProvider', () => {
     const auth = mountAuth();
 
     await waitFor(() => expect(auth.current.loading).toBe(false));
-    expect(auth.current.authError).toBe('Session storage unavailable');
+    expect(auth.current.authError?.message).toBe('Session storage unavailable');
     expect(auth.current.session).toBeNull();
     expect(auth.current.profileState).toEqual({ status: 'ready', profile: null });
   });
@@ -88,14 +98,14 @@ describe('AuthProvider', () => {
     const auth = mountAuth();
 
     await waitFor(() => expect(auth.current.loading).toBe(false));
-    expect(auth.current.authError).toBe('Session expired');
+    expect(auth.current.authError?.message).toBe('Session expired');
   });
 
   it('handles failure to read the initial link', async () => {
     mockGetInitialURL.mockRejectedValueOnce(new Error('Could not open sign-in link'));
     const auth = mountAuth();
 
-    await waitFor(() => expect(auth.current.authError).toBe('Could not open sign-in link'));
+    await waitFor(() => expect(auth.current.authError?.message).toBe('Could not open sign-in link'));
     expect(auth.current.loading).toBe(false);
   });
 
@@ -104,7 +114,7 @@ describe('AuthProvider', () => {
     mockCompleteAuthFromUrl.mockRejectedValueOnce(new Error('Google sign-in was denied'));
     const auth = mountAuth();
 
-    await waitFor(() => expect(auth.current.authError).toBe('Google sign-in was denied'));
+    await waitFor(() => expect(auth.current.authError?.message).toBe('Google sign-in was denied'));
     expect(auth.current.loading).toBe(false);
   });
 
@@ -115,7 +125,7 @@ describe('AuthProvider', () => {
 
     act(() => mockURLChange({ url: 'officegym://?code=failed' }));
 
-    await waitFor(() => expect(auth.current.authError).toBe('Apple sign-in failed'));
+    await waitFor(() => expect(auth.current.authError?.message).toBe('Apple sign-in failed'));
     act(() => auth.current.clearAuthError());
     expect(auth.current.authError).toBeNull();
   });
@@ -211,5 +221,75 @@ describe('AuthProvider', () => {
     await act(async () => { refresh.resolve(profile('first')); await refreshing; });
 
     expect(auth.current.profile?.id).toBe('second');
+  });
+});
+
+
+describe('recovery and account synchronization', () => {
+  it('makes a rejected initial session read recoverable', async () => {
+    mockGetSession.mockRejectedValueOnce(new Error('Storage denied'));
+    const auth = mountAuth();
+    await waitFor(() => expect(auth.current.authError?.message).toBe('Storage denied'));
+    await act(async () => { await auth.current.retrySession(); });
+    expect(auth.current.loading).toBe(false);
+    expect(auth.current.authError).toBeNull();
+  });
+
+  it('does not replay a stale account from an initial session result', async () => {
+    const initial = deferred<{ data: { session: Session | null }; error: null }>();
+    mockGetSession.mockReturnValueOnce(initial.promise);
+    const auth = mountAuth();
+    await act(async () => { mockAuthChange('SIGNED_IN', session('B')); });
+    await act(async () => { initial.resolve({ data: { session: session('A') }, error: null }); });
+    expect(auth.current.session?.user.id).toBe('B');
+    expect(mockAccount).not.toHaveBeenCalledWith('A');
+  });
+
+  it('shows callback errors and opens recovery for a valid link', async () => {
+    const auth = mountAuth();
+    await waitFor(() => expect(auth.current.loading).toBe(false));
+    mockCompleteAuthFromUrl.mockRejectedValueOnce(new Error('Link expired'));
+    await act(async () => { mockURLChange({ url: 'officegym://reset-password?code=expired' }); });
+    expect(auth.current.authError?.message).toBe('Link expired');
+    expect(auth.current.recoveringPassword).toBe(false);
+    mockCompleteAuthFromUrl.mockImplementationOnce(async () => { mockAuthChange('SIGNED_IN', session('A')); return true; });
+    await act(async () => { mockURLChange({ url: 'officegym://reset-password?code=valid' }); });
+    expect(auth.current.session?.user.id).toBe('A');
+    expect(auth.current.recoveringPassword).toBe(true);
+  });
+
+  it('pauses replay during failed sign-out then restores the real account', async () => {
+    mockGetSession.mockResolvedValue({ data: { session: session('A') }, error: null });
+    const auth = mountAuth();
+    await waitFor(() => expect(auth.current.session?.user.id).toBe('A'));
+    mockSignOut.mockResolvedValue({ error: new Error('offline') });
+    mockAccount.mockClear();
+    await act(async () => { await expect(auth.current.signOut()).rejects.toThrow('offline'); });
+    expect(mockAccount.mock.calls.map((call) => call[0])).toEqual([null, 'A']);
+  });
+
+  it('does not expose password reset against A while a B recovery link is pending', async () => {
+    mockGetSession.mockResolvedValue({ data: { session: session('A') }, error: null });
+    const auth = mountAuth();
+    await waitFor(() => expect(auth.current.session?.user.id).toBe('A'));
+    const exchange = deferred<boolean>();
+    mockCompleteAuthFromUrl.mockReturnValueOnce(exchange.promise);
+    await act(async () => { mockURLChange({ url: 'officegym://reset-password?code=B' }); });
+    expect(auth.current.processingAuthLink).toBe(true);
+    expect(auth.current.recoveringPassword).toBe(false);
+    await act(async () => { mockAuthChange('SIGNED_IN', session('B')); exchange.resolve(true); });
+    expect(auth.current.session?.user.id).toBe('B');
+    expect(auth.current.recoveringPassword).toBe(true);
+  });
+
+  it('restores recovery after a null INITIAL_SESSION during callback exchange', async () => {
+    const auth = mountAuth();
+    await waitFor(() => expect(auth.current.loading).toBe(false));
+    const exchange = deferred<boolean>();
+    mockCompleteAuthFromUrl.mockReturnValueOnce(exchange.promise);
+    await act(async () => { mockURLChange({ url: 'officegym://reset-password?code=A' }); mockAuthChange('INITIAL_SESSION', null); });
+    await act(async () => { mockAuthChange('SIGNED_IN', session('A')); exchange.resolve(true); });
+    expect(auth.current.session?.user.id).toBe('A');
+    expect(auth.current.recoveringPassword).toBe(true);
   });
 });

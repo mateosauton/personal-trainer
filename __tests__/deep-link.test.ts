@@ -1,4 +1,4 @@
-import { authRedirectTo, completeAuthFromUrl } from '@/lib/deep-link';
+import { authRedirectTo, authRecoveryRedirectTo, completeAuthFromUrl, isRecoveryLink } from '@/lib/deep-link';
 
 const mockExchange = jest.fn();
 const mockSetSession = jest.fn();
@@ -9,7 +9,7 @@ jest.mock('@/lib/db/supabase', () => ({
   } },
 }));
 jest.mock('expo-linking', () => ({
-  createURL: () => 'officegym:///',
+  createURL: (path: string) => path === '/' ? 'officegym:///' : `officegym://${path.replace(/^\//, '')}`,
   parse: (url: string) => ({ queryParams: Object.fromEntries(new URL(url).searchParams) }),
 }));
 
@@ -52,5 +52,32 @@ it('surfaces failed exchanges and permits retry', async () => {
 
 it('does not adopt an incomplete token callback', async () => {
   await expect(completeAuthFromUrl('officegym:///#access_token=incomplete')).rejects.toThrow(/sign in again/i);
+  expect(mockSetSession).not.toHaveBeenCalled();
+});
+
+
+it('uses a dedicated password-reset callback on the configured app origin', () => {
+  expect(authRecoveryRedirectTo()).toBe('officegym://reset-password');
+  expect(isRecoveryLink('officegym://reset-password?code=test')).toBe(true);
+  expect(isRecoveryLink('officegym:///#type=recovery&access_token=test')).toBe(true);
+  expect(isRecoveryLink('officegym:///#type=signup&access_token=test')).toBe(false);
+  expect(isRecoveryLink('https://untrusted.test/reset-password?code=test')).toBe(false);
+});
+
+it('exchanges a recovery PKCE code and surfaces backend errors', async () => {
+  await expect(completeAuthFromUrl('officegym://reset-password?code=recovery-one')).resolves.toBe(true);
+  expect(mockExchange).toHaveBeenCalledWith('recovery-one');
+  mockExchange.mockResolvedValueOnce({ error: new Error('Expired recovery code') });
+  await expect(completeAuthFromUrl('officegym://reset-password?code=recovery-old')).rejects.toThrow('Expired recovery code');
+});
+
+it('rejects legacy implicit recovery sessions', async () => {
+  await expect(completeAuthFromUrl('officegym://reset-password#access_token=a&refresh_token=r&type=recovery')).rejects.toThrow(/sign in again/i);
+  expect(mockSetSession).not.toHaveBeenCalled();
+});
+
+it('surfaces an expired recovery link without establishing a session', async () => {
+  await expect(completeAuthFromUrl('officegym://reset-password#error=access_denied&error_description=Link+expired')).rejects.toThrow('Link expired');
+  expect(mockExchange).not.toHaveBeenCalled();
   expect(mockSetSession).not.toHaveBeenCalled();
 });

@@ -1,8 +1,25 @@
+import type { SavedWorkout } from './workout-store';
+import { nativeJournalLock, type JournalLock } from './set-journal';
 export interface OutboxOperation {
   id: string;
   kind: 'set' | 'progress' | 'complete';
   payload: Record<string, unknown>;
 }
+
+export interface RejectedOperation {
+  operation: OutboxOperation;
+  code: string;
+  resolved: boolean;
+  localRest?: SavedWorkout;
+}
+const validOperation = (item: any): item is OutboxOperation =>
+  item &&
+  typeof item.id === 'string' &&
+  item.id.length > 0 &&
+  ['set', 'progress', 'complete'].includes(item.kind) &&
+  item.payload &&
+  typeof item.payload === 'object' &&
+  !Array.isArray(item.payload);
 
 export interface OutboxStorage {
   getItem(key: string): Promise<string | null>;
@@ -11,30 +28,188 @@ export interface OutboxStorage {
 
 /** Durable, serial replay queue. Operation IDs make retries safe for idempotent writes. */
 export class Outbox {
-  private tail: Promise<void> = Promise.resolve();
+  private flushing: Promise<void> | null = null;
 
   constructor(
     private readonly storage: OutboxStorage,
-    private readonly send: (operation: OutboxOperation) => Promise<void>,
+    private readonly send: (
+      operation: OutboxOperation,
+      signal: AbortSignal,
+    ) => Promise<void>,
     private readonly key = 'office-gym.session-outbox.v1',
+    private readonly isRejected: (error: unknown) => boolean = () => false,
+    private readonly storageLock: JournalLock = nativeJournalLock,
   ) {}
 
   private async read(): Promise<OutboxOperation[]> {
     const raw = await this.storage.getItem(this.key);
     if (!raw) return [];
-    try { return JSON.parse(raw) as OutboxOperation[]; } catch { return []; }
+    let items: unknown;
+    try {
+      items = JSON.parse(raw);
+    } catch {
+      throw new Error(
+        'The saved workout queue could not be read. Its data has been preserved.',
+      );
+    }
+    if (!Array.isArray(items) || !items.every(validOperation)) {
+      throw new Error(
+        'The saved workout queue is invalid. Its data has been preserved.',
+      );
+    }
+    return items as OutboxOperation[];
+  }
+
+  private async readRejected(): Promise<RejectedOperation[]> {
+    const raw = await this.storage.getItem(`${this.key}.rejected`);
+    if (!raw) return [];
+    let items: unknown;
+    try {
+      items = JSON.parse(raw);
+    } catch {
+      throw new Error(
+        'Rejected workout data could not be read. Its data has been preserved.',
+      );
+    }
+    if (
+      !Array.isArray(items) ||
+      !items.every(
+        (entry) =>
+          entry &&
+          validOperation(entry.operation) &&
+          typeof entry.code === 'string' &&
+          typeof entry.resolved === 'boolean',
+      )
+    ) {
+      throw new Error(
+        'Rejected workout data is invalid. Its data has been preserved.',
+      );
+    }
+    return items;
+  }
+
+  /** Callback may persist journal metadata only; do not enqueue or await network here. */
+  withSetExclusions<T>(action: (ids: string[]) => Promise<T>) {
+    return this.exclusive(async () => {
+      const pending = await this.read();
+      const rejected = await this.readRejected();
+      const ids = [...pending, ...rejected.filter(entry => !entry.resolved).map(entry => entry.operation)]
+        .filter(entry => entry.kind === 'set').map(entry => entry.id);
+      return action(ids);
+    });
+  }
+  /** Save a local-only legacy edit for explicit review without scheduling a send. */
+  captureLegacyReview(operation: OutboxOperation, guard: () => void = () => {}, localRest?: SavedWorkout) {
+    if (!validOperation(operation) || operation.kind !== 'set' || operation.payload.write)
+      throw new Error('Invalid legacy recovery capture.');
+    const captured = JSON.parse(JSON.stringify(operation)) as OutboxOperation;
+    const context = localRest ? JSON.parse(JSON.stringify(localRest)) as SavedWorkout : undefined;
+    return this.exclusive(async () => {
+      const pending = await this.read();
+      const archive = await this.readRejected();
+      if (pending.some(entry => entry.id === captured.id))
+        throw new Error('The saved set changed. Sync or review its current value from Home.');
+      const current = [...archive].reverse().find(entry => !entry.resolved && entry.operation.id === captured.id);
+      guard();
+      if (current) {
+        if (current.operation.kind !== 'set' || current.operation.payload.write
+          || !['PT409', 'PT410'].includes(current.code))
+          throw new Error('The saved set changed. Review its current value from Home.');
+        if (!context || JSON.stringify(current.localRest) === JSON.stringify(context)) return current;
+      }
+      const review: RejectedOperation = { operation: current?.operation ?? captured, code: current?.code ?? 'PT409', resolved: false,
+        ...(context ? { localRest: context } : {}) };
+      archive.push(review);
+      await this.storage.setItem(`${this.key}.rejected`, JSON.stringify(archive));
+      return review;
+    });
+  }
+  rejected() {
+    return this.exclusive(async () =>
+      (await this.readRejected()).filter((entry) => !entry.resolved),
+    );
+  }
+
+  retryRejected(
+    shouldRetry: (entry: RejectedOperation) => boolean = () => true,
+  ) {
+    return this.exclusive(async () => {
+      const items = await this.read();
+      const latest = new Map<string, RejectedOperation>();
+      for (const entry of await this.readRejected()) {
+        if (!entry.resolved) latest.set(entry.operation.id, entry);
+      }
+      for (const entry of latest.values()) {
+        if (!shouldRetry(entry)) continue;
+        const operation = entry.operation;
+        // A newer correction in the queue wins over its archived version.
+        if (!items.some((item) => item.id === operation.id))
+          items.push(operation);
+      }
+      await this.write(items);
+    });
+  }
+
+  /** Prepare a replacement under the same lock that checks the reviewed archive. */
+  replaceRejected(captured: RejectedOperation, prepare: () => Promise<OutboxOperation>) {
+    return this.exclusive(async () => {
+      const items = await this.read();
+      const latest = [...await this.readRejected()].reverse().find(entry =>
+        !entry.resolved && entry.operation.id === captured.operation.id);
+      if (!latest || JSON.stringify(latest) !== JSON.stringify(captured)
+        || items.some(item => item.id === captured.operation.id))
+        throw new Error('The saved set changed. Review the latest value.');
+      const replacement = await prepare();
+      if (!validOperation(replacement) || replacement.id !== captured.operation.id
+        || replacement.kind !== captured.operation.kind)
+        throw new Error('Invalid workout recovery replacement.');
+      items.push(replacement);
+      // Rejections remain unresolved until this exact replacement is acknowledged.
+      await this.write(items);
+    });
+  }
+
+  private async quarantine(operation: OutboxOperation, error: unknown) {
+    return this.exclusive(async () => {
+      const items = await this.read();
+      const index = items.findIndex(
+        (item) => JSON.stringify(item) === JSON.stringify(operation),
+      );
+      if (index < 0) return; // Its newer correction is still queued.
+      const archive = await this.readRejected();
+      const duplicate = archive.findIndex(
+        (entry) =>
+          !entry.resolved &&
+          JSON.stringify(entry.operation) === JSON.stringify(operation),
+      );
+      // A user may revert to an older value. Refresh its position so the
+      // archive's newest version still represents their current correction.
+      if (duplicate >= 0) archive.splice(duplicate, 1);
+      archive.push({
+        operation,
+        code: String((error as { code?: string }).code ?? 'rejected'),
+        resolved: false,
+      });
+      await this.storage.setItem(
+        `${this.key}.rejected`,
+        JSON.stringify(archive),
+      );
+      // Never remove the queued data before its recovery copy is durable.
+      items.splice(index, 1);
+      await this.write(items);
+    });
   }
 
   private async write(items: OutboxOperation[]) {
     await this.storage.setItem(this.key, JSON.stringify(items));
   }
 
-  async pending(): Promise<OutboxOperation[]> { return this.read(); }
+  async pending(): Promise<OutboxOperation[]> {
+    return this.read();
+  }
 
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
-    const result = this.tail.then(work, work);
-    this.tail = result.then(() => undefined, () => undefined);
-    return result;
+    return this.storageLock(this.key, work);
   }
 
   async enqueue(operation: OutboxOperation) {
@@ -47,18 +222,91 @@ export class Outbox {
     });
   }
 
-  async flush() {
-    await this.exclusive(async () => {
-      let items = await this.read();
-      while (items.length) {
-        try {
-          await this.send(items[0]);
-        } catch {
-          return;
+  flush(): Promise<void> {
+    if (!this.flushing) {
+      this.flushing = this.drain().finally(() => {
+        this.flushing = null;
+      });
+    }
+    return this.flushing;
+  }
+
+  private async drain() {
+    while (true) {
+      const operation = await this.exclusive(
+        async () => (await this.read())[0],
+      );
+      if (!operation) return;
+      // Hold the storage lock only for disk operations. Network stalls must
+      // never prevent the next set from being saved on the device.
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const deadline = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error('Workout sync timed out.'));
+          }, 15_000);
+        });
+        await Promise.race([this.send(operation, controller.signal), deadline]);
+      } catch (error) {
+        if (!controller.signal.aborted && this.isRejected(error)) {
+          try {
+            await this.quarantine(operation, error);
+          } catch {
+            return;
+          }
+          continue;
         }
-        items = items.slice(1);
-        await this.write(items);
+        // Retain the entry even if an expired request acknowledges later.
+        // Another connectivity event or explicit retry can start a fresh send.
+        return;
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
       }
-    });
+      await this.exclusive(async () => {
+        const items = await this.read();
+        const archive = await this.readRejected();
+        const queued = items.find((item) => item.id === operation.id);
+        const latestRejected = [...archive]
+          .reverse()
+          .find(
+            (entry) => !entry.resolved && entry.operation.id === operation.id,
+          );
+        const current = queued ?? latestRejected?.operation;
+        const acknowledgesCurrent =
+          current != null &&
+          JSON.stringify(current) === JSON.stringify(operation);
+        if (
+          archive.some(
+            (entry) => !entry.resolved && entry.operation.id === operation.id,
+          )
+        ) {
+          await this.storage.setItem(
+            `${this.key}.rejected`,
+            JSON.stringify(
+              archive.map((entry) =>
+                entry.operation.id === operation.id &&
+                (acknowledgesCurrent ||
+                  JSON.stringify(entry.operation) === JSON.stringify(operation))
+                  ? { ...entry, resolved: true }
+                  : entry,
+              ),
+            ),
+          );
+        }
+        const index = items.findIndex(
+          (item) =>
+            item.id === operation.id &&
+            JSON.stringify(item) === JSON.stringify(operation),
+        );
+        // An edited set with the same ID needs another send; do not delete it
+        // because an older version finished while the edit was being saved.
+        if (index >= 0) {
+          items.splice(index, 1);
+          await this.write(items);
+        }
+      });
+    }
   }
 }

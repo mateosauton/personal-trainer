@@ -9,7 +9,7 @@ mockQuery.eq.mockReturnValue(mockQuery);
 
 jest.mock('@/lib/db/supabase', () => ({ supabase: { from: () => mockQuery } }));
 
-import { getActivePlan } from '@/lib/db/queries';
+import { getActivePlan, getSessionPlanDay } from '@/lib/db/queries';
 
 function storedPlan(split = 'Gym PPL · 6-session rotation') {
   return {
@@ -57,4 +57,15 @@ it('keeps existing generated plans untimed', async () => {
   mockMaybeSingle.mockResolvedValue({ data: storedPlan('Upper / Lower'), error: null });
   const plan = await getActivePlan('user');
   expect(plan!.days[0].blocks.every((block) => block.duration_seconds == null)).toBe(true);
+});
+
+it('restores the original timed session even after the active plan changes', async () => {
+  const plan = storedPlan();
+  mockMaybeSingle.mockResolvedValue({
+    data: { plan_days: { ...plan.plan_days[0], plans: { split: plan.split } } }, error: null,
+  });
+  const day = await getSessionPlanDay('session', 'user');
+  expect(day!.blocks[0].duration_seconds).toBe(300);
+  expect(day!.blocks.reduce((sum, block) => sum + (block.duration_seconds ?? 0), 0)).toBe(2820);
+  expect(day!.blocks[2].title).toBe('Block 2 · Build strength');
 });

@@ -7,6 +7,7 @@ import { getExercise } from './catalog';
 export interface LoggedSet {
   exercise_id?: string;
   reps: number | null;
+  seconds?: number | null;
   weight_kg: number | null;
   is_bodyweight: boolean;
   added_load_kg: number;
@@ -76,7 +77,7 @@ export function sessionTotals(logs: LoggedSet[], bodyweightKg: number | null): T
   let volumeKg = 0;
   for (const log of logs) {
     const sides = log.exercise_id && getExercise(log.exercise_id)?.is_unilateral ? 2 : 1;
-    const setReps = (log.reps ?? 0) * sides;
+    const setReps = log.seconds != null ? 0 : (log.reps ?? 0) * sides;
     reps += setReps;
     const load = effectiveLoadKg(log, bodyweightKg);
     if (load != null) volumeKg += load * setReps;

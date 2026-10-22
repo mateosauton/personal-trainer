@@ -8,10 +8,25 @@ export const authRedirectTo = () => {
   return url ? new URL(url).toString() : url;
 };
 
+export const authRecoveryRedirectTo = () => Linking.createURL('/reset-password');
+
 let completedUrl: string | null = null;
 const pending = new Map<string, Promise<boolean>>();
 
 const callbackTarget = (url: URL) => `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, '')}`;
+
+export function isRecoveryLink(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const target = callbackTarget(parsed);
+    if (target === callbackTarget(new URL(authRecoveryRedirectTo()))) return true;
+    if (target !== callbackTarget(new URL(authRedirectTo()))) return false;
+    return parsed.searchParams.get('type') === 'recovery'
+      || new URLSearchParams(parsed.hash.slice(1)).get('type') === 'recovery';
+  } catch {
+    return false;
+  }
+}
 
 function clearBrowserCallback(url: string) {
   if (typeof window === 'undefined' || window.location?.href !== url) return;
@@ -26,7 +41,9 @@ export async function completeAuthFromUrl(url: string): Promise<boolean> {
   let parsed: URL;
   try {
     parsed = new URL(url);
-    if (callbackTarget(parsed) !== callbackTarget(new URL(authRedirectTo()))) return false;
+    const target = callbackTarget(parsed);
+    if (target !== callbackTarget(new URL(authRedirectTo()))
+      && target !== callbackTarget(new URL(authRecoveryRedirectTo()))) return false;
   } catch {
     return false;
   }

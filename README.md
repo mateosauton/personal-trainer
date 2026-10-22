@@ -56,15 +56,17 @@ target. Restart Expo after switching environments. `.env.example` is a template
 for offline setup; `.env.test` contains only mock settings. Actual values are
 gitignored and managed in EAS.
 
-GitHub publishing uses the repository's `EXPO_TOKEN` secret. Vercel also needs
-an Expo access token named `EXPO_TOKEN` in its Production and Preview environment
-settings so `npm run export:web` can read EAS. This token is only for the build;
-it must not have the `EXPO_PUBLIC_` prefix.
+GitHub publishing uses the repository's `EXPO_TOKEN` secret. Cloudflare and
+Vercel builds use `npm run build:web` with the two public values mirrored from
+EAS production into their build environments. These hosts do not need an Expo
+access token. Local production exports use `npm run export:web` to fetch EAS
+values directly.
 
 ## Authentication
 
-Google sign-in shares the existing Supabase session and onboarding flow.
-Email/password remains available. Apple is skipped and hidden by default; its
+Social sign-in shares the existing Supabase session and onboarding flow.
+Email/password remains available. Google requires `EXPO_PUBLIC_GOOGLE_SIGN_IN_ENABLED=1`
+after its provider setup. Apple is skipped and hidden by default; its
 implementation can be enabled later with `EXPO_PUBLIC_APPLE_SIGN_IN_ENABLED=1`
 after provider setup. Google uses the system browser or a web redirect.
 See [provider setup and release checks](docs/auth-setup.md) for the Supabase
@@ -72,49 +74,19 @@ credentials, redirect URLs, Apple capability, and native rebuild requirements.
 
 ## The hosted build
 
-Live, no login required:
-**https://cdn.jsdelivr.net/gh/mateosauton/personal-trainer@cdn/index.html**
+The web testing app is hosted on Cloudflare:
+[Open Office Gym](https://personal-trainer.sautonmateo.workers.dev).
+It stays available when the local Expo server is off. Users still sign in to
+Supabase to access their own data. Expo/EAS handles native app distribution.
 
-That one is a stopgap — a CDN has no rewrite rules, so deep links 404 and you
-have to enter at the root. The host you actually want is Vercel, one setting
-away (below).
+Cloudflare Workers Builds watches `master` and deploys with `npx wrangler deploy`.
+The custom build in `wrangler.jsonc` runs TypeScript checks and all tests before
+exporting the website. `dist/` is served at the domain root, with an SPA fallback
+for direct links and browser refreshes. See [Cloudflare release steps](docs/CLOUDFLARE_RELEASE.md)
+for build variables, previews, verification, and rollback.
 
-**https://personal-trainer-mateo-sautons-projects.vercel.app**
-
-The same code runs on the web: `npm run export:web` writes a static
-single-page bundle to `dist/`, and `vercel.json` tells Vercel to do exactly that
-and to rewrite every app route back to `index.html`. Vercel builds `master` on
-every push. `vercel.json` also states the install command outright, because the
-project predates this repo and would otherwise inherit the one it was set up
-with.
-
-`personal-trainer.vercel.app` is **not** this app — that hostname belongs to an
-unrelated Vercel account.
-
-That Vercel URL currently answers with Vercel's login page, because the project
-has Deployment Protection on: Settings → Deployment Protection → Vercel
-Authentication → Disabled makes it public. Nothing is exposed by doing so —
-every table is RLS'd to `auth.uid()`, so a visitor still has to sign in.
-
-A second, login-free copy is built by `.github/workflows/publish-pages.yml`,
-which pushes the same export to the `gh-pages` branch. It goes live at
-`https://mateosauton.github.io/personal-trainer/` once Pages is switched on:
-Settings → Pages → Source: *Deploy from a branch* → `gh-pages` → `/ (root)`.
-GitHub stopped auto-enabling Pages on a `gh-pages` push, and a workflow token
-is not allowed to enable it, so that first switch has to be thrown by hand.
-
-Hosted builds read the `production` environment in EAS. Local development pulls
-the `development` environment into `.env.local` with `npm run env:pull`.
-
-## Native builds and Observe
-
-EAS Observe metrics require a new EAS preview or production build. Expo Go does
-not send them.
-
-```bash
-eas build --profile preview
-eas build --profile production
-```
+The existing Vercel, GitHub Pages, and jsDelivr deployments are legacy test
+mirrors. Cloudflare is the primary web testing URL.
 
 ## Driving the UI without a device
 
@@ -135,7 +107,7 @@ on screen long enough to see). `drive.mjs` holds one function per flow; add to
 it rather than writing a new script.
 
 To check the real thing rather than the dev server, `tools/dev/serve-dist.mjs`
-serves an exported `dist/` with the same rewrite rule Vercel applies:
+serves an exported `dist/` with the same SPA fallback Cloudflare applies:
 
 ```bash
 npm run export:web

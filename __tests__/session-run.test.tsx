@@ -1,8 +1,12 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 
+import type { SavedWorkout } from '@/lib/session/workout-store';
+
 import type { Plan, PlanDay } from '@/lib/types';
 
 const mockReplace = jest.fn();
+const mockRouter = { replace: mockReplace, back: jest.fn() };
+let mockSavedWorkout: SavedWorkout | null = null;
 const mockQueueSet = jest.fn().mockResolvedValue(undefined);
 const mockQueueCompletion = jest.fn().mockResolvedValue(undefined);
 const mockGetActivePlan = jest.fn();
@@ -11,14 +15,17 @@ const mockGetWeightHistory = jest.fn();
 
 jest.mock('expo-router', () => ({
   useLocalSearchParams: () => ({ dayId: 'day', sessionId: 'session' }),
-  useRouter: () => ({ replace: mockReplace, back: jest.fn() }),
+  useRouter: () => mockRouter,
 }));
 jest.mock('@/lib/auth', () => ({
   useUserId: () => 'user',
   useAuth: () => ({ profile: { units: 'kg', bodyweight_kg: 80 } }),
 }));
 jest.mock('@/lib/db/queries', () => ({
+  getSessionSetSnapshot: async () => ({ logs: [], versions: [] }),
   getActivePlan: (...args: unknown[]) => mockGetActivePlan(...args),
+  getSessionResumeDetails: async () => ({ started_at: new Date(Date.now()).toISOString(), completed_at: null }),
+  getSessionPlanDay: async () => (await mockGetActivePlan()).days[0],
   getProgress: (...args: unknown[]) => mockGetProgress(...args),
   getWeightHistory: (...args: unknown[]) => mockGetWeightHistory(...args),
 }));
@@ -27,7 +34,17 @@ jest.mock('@/lib/session/sync', () => ({
   queueCompletion: (...args: unknown[]) => mockQueueCompletion(...args),
   flushOutbox: () => Promise.resolve(),
   pendingSyncCount: () => Promise.resolve(0),
+  bootstrapSetBaselines: async () => undefined,
+  stageLegacyRestRecovery: async () => undefined,
 }));
+jest.mock('@/lib/session/workout', () => ({ workouts: {
+  read: async () => mockSavedWorkout,
+  create: async (value: SavedWorkout) => { mockSavedWorkout = value; return value; },
+  update: async (_owner: string, _session: string, _expected: unknown, patch: Partial<SavedWorkout>) => {
+    mockSavedWorkout = { ...mockSavedWorkout!, ...patch }; return mockSavedWorkout;
+  },
+  withSnapshot: async (_owner: string, _snapshot: unknown, action: () => Promise<unknown>) => action(),
+} }));
 jest.mock('@/components/ExerciseMedia', () => ({ ExerciseMedia: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
@@ -63,6 +80,7 @@ describe('timed workout player', () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2026-10-21T12:00:00Z'));
     jest.clearAllMocks();
+    mockSavedWorkout = null;
     mockGetActivePlan.mockResolvedValue(plan);
     mockGetProgress.mockResolvedValue(new Map([['Barbell_Bench_Press_-_Medium_Grip', {
       exercise_id: 'Barbell_Bench_Press_-_Medium_Grip', last_weight_kg: 42.5, last_reps: 8,
@@ -88,11 +106,11 @@ describe('timed workout player', () => {
     const screen = render(<SessionRun />);
     await waitFor(() => expect(screen.getByLabelText('Pause timers')).toBeTruthy());
     act(() => jest.advanceTimersByTime(10_000));
-    fireEvent.press(screen.getByLabelText('Pause timers'));
+    await act(async () => { fireEvent.press(screen.getByLabelText('Pause timers')); });
     act(() => jest.advanceTimersByTime(40_000));
     expect(screen.getByText('4:50 remaining')).toBeTruthy();
     expect(screen.getByText('0:10 elapsed')).toBeTruthy();
-    fireEvent.press(screen.getByLabelText('Resume timers'));
+    await act(async () => { fireEvent.press(screen.getByLabelText('Resume timers')); });
     act(() => jest.advanceTimersByTime(10_000));
     expect(screen.getByText('4:40 remaining')).toBeTruthy();
     expect(screen.getByText('0:20 elapsed')).toBeTruthy();
@@ -111,10 +129,10 @@ describe('timed workout player', () => {
   it('keeps recovery inside the block before starting the next countdown', async () => {
     const screen = render(<SessionRun />);
     await waitFor(() => expect(screen.getByText('Done')).toBeTruthy());
-    fireEvent.press(screen.getByText('Done'));
+    await act(async () => { fireEvent.press(screen.getByText('Done')); });
     expect(screen.getByText('Block complete · recover')).toBeTruthy();
     expect(screen.getByText('5:00 remaining')).toBeTruthy();
-    fireEvent.press(screen.getByText('Skip rest'));
+    await act(async () => { fireEvent.press(screen.getByText('Skip rest')); });
     await waitFor(() => expect(screen.getByText('6:00 remaining')).toBeTruthy());
     expect(screen.getByText('Complete set')).toBeTruthy();
     expect(mockQueueSet).not.toHaveBeenCalled();
@@ -123,16 +141,16 @@ describe('timed workout player', () => {
   it('saves only a manually completed set and retains editable logging during recovery', async () => {
     const screen = render(<SessionRun />);
     await waitFor(() => expect(screen.getByText('Done')).toBeTruthy());
-    fireEvent.press(screen.getByText('Done'));
-    fireEvent.press(screen.getByText('Skip rest'));
+    await act(async () => { fireEvent.press(screen.getByText('Done')); });
+    await act(async () => { fireEvent.press(screen.getByText('Skip rest')); });
     await act(async () => { fireEvent.press(screen.getByText('Complete set')); });
     await waitFor(() => expect(mockQueueSet).toHaveBeenCalledTimes(1));
-    expect(mockQueueSet).toHaveBeenCalledWith('session', expect.objectContaining({
+    expect(mockQueueSet).toHaveBeenCalledWith('user', 'session', expect.objectContaining({
       plan_item_id: 'item-0', reps: 8, set_index: 1,
     }));
     expect(screen.getByText('Reps')).toBeTruthy();
     expect(screen.getByText('Weight')).toBeTruthy();
-    fireEvent.press(screen.getByLabelText('Pause timers'));
+    await act(async () => { fireEvent.press(screen.getByLabelText('Pause timers')); });
     act(() => jest.advanceTimersByTime(10_000));
     expect(screen.getByText('6:00 remaining')).toBeTruthy();
   });
@@ -148,8 +166,8 @@ describe('timed workout player', () => {
     act(() => jest.advanceTimersByTime(360_000));
     expect(screen.getByText('Finish session')).toBeTruthy();
     expect(mockQueueCompletion).not.toHaveBeenCalled();
-    fireEvent.press(screen.getByText('Finish session'));
-    await waitFor(() => expect(mockQueueCompletion).toHaveBeenCalledWith('session', 360));
+    await act(async () => { fireEvent.press(screen.getByText('Finish session')); });
+    await waitFor(() => expect(mockQueueCompletion).toHaveBeenCalledWith('user', 'session', 360));
   });
 
   it('records a timed hold without inventing reps or offering a reps stepper', async () => {
@@ -160,9 +178,10 @@ describe('timed workout player', () => {
     const screen = render(<SessionRun />);
     await waitFor(() => expect(screen.getByText('Complete set')).toBeTruthy());
     await act(async () => { fireEvent.press(screen.getByText('Complete set')); });
-    await waitFor(() => expect(mockQueueSet).toHaveBeenCalledWith('session', expect.objectContaining({ reps: null })));
+    await waitFor(() => expect(mockQueueSet).toHaveBeenCalledWith('user', 'session', expect.objectContaining({ reps: null })));
     expect(screen.queryByText('Reps')).toBeNull();
-    expect(screen.getByText('Timed set · 30s target')).toBeTruthy();
+    expect(screen.getByText('Seconds')).toBeTruthy();
+    expect(mockQueueSet).toHaveBeenCalledWith('user', 'session', expect.objectContaining({ seconds: 30, reps: null }));
   });
 
   it('shows block durations and the session target before beginning', async () => {
@@ -184,7 +203,7 @@ describe('timed workout player', () => {
     await waitFor(() => expect(screen.getByText('Complete set')).toBeTruthy());
     await act(async () => { fireEvent.press(screen.getByText('Complete set')); });
     await waitFor(() => expect(screen.getByText('Skip rest')).toBeTruthy());
-    fireEvent.press(screen.getByText('Skip rest'));
+    await act(async () => { fireEvent.press(screen.getByText('Skip rest')); });
     expect(screen.getByText('Barbell Curl')).toBeTruthy();
   });
 
@@ -196,16 +215,16 @@ describe('timed workout player', () => {
     expect(screen.queryByText('Exercise complete')).toBeNull();
     fireEvent.changeText(screen.getByLabelText('Weight to use (kg)'), '45');
     await act(async () => { fireEvent.press(screen.getByText('Complete set')); });
-    expect(mockQueueSet).toHaveBeenCalledWith('session', expect.objectContaining({ weight_kg: 45 }));
+    expect(mockQueueSet).toHaveBeenCalledWith('user', 'session', expect.objectContaining({ weight_kg: 45 }));
     await waitFor(() => expect(screen.getByText('Exercise complete')).toBeTruthy());
     expect(screen.getByText('Previous workout: 40 kg')).toBeTruthy();
     expect(screen.getByText('+5 kg vs previous workout')).toBeTruthy();
     // Corrections replace this set, and keep the previous-session baseline.
-    fireEvent.press(screen.getAllByLabelText('Increase')[1]);
+    await act(async () => { fireEvent.press(screen.getAllByLabelText('Increase')[1]); });
     expect(screen.getByText('+7.5 kg vs previous workout')).toBeTruthy();
     expect(screen.getByText('Previous workout: 40 kg')).toBeTruthy();
-    fireEvent.press(screen.getByText('Skip rest'));
-    await waitFor(() => expect(mockQueueSet).toHaveBeenLastCalledWith('session', expect.objectContaining({ weight_kg: 47.5 })));
+    await act(async () => { fireEvent.press(screen.getByText('Skip rest')); });
+    await waitFor(() => expect(mockQueueSet).toHaveBeenLastCalledWith('user', 'session', expect.objectContaining({ weight_kg: 47.5 })));
   });
 
   it('requires a personal starting weight when a loaded exercise has no history', async () => {
@@ -214,12 +233,12 @@ describe('timed workout player', () => {
     mockGetActivePlan.mockResolvedValue({ ...plan, days: [{ ...day, blocks: [day.blocks[1]] }] });
     const screen = render(<SessionRun />);
     await waitFor(() => expect(screen.getByText('Record your starting weight')).toBeTruthy());
-    fireEvent.press(screen.getByText('Complete set'));
+    await act(async () => { fireEvent.press(screen.getByText('Complete set')); });
     expect(mockQueueSet).not.toHaveBeenCalled();
     fireEvent.changeText(screen.getByLabelText('Weight to use (kg)'), '20');
     await act(async () => { fireEvent.press(screen.getByText('Complete set')); });
     await waitFor(() => expect(screen.getByText('First recorded workout')).toBeTruthy());
-    expect(mockQueueSet).toHaveBeenCalledWith('session', expect.objectContaining({ weight_kg: 20 }));
+    expect(mockQueueSet).toHaveBeenCalledWith('user', 'session', expect.objectContaining({ weight_kg: 20 }));
   });
 
   it('shows final-exercise feedback in a circuit only after its last round', async () => {
@@ -232,10 +251,10 @@ describe('timed workout player', () => {
     await waitFor(() => expect(screen.getByText('Complete set')).toBeTruthy());
     await act(async () => { fireEvent.press(screen.getByText('Complete set')); });
     expect(screen.queryByText('Exercise complete')).toBeNull();
-    fireEvent.press(screen.getByText('Skip rest'));
+    await act(async () => { fireEvent.press(screen.getByText('Skip rest')); });
     await act(async () => { fireEvent.press(screen.getByText('Complete set')); });
     expect(screen.queryByText('Exercise complete')).toBeNull();
-    fireEvent.press(screen.getByText('Skip rest'));
+    await act(async () => { fireEvent.press(screen.getByText('Skip rest')); });
     await act(async () => { fireEvent.press(screen.getByText('Complete set')); });
     await waitFor(() => expect(screen.getByText('Exercise complete')).toBeTruthy());
     expect(mockQueueSet).toHaveBeenCalledTimes(3);
@@ -267,8 +286,50 @@ describe('timed workout player', () => {
     await waitFor(() => expect(screen.getByText('Suggested added load')).toBeTruthy());
     await act(async () => { fireEvent.press(screen.getByText('Complete set')); });
     await waitFor(() => expect(screen.getByText('Exercise complete')).toBeTruthy());
-    fireEvent.press(screen.getByText('Bodyweight'));
+    await act(async () => { fireEvent.press(screen.getByText('Bodyweight')); });
     expect(screen.getByText('Previous workout unavailable')).toBeTruthy();
     expect(screen.queryByText(/vs previous workout/)).toBeNull();
+  });
+
+  it('restores paused block and session clocks after leaving and reopening the player', async () => {
+    const first = render(<SessionRun />);
+    await waitFor(() => expect(first.getByText('5:00 remaining')).toBeTruthy());
+    act(() => jest.advanceTimersByTime(10_000));
+    await act(async () => { fireEvent.press(first.getByLabelText('Pause timers')); });
+    expect(mockSavedWorkout?.timing?.session.pausedAt).not.toBeNull();
+    first.unmount();
+    act(() => jest.advanceTimersByTime(60_000));
+
+    const resumed = render(<SessionRun />);
+    await waitFor(() => expect(resumed.getByLabelText('Resume timers')).toBeTruthy());
+    expect(resumed.getByText('4:50 remaining')).toBeTruthy();
+    expect(resumed.getByText('0:10 elapsed')).toBeTruthy();
+    await act(async () => { fireEvent.press(resumed.getByLabelText('Resume timers')); });
+    act(() => jest.advanceTimersByTime(10_000));
+    expect(resumed.getByText('4:40 remaining')).toBeTruthy();
+    expect(resumed.getByText('0:20 elapsed')).toBeTruthy();
+  });
+
+  it('restores paused final recovery and recorded weight feedback without counting time away', async () => {
+    mockGetActivePlan.mockResolvedValue({ ...plan, days: [{ ...day, blocks: [day.blocks[1]] }] });
+    const first = render(<SessionRun />);
+    await waitFor(() => expect(first.getByText('Complete set')).toBeTruthy());
+    await act(async () => { fireEvent.press(first.getByText('Complete set')); });
+    act(() => jest.advanceTimersByTime(30_000));
+    await act(async () => { fireEvent.press(first.getByLabelText('Pause timers')); });
+    first.unmount();
+    act(() => jest.advanceTimersByTime(60_000));
+
+    const resumed = render(<SessionRun />);
+    await waitFor(() => expect(resumed.getByText('Exercise complete')).toBeTruthy());
+    expect(resumed.getByText('5:30 remaining')).toBeTruthy();
+    expect(resumed.getByText('5:30')).toBeTruthy();
+    expect(resumed.getByText('1 set completed')).toBeTruthy();
+    await act(async () => { fireEvent.press(resumed.getByLabelText('Resume timers')); });
+    act(() => jest.advanceTimersByTime(10_000));
+    expect(resumed.getByText('5:20 remaining')).toBeTruthy();
+    expect(resumed.getByText('5:20')).toBeTruthy();
+    await act(async () => { fireEvent.press(resumed.getByText('Skip rest')); });
+    await waitFor(() => expect(mockQueueCompletion).toHaveBeenCalledWith('user', 'session', 40));
   });
 });

@@ -21,11 +21,13 @@ EAS environment, followed by a rebuild and a real provider sign-in.
 The connected Supabase MCP account still cannot access this project. The
 dashboard session for `mateosauton's Org` can access it, so dashboard setup can
 continue. The owner approved Google Cloud and Apple Developer console access
-for this app and chose personal ownership for both providers. Google Cloud has
-been switched to the personal account and is at its first-use Terms of Service
-screen, awaiting the owner's acceptance. The owner chose to skip unavailable
-Apple sign-in, so Apple console setup is stopped and its UI stays disabled.
-No provider credentials have been created or entered.
+for this app and chose personal ownership for both providers. Personal Google
+Cloud is now accessible. Its existing projects belong to other apps, so a new
+`Office Gym` project, ID `office-gym-512401`, is prepared for OAuth configuration.
+Project creation awaits explicit owner approval; it has not been submitted
+successfully. The owner chose to skip unavailable Apple sign-in, so Apple console
+setup is stopped and its UI stays disabled. No provider credentials have been
+created or entered.
 
 Use the project selected by `EXPO_PUBLIC_SUPABASE_URL` in each EAS environment.
 Do not switch projects just to enable a provider: existing users and training
@@ -72,9 +74,12 @@ EAS environment and rebuild before offering Google sign-in to users.
    screen is still in testing.
 2. Create a **Web application** OAuth client. This app uses browser OAuth for
    Google on all platforms, so a native Google SDK client is not needed.
+   Use the dedicated personal Office Gym Cloud project once it has been created.
 3. Add the app's web origin to authorized JavaScript origins, and add this
    authorized redirect URI:
    `https://asbudyijvunpnhrhsubm.supabase.co/auth/v1/callback`.
+   The verified primary web origin is
+   `https://personal-trainer.sautonmateo.workers.dev`.
 4. In [Supabase providers](https://supabase.com/dashboard/project/asbudyijvunpnhrhsubm/auth/providers),
    enable Google and enter its client ID and client secret.
 

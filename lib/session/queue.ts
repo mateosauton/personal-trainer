@@ -85,13 +85,16 @@ export function buildQueue(day: PlanDay): QueueEntry[] {
   return entries;
 }
 
-/** The next movement in this round, or the first movement of the next round. */
+/** The next exercise before the round ends, shown as a peek card. */
 export function partnerOf(entry: QueueEntry): PlanItem | null {
   if (entry.block.kind !== 'superset' && entry.block.kind !== 'circuit') return null;
   const index = entry.block.items.findIndex((item) => item.id === entry.item.id);
-  if (index < 0) return null;
-  return entry.block.items[index + 1]
-    ?? (entry.round < entry.block.rounds ? entry.block.items[0] ?? null : null);
+  return index >= 0 ? entry.block.items[index + 1] ?? null : null;
+}
+
+/** Supersets and circuits rest after the whole round, including block transitions. */
+export function restAfter(entry: QueueEntry): number {
+  return entry.restSeconds ?? (partnerOf(entry) ? 0 : entry.block.rest_seconds);
 }
 
 export type { PlanBlock, PlanItem };

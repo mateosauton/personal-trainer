@@ -65,7 +65,7 @@ for (const [field, expected] of Object.entries(fieldReferences)) {
 
 // ------------------------------------------------------------------ tests --
 const queryFns = (read('lib/db/queries.ts').match(/^export (async )?function /gm) ?? []).length;
-check('exported query functions', queryFns, 16);
+check('exported query functions', queryFns, 22);
 
 // ------------------------------------------------- invariants docs rely on --
 const alertCallers = src.filter(
@@ -80,7 +80,7 @@ check('ALL_EQUIPMENT still unreferenced by tests (R18)', allEquipInTests.join(',
 
 const faintSites = src.filter((p) => read(p).includes('colors.faint'))
   .reduce((n, p) => n + (read(p).match(/colors\.faint/g) ?? []).length, 0);
-check('colors.faint call sites', faintSites, 10);
+check('colors.faint call sites', faintSites, 12);
 
 // ------------------------------------------------------------- doc anchors --
 const slug = (h) => h.trim().toLowerCase().replace(/[^\w\s-]/g, '').replace(/\s/g, '-');

@@ -7,19 +7,13 @@
     "icon": "./assets/icon.png",
     "scheme": "officegym",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0A0A0B"
-    },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "co.officegym.trainer",
-      "usesAppleSignIn": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "usesAppleSignIn": true
     },
     "android": {
       "adaptiveIcon": {
@@ -28,7 +22,6 @@
         "monochromeImage": "./assets/android-icon-monochrome.png",
         "backgroundColor": "#0A0A0B"
       },
-      "edgeToEdgeEnabled": true,
       "package": "co.officegym.trainer"
     },
     "web": {
@@ -38,7 +31,17 @@
     },
     "plugins": [
       "expo-router",
-      "expo-apple-authentication"
+      "expo-image",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#0A0A0B"
+        }
+      ],
+      "expo-apple-authentication",
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true

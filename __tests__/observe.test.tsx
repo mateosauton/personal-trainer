@@ -16,6 +16,8 @@ jest.mock('expo', () => ({
   requireOptionalNativeModule: () => ({}),
 }));
 
+jest.mock('@/lib/export-file', () => ({ cleanupExports: jest.fn() }));
+
 jest.mock('expo-observe', () => ({
   ObserveRoot: {
     wrap: (Component: React.ComponentType) => (props: object) => {
@@ -75,4 +77,11 @@ describe('Expo Observe', () => {
 
     expect(mockMarkInteractive).not.toHaveBeenCalled();
   });
+});
+
+it('waits to mark interactive while a recovery link is being verified', () => {
+  mockMarkInteractive.mockClear();
+  mockAuthState.value = { ...signedOutState, processingAuthLink: true };
+  render(<RootLayout />);
+  expect(mockMarkInteractive).not.toHaveBeenCalled();
 });

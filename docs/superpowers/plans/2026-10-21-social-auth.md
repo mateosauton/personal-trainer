@@ -13,10 +13,10 @@
 - [x] Handle startup and deep-link failures in `lib/auth.tsx`; prevent stale profile routing and signed-out access to protected tabs.
 - [x] Run auth tests, the full Jest suite, TypeScript, and platform exports. Inspect the sign-in screen in the browser.
 - [x] Document provider configuration and redirect URLs in `docs/auth-setup.md`.
-- [ ] Configure and verify live Google sign-in after accepting the personal Google Cloud first-use terms.
+- [ ] Create the dedicated personal Cloud project, configure Google OAuth, and verify live Google sign-in.
 - [x] Skip unavailable Apple setup and gate its UI behind `EXPO_PUBLIC_APPLE_SIGN_IN_ENABLED=1`.
 
-**Hosted prerequisite:** The current environment points to `asbudyijvunpnhrhsubm`. After the owner resumed it on October 21, 2026, the public Auth settings endpoint and dashboard became accessible. The Supabase MCP connection still lacks project access. Both provider configurations are empty and disabled. The owner chose personal account ownership and then chose to skip unavailable Apple setup. Personal Google Cloud is at its first-use Terms of Service screen awaiting owner acceptance. The native callback is already allowlisted. Hosted settings have not been changed.
+**Hosted prerequisite:** The current environment points to `asbudyijvunpnhrhsubm`. After the owner resumed it on October 21, 2026, the public Auth settings endpoint and dashboard became accessible. The Supabase MCP connection still lacks project access. Both provider configurations are empty and disabled. The owner chose personal account ownership and then chose to skip unavailable Apple setup. Personal Google Cloud is accessible. A new `Office Gym` project, ID `office-gym-512401`, is prepared but awaits explicit approval before creation. The primary web origin was verified as `https://personal-trainer.sautonmateo.workers.dev`; the native callback is already allowlisted. Hosted settings have not been changed.
 
 ## Validation
 

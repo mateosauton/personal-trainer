@@ -4,6 +4,27 @@
     "appVersionSource": "remote"
   },
   "build": {
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "environment": "preview",
+      "channel": "preview"
+    },
+    "production": {
+      "autoIncrement": true,
+      "environment": "production",
+      "channel": "production"
+    },
+    "release-test": {
+      "extends": "production",
+      "distribution": "internal",
+      "channel": "release-test",
+      "android": {
+        "buildType": "apk"
+      }
+    },
     "development": {
       "environment": "development",
       "developmentClient": true,
@@ -11,17 +32,6 @@
       "android": {
         "buildType": "apk"
       }
-    },
-    "preview": {
-      "environment": "preview",
-      "distribution": "internal",
-      "android": {
-        "buildType": "apk"
-      }
-    },
-    "production": {
-      "environment": "production",
-      "autoIncrement": true
     }
   }
 }

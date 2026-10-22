@@ -1,4 +1,4 @@
-import { buildQueue, partnerOf, type QueueEntry } from '@/lib/session/queue';
+import { buildQueue, partnerOf, restAfter, type QueueEntry } from '@/lib/session/queue';
 import type { PlanDay } from '@/lib/types';
 import { withDayTiming } from '@/lib/plan/timing';
 
@@ -56,13 +56,13 @@ describe('buildQueue', () => {
     expect(partnerOf(queue.find((q: QueueEntry) => q.item.id === 'a')!)).toBeNull();
   });
 
-  it('previews the next circuit station in order and stops after its final round', () => {
+  it('previews the next circuit station in order and stops at each round boundary', () => {
     const circuit: PlanDay = { ...day, blocks: [{
       ...day.blocks[4], rounds: 2, items: [item('a', 1), item('b', 1), item('c', 1), item('d', 1)],
     }] };
     const entries = buildQueue(circuit);
     expect(partnerOf(entries[2])?.id).toBe('d');
-    expect(partnerOf(entries[3])?.id).toBe('a');
+    expect(partnerOf(entries[3])).toBeNull();
     expect(partnerOf(entries[7])).toBeNull();
   });
 
@@ -107,5 +107,28 @@ describe('timed queue', () => {
     const [entry] = buildQueue(timed);
     expect(entry.workSeconds).toBe(30);
     expect(entry.restSeconds).toBe(0);
+  });
+});
+
+describe('round transitions', () => {
+  const queue = buildQueue(day);
+
+  it('rests after each superset round, not between its exercises', () => {
+    expect(queue.filter(q => q.block.id === 'b3').map(restAfter)).toEqual([0, 60, 0, 60, 0, 60]);
+  });
+
+  it('rests after each circuit round, not between its exercises', () => {
+    expect(queue.filter(q => q.block.id === 'b4').map(restAfter)).toEqual([0, 40, 0, 40]);
+  });
+
+  it('keeps the prescribed rest after straight sets', () => {
+    expect(queue.filter(q => q.block.id === 'b1').map(restAfter)).toEqual([150, 150, 150, 150]);
+  });
+
+  it('shows the next circuit exercise and stops the peek at the round boundary', () => {
+    const block = { ...day.blocks[4], items: [item('e', 1), item('f', 1), item('g', 1)] };
+    const circuit = buildQueue({ ...day, blocks: [block] });
+    expect(circuit.map(q => partnerOf(q)?.id ?? null)).toEqual(['f', 'g', null, 'f', 'g', null]);
+    expect(circuit.map(restAfter)).toEqual([0, 0, 40, 0, 0, 40]);
   });
 });

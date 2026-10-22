@@ -14,6 +14,9 @@
 > update on every push to `master`, and `expo-updates` / `runtimeVersion` / `updates.url` are in place. §6, §11.2
 > and §11.3 reflect that, and §2's R16 now names the path it opens. If `git log --oneline -1` shows something later
 > than `9245b5a`, assume more has moved and re-run §0.5.
+>
+> **Post-merge refresh:** §10.6 lists the current 22 query exports, and the `colors.faint` inventory now has
+> 12 call sites. The remaining historical claims and test totals retain the `9245b5a` snapshot pin.
 
 **Companion:** [IMPROVEMENTS.md](./IMPROVEMENTS.md) — prioritised proposals, with the ones already shipped marked as such.
 
@@ -231,7 +234,7 @@ Ids match [IMPROVEMENTS.md](./IMPROVEMENTS.md).
 | [**R46**](./IMPROVEMENTS.md#r46--document-and-fix-the-read-path-of-one-session) | **The summary reads from the network while the player writes to a queue.** `summary.tsx` does a live `getSetLogs`, so an undrained outbox shows a short or empty summary — and progression is computed from that same partial read and queued on mount. | `summary.tsx` | 🟠 Silent progression corruption |
 | [**R15**](./IMPROVEMENTS.md#r15--observability-for-a-blind-app) | **No error boundary, no crash reporting, no analytics.** A render error is a white screen you never hear about — and the app now contains a durable write queue whose failures you cannot see. | `grep -rl "ErrorBoundary\|Sentry"` → nothing | 🟠 Blind operation |
 | [**R25**](./IMPROVEMENTS.md#r25--migration-tooling-backups-and-an-rls-test-harness) | **No migration tooling, no backups, no RLS test.** No `supabase/config.toml`, no local stack, and no record of which of the four migrations are live on production. `0003` contains an irreversible backfill. | `ls supabase/config.toml` → absent | 🟠 Every schema change is a leap |
-| [**R14**](./IMPROVEMENTS.md#r14--fix-the-faint-token-contrast-failure) | **`colors.faint` (`#5A5A61`) fails WCAG contrast** — 2.89:1 on `bg`, 2.49:1 on `elevated` — and is used in **ten** places — nine text or placeholder uses, plus one icon tint (`(tabs)/_layout.tsx`), which WCAG 1.4.11 holds to 3:1 and which `#5A5A61` also fails. | `lib/theme.ts`; [§14.4](#144-accessibility-audit-of-the-palette) | 🟠 Accessibility |
+| [**R14**](./IMPROVEMENTS.md#r14--fix-the-faint-token-contrast-failure) | **`colors.faint` (`#5A5A61`) fails WCAG contrast** — 2.89:1 on `bg`, 2.49:1 on `elevated` — and is used in **twelve** places — eleven text or placeholder uses, plus one icon tint (`(tabs)/_layout.tsx`), which WCAG 1.4.11 holds to 3:1 and which `#5A5A61` also fails. | `lib/theme.ts`; [§14.4](#144-accessibility-audit-of-the-palette) | 🟠 Accessibility |
 | [**R13**](./IMPROVEMENTS.md#r13--stop-parsing-1-mb-of-json-at-startup) | **1,082,256 bytes of exercise JSON is parsed at startup.** `secondary_muscles` and `force_type` have no runtime consumers; `instructions` now supplies the player's fallback for movements without demonstration images, so removing it requires a lazy-loading replacement. | `wc -c lib/data/exercises.json`; grep | 🟠 Cold-start time |
 | [**R11**](./IMPROVEMENTS.md#r11--decide-what-rpe-is-for) | **RPE is dead weight.** Two columns and a `nextLoad` branch exist; `run.tsx` writes `rpe: null` unconditionally, so the `rpe ≤ 8` gate is permanently true and progression is more aggressive than it claims. | `run.tsx`, `progression.ts` | 🟠 Untruthful behaviour |
 | [**R23**](./IMPROVEMENTS.md#r23--add-a-query-cache) | **No query cache.** Home and Plan each hold their own `useDashboard`, and **both** call `useFocusEffect(reload)` — so every tab switch refetches the plan, the history and the progress map. | `(tabs)/index.tsx`, `(tabs)/plan.tsx` | 🟠 Latency and cost |
@@ -555,7 +558,7 @@ history, so `useDashboard` exists. Each screen still holds its *own* instance an
 │   ├── dev-auth.ts               # whitelisted one-tap test sign-in
 │   ├── useDashboard.ts           # the one shared read for both tabs
 │   ├── data/exercises.json       # 873 exercises — GENERATED, do not hand-edit
-│   ├── db/{supabase,queries}.ts  # client singleton; the only SQL boundary (16 functions)
+│   ├── db/{supabase,queries}.ts  # client singleton; the only SQL boundary (22 functions)
 │   ├── media/provider.ts
 │   ├── plan/{generate,splits,estimate,rng}.ts
 │   └── session/{queue,outbox,sync}.ts
@@ -1070,7 +1073,7 @@ account** ([R25](#2-risks-and-open-gaps)).
 
 ### 10.6 The query layer — `lib/db/queries.ts`
 
-Data access goes through **sixteen** exported query functions. Authentication also touches `supabase` in `auth.tsx`,
+Data access goes through **twenty-two** exported query functions. Authentication also touches `supabase` in `auth.tsx`,
 `deep-link.ts`, `dev-auth.ts`, `social-auth.ts` and `sign-in.tsx`.
 
 | Function | Notes |
@@ -1082,11 +1085,16 @@ Data access goes through **sixteen** exported query functions. Authentication al
 | `startSession` / `finishSession` | |
 | `getLastCompletedPlanDayIndex` | The rotation cursor — per plan, derived, idempotent |
 | `getTrainedDayKeys` | Calendar days, unbounded — reads `local_day` |
-| `logSet` | Upsert on `(session_id, plan_item_id, set_index)`. Idempotent, which is what makes the outbox safe |
+| `logSetVersioned` | Calls `log_set_versioned` with the journal revision, expected server version, and event time |
+| `getSetWriteState` / `checkLegacySet` | Read server state for ordered-write and legacy-write recovery |
 | `getSetLogs` / `getSetLogsForSessions` | One round trip instead of N |
-| `getProgress` / `upsertProgress` | Map keyed by `exercise_id` |
+| `getSessionSetSnapshot` | Reads set logs and version membership in one database snapshot |
+| `getProgress` | Map keyed by `exercise_id` |
 | `getWeightHistory` | Highest working load in each exercise's latest completed session; paginates and excludes the current session |
 | `getRecentSessions(userId, limit = 30)` | Called with `200` by `useDashboard` for the history list and counters |
+| `getSessionPlanDay` | Restores the session's original plan day, including its timed gym routine metadata |
+| `getSessionProgressResult` / `applySessionProgress` | Reads a saved summary or applies progression through the server RPC |
+| `getSessionResumeDetails` | Reads the owned session's start, completion, and duration for resume |
 
 **Convention:** queries throw on error and return plain data. No React, no formatting, no domain maths here.
 
@@ -1420,7 +1428,7 @@ Measured contrast ratios (WCAG 2.1). **Opaque tokens only** — `overlay` and th
 | **`faint` #5A5A61** | **2.89** | **2.69** | **2.49** | ❌ **fails AA (4.5) and AA-large (3.0) on all three** |
 | `accentInk` on `accent` | 15.95 | — | — | ✅ AAA |
 
-`faint` has **ten** call sites for input placeholders, the inactive tab label and its icon, the
+`faint` has **twelve** call sites for input placeholders, including the two password-reset fields, the inactive tab label and its icon, the
 calendar's weekday headers, and the not-yet-reached onboarding stage labels. Several sit on `elevated`, its worst
 ground.
 

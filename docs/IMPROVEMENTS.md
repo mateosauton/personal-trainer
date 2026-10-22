@@ -7,6 +7,9 @@ This one describes what to do about it: make it **work**, then **safe**, then **
 Every proposal states the problem with evidence from the code, the fix, what it depends on, the effort, the risk,
 and how you know it worked. Every number in it was measured against this commit, not estimated.
 
+**Snapshot baseline:** `9245b5a`. The post-merge R14 inventory was refreshed to twelve `colors.faint` call sites;
+the remaining proposals retain their historical baseline unless they include a later status note.
+
 **Effort:** S = under a day · M = 1–3 days · L = a week or more.
 
 ---
@@ -45,7 +48,7 @@ rotation cursor is derived per plan. Each is marked ✅ in place, with its analy
 | **3** | **[R40](#r40--fix-the-signed-out-gate-mapping) — the signed-out gate + three uncaught rejections** | S | A one-line sign error mounts protected screens for signed-out users; two missing `.catch`es can park the app on the splash forever. |
 | **4** | **[R45](#r45--finish-the-timezone-fix--the-read-side-still-uses-device-local-time) + [R46](#r46--document-and-fix-the-read-path-of-one-session) — finish the timezone fix; fix the summary read path** | M / L | The traveller bug C7 was meant to close is **still open** — only the write side shipped. And the summary computes progression from a possibly-incomplete network read. |
 | 5 | [R41](#r41--strip-the-dev-login-credential-at-build-time) — dev-login credential | S | `EXPO_PUBLIC_*` is inlined at build time; a web export from a populated `.env` ships a real password. Not currently leaking — a landmine. |
-| 6 | [R14](#r14--fix-the-faint-token-contrast-failure) — the `faint` contrast failure | S | One token, ten call sites, measurable. Ideal first PR. |
+| 6 | [R14](#r14--fix-the-faint-token-contrast-failure) — the `faint` contrast failure | S | One token, twelve call sites, measurable. Ideal first PR. |
 | 7 | [R20](#r20--housekeeping) — unused deps, `.nvmrc`, stale comments | S | Cheap. |
 | 8 | [R24](#r24--pin-and-version-the-catalog) step 1 — pin the upstream ref | S | One line; makes builds reproducible and removes a class of upstream breakage. |
 | 9 | [R15](#r15--observability-for-a-blind-app) — error boundary + crash reporting | M | **Now more urgent than before:** the app has a durable write queue whose failures are currently invisible. |
@@ -257,11 +260,11 @@ and obeys, and a forced `logSet` failure shows a message.
 `elevated`. WCAG 2.1 AA needs 4.5:1 for body text and 3.0:1 even for large text — it fails all three placements at
 every size.
 
-`faint` has **ten** call sites today, and they are not all placeholders: `sign-in.tsx` ×2, `onboarding.tsx:212`,
-`app/profile.tsx:172`, `NumberField.tsx:54` and `ExerciseWeight.tsx` (placeholders); `onboarding.tsx:400` (the not-yet-reached build-stage
-label) and `Calendar.tsx:112` (weekday headers) — **both real body text**; `(tabs)/_layout.tsx:59` (inactive tab
-label); and `(tabs)/_layout.tsx:15`, which is an **icon tint** — a non-text case WCAG 1.4.11 holds to 3:1, and which
-`#5A5A61` also fails. Extend the guard test to assert that case at 3:1 separately.
+`faint` has **twelve** call sites after the merge, and they are not all placeholders: `sign-in.tsx` ×2,
+`reset-password.tsx` ×2, `onboarding.tsx`, `app/profile.tsx`, `NumberField.tsx` and `ExerciseWeight.tsx`
+(placeholders); `onboarding.tsx` (the not-yet-reached build-stage label) and `Calendar.tsx` (weekday headers)
+— **both real body text**; `(tabs)/_layout.tsx` (inactive tab label and an **icon tint**). The icon tint needs
+3:1 under WCAG 1.4.11, which `#5A5A61` also fails. Extend the guard test to assert that case separately.
 
 **Fix — re-tier `muted` and `faint` together, not `faint` alone.** `#85858B` clears AA on every ground
 (**5.40 / 5.02 / 4.63**), but `muted` is `#8E8E93` at 6.07 / 5.64 / 5.21, and the two measure **1.12:1 against each
