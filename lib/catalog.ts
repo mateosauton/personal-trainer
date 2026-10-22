@@ -1,11 +1,12 @@
 import raw from '@/lib/data/exercises.json';
+import { GYM_ROUTINE_EXERCISES, GYM_ROUTINE_EXERCISE_IDS } from '@/lib/data/gym-routine-exercises';
 import type { Category, Equipment, Exercise, Pattern } from '@/lib/types';
 
 /**
- * The bundled catalog: 873 exercises from free-exercise-db, public domain
- * under the Unlicense. Built by scripts/build-catalog.mjs.
+ * Public-domain source exercises plus the authored personal gym variations.
+ * Source data is built by scripts/build-catalog.mjs.
  */
-export const CATALOG = raw as unknown as Exercise[];
+export const CATALOG: Exercise[] = [...(raw as unknown as Exercise[]), ...GYM_ROUTINE_EXERCISES];
 
 const BY_ID = new Map(CATALOG.map((e) => [e.id, e]));
 
@@ -91,6 +92,9 @@ export function candidates(filter: Filter): Exercise[] {
   const max = LEVEL_RANK[filter.level];
   const banned = filter.limitations?.filter(Boolean) ?? [];
   return CATALOG.filter((e) => {
+    // Explicit routine variations are selectable by ID; the questionnaire
+    // generator keeps its established exercise pool and equipment assumptions.
+    if (GYM_ROUTINE_EXERCISE_IDS.has(e.id)) return false;
     if (!filter.patterns.includes(e.pattern)) return false;
     if (!filter.equipment.includes(e.equipment)) return false;
     if (LEVEL_RANK[e.level] > max) return false;

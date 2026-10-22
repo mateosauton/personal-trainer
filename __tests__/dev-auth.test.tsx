@@ -13,6 +13,13 @@ jest.mock('@/lib/db/supabase', () => ({
 
 jest.mock('@/lib/deep-link', () => ({ authRedirectTo: () => 'exp://redirect' }));
 
+jest.mock('@/lib/auth', () => ({
+  useAuth: () => ({ authError: null, clearAuthError: jest.fn() }),
+}));
+
+jest.mock('@/lib/social-auth', () => ({ signInWithSocialProvider: jest.fn() }));
+jest.mock('@/components/SocialSignInButtons', () => ({ SocialSignInButtons: () => null }));
+
 jest.mock('@/lib/dev-auth', () => ({
   get devLoginEnabled() {
     return mockGate.enabled;

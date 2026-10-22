@@ -33,6 +33,8 @@ jest.mock('expo-router', () => ({
   useRouter: () => mockRouter,
 }));
 jest.mock('@/lib/db/queries', () => ({
+  getSessionSetSnapshot: async () => ({ logs: [], versions: [] }),
+  getWeightHistory: async () => new Map(),
   getSessionResumeDetails: (...args: unknown[]) => mockDetails(...args),
   getSessionPlanDay: (...args: unknown[]) => mockDay(...args),
   getActivePlan: () => mockDay(),
@@ -314,12 +316,14 @@ it('persists zero rest between superset exercises and the prescribed rest at the
   block.items.push({ ...block.items[0], id: 'item-2', exercise_id: 'unknown-2', item_index: 1 });
   const screen = render(<Run />);
   await screen.findByText('Complete set');
+  fireEvent.changeText(screen.getByLabelText('Weight to use (kg)'), '0');
   fireEvent.press(screen.getByText('Complete set'));
   await screen.findByText('Next set');
   expect(saved.restUntilMs!).toBeLessThanOrEqual(Date.now());
   expect(screen.getByText('0:00')).toBeTruthy();
   fireEvent.press(screen.getByText('Next set'));
   await screen.findByText('Complete set');
+  fireEvent.changeText(screen.getByLabelText('Weight to use (kg)'), '0');
   fireEvent.press(screen.getByText('Complete set'));
   await screen.findByText('Skip rest');
   expect(saved.restUntilMs! - Date.now()).toBeGreaterThan(85000);
@@ -345,6 +349,7 @@ it('seeds and queues the prescribed timed duration instead of rep history', asyn
   saved.day.blocks[0].items[0].seconds = 40;
   const screen = render(<Run />);
   await screen.findByText('Complete set');
+  fireEvent.changeText(screen.getByLabelText('Weight to use (kg)'), '0');
   fireEvent.press(screen.getByText('Complete set'));
   await screen.findByText('Skip rest');
   expect(mockSet).toHaveBeenCalledWith('A', 'session-A', expect.objectContaining({ seconds: 40, reps: null }));

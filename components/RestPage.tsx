@@ -1,5 +1,6 @@
 import * as Haptics from 'expo-haptics';
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
   AppState,
   Pressable,
@@ -20,6 +21,8 @@ import {
   ProgressBar,
 } from '@/components/ui';
 import { colors, radius, space, type } from '@/lib/theme';
+import { formatClock } from '@/lib/plan/timing';
+import { pauseDeadline, remainingSeconds, resumeDeadline, startDeadline } from '@/lib/session/timing';
 import { displayToKg, formatWeight, step } from '@/lib/units';
 import type { Exercise, Units } from '@/lib/types';
 
@@ -51,6 +54,11 @@ interface Props {
   next: UpNext | null;
   onAdvance: () => void;
   advancing?: boolean;
+  paused?: boolean;
+  pausedAtMs?: number | null;
+  restLabel?: string;
+  readyLabel?: string;
+  feedback?: ReactNode;
 }
 
 /**
@@ -76,20 +84,37 @@ export function RestPage({
   next,
   onAdvance,
   advancing,
+  paused = false,
+  pausedAtMs,
+  restLabel,
+  readyLabel,
+  feedback,
 }: Props) {
-  const [remaining, setRemaining] = useState(restSeconds);
+  const [clock, setClock] = useState(() => ({
+    endAt: restUntilMs ?? Date.now() + restSeconds * 1000,
+    pausedAt: paused ? pausedAtMs ?? Date.now() : null,
+  }));
+  const [now, setNow] = useState(Date.now());
   const firedRef = useRef(false);
 
   useEffect(() => {
-    const deadline = restUntilMs ?? Date.now() + restSeconds * 1000;
-    const tick = () =>
-      setRemaining(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
-    tick();
+    const timestamp = Date.now();
+    setClock({ endAt: restUntilMs ?? startDeadline(restSeconds, timestamp).endAt,
+      pausedAt: paused ? pausedAtMs ?? timestamp : null });
+    setNow(timestamp);
     firedRef.current = false;
+  }, [restSeconds, restUntilMs]);
+
+  useEffect(() => {
+    const timestamp = Date.now();
+    setClock(current => paused ? pauseDeadline(current, pausedAtMs ?? timestamp) : resumeDeadline(current, timestamp));
+    setNow(timestamp);
+    const tick = () => setNow(Date.now());
+    if (paused) return;
     if (restSeconds <= 0) return;
     // Timers may stop while the app is backgrounded. The deadline remains
     // valid even when no interval callback ran during the rest.
-    const id = setInterval(tick, 1000);
+    const id = setInterval(tick, 250);
     const app = AppState.addEventListener('change', (state) => {
       if (state === 'active') tick();
     });
@@ -97,7 +122,9 @@ export function RestPage({
       clearInterval(id);
       app.remove();
     };
-  }, [restSeconds, restUntilMs]);
+  }, [paused, pausedAtMs, restSeconds]);
+
+  const remaining = remainingSeconds(clock, now);
 
   // Buzz once at zero and then wait: auto-advancing would yank the screen away
   // from someone still walking back to the rack.
@@ -107,8 +134,6 @@ export function RestPage({
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }, [remaining]);
 
-  const minutes = Math.floor(remaining / 60);
-  const secs = remaining % 60;
   const done = remaining <= 0;
 
   const nudgeWeight = (delta: number) => {
@@ -132,7 +157,7 @@ export function RestPage({
       : null
     : displayToKg(draft.weight, units);
 
-  const advanceLabel = next
+  const advanceLabel = readyLabel ? (done ? readyLabel : 'Skip rest') : next
     ? done
       ? 'Next set'
       : 'Skip rest'
@@ -145,14 +170,14 @@ export function RestPage({
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.clockBlock}>
-        <Overline>{done ? 'Rest complete' : 'Resting'}</Overline>
-        <Text style={styles.clock}>
-          {minutes}:{String(secs).padStart(2, '0')}
-        </Text>
+        <Overline>{paused ? 'Timers paused' : restLabel ?? (done ? 'Rest complete' : 'Resting')}</Overline>
+        <Text style={styles.clock}>{formatClock(remaining)}</Text>
         <ProgressBar
           value={restSeconds <= 0 ? 1 : 1 - remaining / restSeconds}
         />
       </View>
+
+      {feedback ? <View style={{ marginTop: space.lg }}>{feedback}</View> : null}
 
       <View style={styles.card}>
         <Overline>{setLabel}</Overline>
@@ -243,6 +268,7 @@ export function RestPage({
         title={advanceLabel}
         variant={done || !next ? 'accent' : 'surface'}
         loading={advancing}
+        disabled={paused}
         onPress={onAdvance}
         style={{ marginTop: space.xl }}
       />

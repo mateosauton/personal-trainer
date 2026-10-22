@@ -1,5 +1,6 @@
 import { buildQueue, partnerOf, restAfter, type QueueEntry } from '@/lib/session/queue';
 import type { PlanDay } from '@/lib/types';
+import { withDayTiming } from '@/lib/plan/timing';
 
 const item = (id: string, sets: number) => ({
   id, item_index: 0, exercise_id: `ex-${id}`, sets,
@@ -55,11 +56,59 @@ describe('buildQueue', () => {
     expect(partnerOf(queue.find((q: QueueEntry) => q.item.id === 'a')!)).toBeNull();
   });
 
+  it('previews the next circuit station in order and stops at each round boundary', () => {
+    const circuit: PlanDay = { ...day, blocks: [{
+      ...day.blocks[4], rounds: 2, items: [item('a', 1), item('b', 1), item('c', 1), item('d', 1)],
+    }] };
+    const entries = buildQueue(circuit);
+    expect(partnerOf(entries[2])?.id).toBe('d');
+    expect(partnerOf(entries[3])).toBeNull();
+    expect(partnerOf(entries[7])).toBeNull();
+  });
+
   it('keeps unique keys so React never reuses a set row', () => {
     expect(new Set(queue.map((q: QueueEntry) => q.key)).size).toBe(queue.length);
   });
 });
 
+describe('timed queue', () => {
+  it('divides each block budget across its prescribed sets without adding sets', () => {
+    const timed = withDayTiming(day);
+    const queue = buildQueue(timed);
+    expect(queue).toHaveLength(buildQueue(day).length);
+    for (const block of timed.blocks) {
+      const entries = queue.filter((entry) => entry.block.id === block.id);
+      expect(entries.reduce((sum, entry) => sum + (entry.slotSeconds ?? 0), 0)).toBe(block.duration_seconds);
+      expect(entries.every((entry) => entry.workSeconds! + entry.restSeconds! === entry.slotSeconds)).toBe(true);
+    }
+  });
+
+  it('gives longer rep prescriptions larger stations within the same block', () => {
+    const timed: PlanDay = {
+      ...day,
+      blocks: [{ ...day.blocks[1], duration_seconds: 360, items: [
+        { ...item('short', 1), reps_low: 4, reps_high: 4 },
+        { ...item('long', 1), reps_low: 16, reps_high: 16 },
+      ] }],
+    };
+    const [short, long] = buildQueue(timed);
+    expect(long.slotSeconds).toBeGreaterThan(short.slotSeconds!);
+    expect(short.workSeconds).toBe(12);
+    expect(long.workSeconds).toBe(48);
+  });
+
+  it('caps movement guidance at the station budget instead of producing negative rest', () => {
+    const timed: PlanDay = {
+      ...day,
+      blocks: [{ ...day.blocks[1], duration_seconds: 30, items: [
+        { ...item('hold', 1), seconds: 60 },
+      ] }],
+    };
+    const [entry] = buildQueue(timed);
+    expect(entry.workSeconds).toBe(30);
+    expect(entry.restSeconds).toBe(0);
+  });
+});
 
 describe('round transitions', () => {
   const queue = buildQueue(day);

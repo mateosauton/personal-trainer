@@ -2,57 +2,80 @@ import * as Linking from 'expo-linking';
 
 import { supabase } from './db/supabase';
 
-/**
- * Where Supabase should send the browser after it verifies an email link.
- *
- * In Expo Go this resolves to the dev server's exp:// address; in a standalone
- * build it uses the `officegym` scheme from app.json. Either way it deep-links
- * back into the app rather than stranding the user on Supabase's default Site
- * URL (http://localhost:3000), which is nothing on a phone.
- */
-export const authRedirectTo = () => Linking.createURL('/');
+/** The same root callback serves email confirmation and social sign-in. */
+export const authRedirectTo = () => {
+  const url = Linking.createURL('/');
+  return url ? new URL(url).toString() : url;
+};
+
 export const authRecoveryRedirectTo = () => Linking.createURL('/reset-password');
 
+let completedUrl: string | null = null;
+const pending = new Map<string, Promise<boolean>>();
+
+const callbackTarget = (url: URL) => `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, '')}`;
+
 export function isRecoveryLink(url: string): boolean {
-  const parsed = Linking.parse(url);
-  const hash = url.includes('#') ? url.slice(url.indexOf('#') + 1) : '';
-  return parsed.path === 'reset-password' || parsed.hostname === 'reset-password'
-    || parsed.queryParams?.type === 'recovery' || new URLSearchParams(hash).get('type') === 'recovery';
+  try {
+    const parsed = new URL(url);
+    const target = callbackTarget(parsed);
+    if (target === callbackTarget(new URL(authRecoveryRedirectTo()))) return true;
+    if (target !== callbackTarget(new URL(authRedirectTo()))) return false;
+    return parsed.searchParams.get('type') === 'recovery'
+      || new URLSearchParams(parsed.hash.slice(1)).get('type') === 'recovery';
+  } catch {
+    return false;
+  }
 }
 
-/**
- * Turns a verification deep link into a session.
- *
- * Supabase hands the tokens back one of two ways depending on the flow: the
- * implicit flow puts access_token/refresh_token in the URL fragment, PKCE puts
- * a single `code` in the query string. React Native has no URL bar for
- * supabase-js to read (detectSessionInUrl is off), so both are parsed here.
- *
- * Returns true when a session was established.
- */
+function clearBrowserCallback(url: string) {
+  if (typeof window === 'undefined' || window.location?.href !== url) return;
+  const clean = new URL(url);
+  for (const key of ['code', 'error', 'error_code', 'error_description']) clean.searchParams.delete(key);
+  clean.hash = '';
+  window.history.replaceState(window.history.state, '', clean.toString());
+}
+
+/** Coalesces callbacks from the auth browser and Expo Linking. Errors reach the UI. */
 export async function completeAuthFromUrl(url: string): Promise<boolean> {
-  const parsed = Linking.parse(url);
-
-  const hash = url.includes('#') ? url.slice(url.indexOf('#') + 1) : '';
-  const params = new URLSearchParams(hash);
-  const callbackError = params.get('error_description') || parsed.queryParams?.error_description
-    || params.get('error') || parsed.queryParams?.error;
-  if (callbackError) throw new Error(String(callbackError));
-
-  const code = parsed.queryParams?.code;
-  if (typeof code === 'string' && code) {
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
-    if (error) throw error;
-    return true;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+    const target = callbackTarget(parsed);
+    if (target !== callbackTarget(new URL(authRedirectTo()))
+      && target !== callbackTarget(new URL(authRecoveryRedirectTo()))) return false;
+  } catch {
+    return false;
   }
+  if (url === completedUrl) return true;
+  const existing = pending.get(url);
+  if (existing) return existing;
 
-  // expo-linking does not surface the fragment, so read it off the raw string.
-  if (!hash) return false;
-  const access_token = params.get('access_token');
-  const refresh_token = params.get('refresh_token');
-  if (!access_token || !refresh_token) return false;
-
-  const { error } = await supabase.auth.setSession({ access_token, refresh_token });
-  if (error) throw error;
-  return true;
+  const operation = (async () => {
+    const params = new URLSearchParams(parsed.hash.slice(1));
+    parsed.searchParams.forEach((value, key) => params.set(key, value));
+    const providerError = params.get('error_description') || params.get('error');
+    if (providerError) throw new Error(providerError);
+    const code = params.get('code');
+    if (code) {
+      const { error } = await supabase.auth.exchangeCodeForSession(code);
+      if (error) throw error;
+    } else {
+      // Browser flows now require a locally stored PKCE verifier. Never adopt
+      // a session supplied by an arbitrary token fragment in an incoming link.
+      if (params.has('access_token') || params.has('refresh_token')) {
+        throw new Error('This sign-in link uses an older format. Sign in again to continue.');
+      }
+      return false;
+    }
+    completedUrl = url;
+    return true;
+  })();
+  pending.set(url, operation);
+  try {
+    return await operation;
+  } finally {
+    pending.delete(url);
+    clearBrowserCallback(url);
+  }
 }

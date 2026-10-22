@@ -4,11 +4,19 @@
 **Audience:** the engineer taking this over. No prior context assumed.
 
 > **Verified against commit `9245b5a`.** `npx tsc --noEmit` clean · `npx jest` → **16 suites, 114 tests, green**.
+> Facts are stated with file and symbol names rather than line numbers, because line numbers rot faster than names.
 >
-> This repo is moving fast: in the period this document was written it went through three architectural states
-> and landed four migrations. **Re-verify before you trust a specific line of it** — [§0.5](#05-how-to-re-verify-this-document)
-> gives you the commands. Facts here are stated with file and symbol names rather than line numbers, precisely
-> because line numbers rot.
+> This repo moves fast: while this document was being written it went through three architectural states and landed
+> four migrations. **Re-verify before trusting any specific line** — [§0.5](#05-how-to-re-verify-this-document)
+> gives you the commands, and says plainly which sections it can and cannot certify.
+>
+> 📌 **Drift since the pin, already folded into the body:** `.github/workflows/eas-update.yml` now publishes an OTA
+> update on every push to `master`, and `expo-updates` / `runtimeVersion` / `updates.url` are in place. §6, §11.2
+> and §11.3 reflect that, and §2's R16 now names the path it opens. If `git log --oneline -1` shows something later
+> than `9245b5a`, assume more has moved and re-run §0.5.
+>
+> **Post-merge refresh:** §10.6 lists the current 22 query exports, and the `colors.faint` inventory now has
+> 12 call sites. The remaining historical claims and test totals retain the `9245b5a` snapshot pin.
 
 **Companion:** [IMPROVEMENTS.md](./IMPROVEMENTS.md) — prioritised proposals, with the ones already shipped marked as such.
 
@@ -31,7 +39,7 @@
 | [10](#10-database-architecture) | Database architecture | Before any schema change. |
 | [11](#11-environments-build-and-deploy) | Environments, build and deploy | Before shipping. |
 | [12](#12-testing) | Testing | Before your first PR. |
-| [13](#13-operations) | **Operations** — reset, debug, ownership | The first time something breaks. |
+| [13](#13-operations) | **Operations** — reset, debug, a worked example, ownership | The first time something breaks. |
 | [14](#14-design-system) | Design system | Reference, when writing UI. |
 | [15](#15-your-first-two-weeks) | Your first two weeks | After §0–2. |
 | [16](#16-appendix--where-everything-lives) | Appendix — where everything lives | Constantly. |
@@ -52,7 +60,7 @@ piece of server-side code is a single `save_plan` function that exists to make a
 
 ### 0.2 Zero to a running app
 
-Requires **Node 22** (`package.json` pins `engines.node: "22.x"`; there is no `.nvmrc` — worth adding).
+`package.json` declares `engines.node: "22.x"`, but the pin is **not enforced** — Node 20 installs and runs everything (`tsc`, `jest`, `expo start --web`) with only an `EBADENGINE` warning. Match 22 if you can; don't be blocked if you can't. There is no `.nvmrc` — worth adding.
 
 **Path A — no backend, about a minute.** `tools/dev/` ships a stand-in for every Supabase endpoint this app calls,
 with two seeded accounts.
@@ -60,8 +68,7 @@ with two seeded accounts.
 ```bash
 npm install
 node tools/dev/mock-supabase.mjs 54321 &
-printf 'EXPO_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321\nEXPO_PUBLIC_SUPABASE_KEY=mock\n' > .env
-npx expo start --web --port 8081
+EXPO_NO_DOTENV=1 EXPO_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 EXPO_PUBLIC_SUPABASE_KEY=mock npx expo start --web --port 8081
 ```
 
 Sign in as **`demo@officegym.test` / `demo1234`** (onboarded, with a plan and history) or
@@ -69,7 +76,16 @@ Sign in as **`demo@officegym.test` / `demo1234`** (onboarded, with a plan and hi
 `GET /__state` (assert a write landed) and `GET /__slow?ms=700` (hold loading states on screen).
 
 **You did it right when:** the dark "Welcome back." sign-in screen appears, and `demo@officegym.test` lands on
-**Home** with a streak card and a Start button.
+**Home** with a plan and a Start button.
+
+> **What Path A cannot tell you.** The mock reproduces *endpoints*, not a database:
+>
+> - **It enforces no constraints** — no `CHECK`s, no unique indexes, no RLS. Anything schema-shaped (a new column, a widened `days_per_week`, a constrained value) passes here and can still fail against real Postgres. Verify those on Path B.
+> - **It seeds a plan but zero sessions and zero set logs** (`sessions: []`, `set_logs: []`). So the streak, the calendar, the summary and progression have nothing to work on. If you need those, seed history yourself or use Path B.
+> - The command supplies mock values through the process environment and uses `EXPO_NO_DOTENV=1` to keep local EAS values out of the mock run. It does not overwrite any env files.
+> - Normal development reads `.env.local` after `npm run env:pull`. Put local test-login overrides in `.env.development.local`; pulls replace `.env.local`.
+> - **If port 8081 is taken**, pass `--port 8082` — a non-interactive shell hard-fails on the prompt rather than falling back.
+> - A cold web bundle is seconds, not minutes (measured ~9 s with `--clear`).
 
 **Path B — your own Supabase, about ten minutes.** Needed for anything touching real auth, RLS or Storage.
 
@@ -79,7 +95,7 @@ Sign in as **`demo@officegym.test` / `demo1234`** (onboarded, with a plan and hi
    > There is **no Supabase CLI setup in this repo** — migrations are applied by hand. See [§10.7](#107-migrations).
 3. **Authentication → Providers → Email:** turn **Confirm email off** for local development, or every signup needs a working deep link.
 4. **Authentication → URL Configuration:** add your deep link to the redirect allow-list. `Linking.createURL('/')` resolves to `exp://…` in Expo Go and `officegym://` in a standalone build.
-5. `cp .env.example .env`, fill it in, then `npx expo start --lan` and scan the QR with the iPhone Camera app.
+5. Set `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_KEY` as plain text variables in the project's EAS `development` environment, run `npm run env:pull`, then `npx expo start --lan` and scan the QR with the iPhone Camera app. See the [README environment setup](../README.md#environment-variables).
 
 ```bash
 npm test        # 16 suites, 114 tests
@@ -104,22 +120,16 @@ Then read [§2](#2-risks-and-open-gaps) and [§4.3](#43-where-each-number-is-com
 
 ### 0.4 What landed recently
 
-Several problems an earlier review found have since been fixed. Knowing this saves you re-diagnosing them.
+An earlier review of this codebase produced a list of defects, and much of it has since been fixed. **The mechanism
+now exists** for: platform-safe dialogs (`lib/alerts.ts`), transactional plan writes (the `save_plan` RPC), a
+three-state profile gate (`lib/auth-gate.ts`), a durable offline outbox (`lib/session/{outbox,sync}.ts`), a derived
+per-plan rotation cursor (`getLastCompletedPlanDayIndex`), a database-enforced single active plan, and
+timezone-stamped calendar days (`sessions.local_day`).
 
-> ⚠️ **"Landed" is not "finished."** Each row below names a module that exists and works on the happy path. An
-> audit of the shipped code found six real defects inside three of them — see R35–R40 in
-> [§2](#2-risks-and-open-gaps). Treat this table as "the mechanism is in place", not "the problem is closed".
-
-| Now in place | Where |
-|--------------|-------|
-| **Platform-safe dialogs.** `Alert.alert` is a no-op in react-native-web; every dialog now goes through `notify()` / `confirm()`. **No direct `Alert.alert` call remains.** | `lib/alerts.ts` |
-| **Transactional plan writes.** `savePlan` is now a single `supabase.rpc('save_plan', …)` call — one transaction instead of five unguarded round trips. | `queries.ts`, `0004_save_plan_rpc.sql` |
-| **A three-state profile gate.** "Could not reach the server" is no longer indistinguishable from "never onboarded", and a cached profile survives an offline launch. ⚠️ Partially — the signed-out mapping is wrong (R40), `refreshProfile` has no cache fallback, and two uncaught rejections in `auth.tsx` can still park the app on the splash. | `lib/auth-gate.ts`, `lib/auth.tsx` |
-| **An offline outbox.** Sets, completions and progress writes queue durably and replay; the player shows "*n* sets syncing". ⚠️ Partially — see R35–R39, and note `startSession` is **not** queued, so a session cannot be *started* offline at all. | `lib/session/outbox.ts`, `lib/session/sync.ts` |
-| **A derived, per-plan rotation cursor.** `getLastCompletedPlanDayIndex` replaced a lifetime session count, so a rebuild starts at day 1 and the cursor is idempotent under retry. | `queries.ts`, `lib/useDashboard.ts` |
-| **One active plan, enforced.** A unique partial index replaced the non-unique one. | `0003_correctness_foundation.sql` |
-| **Timezone-stable calendar days.** `sessions.local_day` and `tz` are captured at session start instead of being re-derived from whatever device reads them. | `0003_correctness_foundation.sql` |
-| **Tests for the previously untested layer** — `queries`, `auth`, `outbox`, `stats`, `estimate`, plus component suites. | `__tests__/` |
+> ⚠️ **"The mechanism exists" is not "the problem is closed."** An audit of that shipped code found defects inside
+> three of those seven — the outbox, the gate and the timezone work. **[§2](#2-risks-and-open-gaps) is the single
+> register of what is actually open**, and [IMPROVEMENTS.md's audit trail](./IMPROVEMENTS.md#shipped-work-audit-trail)
+> maps each shipped item to what the audit found. Do not treat this paragraph as a status report; treat §2 as one.
 
 ### 0.5 How to re-verify this document
 
@@ -130,15 +140,34 @@ git log --oneline -1                 # what you are actually looking at
 npx tsc --noEmit && npm test         # is it green?
 ls app app/\(tabs\) lib components   # has the screen/module layout moved?
 ls supabase/migrations               # how many migrations exist now?
+ls .github/workflows                 # has a CI workflow appeared? (R16)
 grep -rn "Alert.alert" app lib components | grep -v lib/alerts.ts   # should be empty
 wc -c lib/data/exercises.json        # expect 1082256 until R13 lands
                                      # (grep -c "" prints 1 — the file is minified onto one line)
 ```
 
-If the shape has moved on, the durable parts of this document — [§1](#1-domain-model-and-glossary),
-[§9](#9-the-exercise-database-the-catalog), [§10](#10-database-architecture), [§11](#11-environments-build-and-deploy)
-— will still hold; the screen-level detail in [§5](#5-runtime-behaviour) and [§6](#6-folder-structure) is the part
-that rots first.
+```bash
+npm run docs:verify
+```
+
+That runs `scripts/verify-docs.mjs`, which checks the twelve claims in these documents that a machine can check:
+the catalog's row count and byte size, `media_refs` derivability, the exact source files referencing `instructions`,
+`secondary_muscles` and `force_type`, the exported-query count, that no direct `Alert.alert` has crept back in, that `ALL_EQUIPMENT` is still
+untested, the `colors.faint` call-site count, every cross-document anchor, and every mermaid sequence diagram's
+participants. It also tells you if HEAD has moved past the pin. **Wire it into CI alongside
+[R16](#2-risks-and-open-gaps)** — every one of those numbers has drifted at least once.
+
+**These commands verify *shape*, not *behaviour*.** They tell you the layout, the counts and the build status;
+they cannot tell you whether a claim about what the code *does at runtime* is still true. That distinction matters,
+because the behavioural claims are the ones that have actually been wrong in this document's history — an earlier
+draft asserted the timezone fix was complete when only its write half had shipped, and drew a session diagram that
+attributed two queued writes to the wrong screen.
+
+So: [§1](#1-domain-model-and-glossary), [§9](#9-the-exercise-database-the-catalog) and
+[§10.2](#102-schema) are the durable parts — counts, schema, the domain model. **[§11](#11-environments-build-and-deploy) is *not* durable**, despite looking like config: it has already gone stale once, when EAS Update landed.
+**[§5](#5-runtime-behaviour), [§8](#8-user-flows) and [§13.2](#132-debugging) are only as fresh as the last time
+someone read the code**, and are where you should be most sceptical. When you find one wrong, fix it here in the
+same PR.
 
 ---
 
@@ -168,7 +197,7 @@ that rots first.
 | **e1RM** | Estimated one-rep max via **Epley** (`load × (1 + reps/30)`), in `lib/units.ts`. Meaningful from 1–12 reps. |
 | **Tonnage / volume** | Used interchangeably: `Σ (reps × effective load)`. `sessionTotals()` in `lib/stats.ts` is the canonical computation. |
 | **Effective load** | Normal work: `weight_kg`. Bodyweight work: `profile.bodyweight_kg + added_load_kg`, which makes a weighted pull-up comparable to a lat pulldown. |
-| **Local day** | `sessions.local_day` — the calendar day a session belongs to, captured **at session start** in the device's timezone, rather than re-derived later. The streak and calendar read this stored fact. |
+| **Local day** | `sessions.local_day` — the calendar day a session belongs to, captured **at session start** in the device's timezone. `getTrainedDayKeys` reads it. ⚠️ But every "today" it is compared against comes from the *current* device clock, so travelling still breaks the streak — see R45 in [§2](#2-risks-and-open-gaps). |
 
 ### 1.3 Two structural facts that explain most of the code
 
@@ -190,20 +219,23 @@ Ids match [IMPROVEMENTS.md](./IMPROVEMENTS.md).
 
 | Id | Issue | Evidence | Impact |
 |----|-------|----------|--------|
-| [**R16**](./IMPROVEMENTS.md#r16--run-types-and-tests-in-ci) | **No CI runs types or tests.** `.github/workflows/` holds only `publish-pages.yml` and `verify-deploy.yml`, both of which deploy or probe. There is no linter either. A broken build has reached `master` before. | `ls .github/workflows` | 🔴 Regressions ship |
+| [**R16**](./IMPROVEMENTS.md#r16--run-types-and-tests-in-ci) | **No CI runs types or tests — and `master` now ships straight to phones.** `.github/workflows/` holds `publish-pages.yml`, `verify-deploy.yml` and `eas-update.yml`; all deploy, publish or probe, **none runs `tsc` or `jest`**, and there is no linter. `eas-update.yml` publishes an OTA update on every push to `master`, so untested code reaches **installed clients automatically**. | `ls .github/workflows` | 🔴 Untested code reaches users |
 | [**R6**](./IMPROVEMENTS.md#r6--no-password-reset) | **There is no password reset.** No `resetPasswordForEmail`, no `signInWithOtp`, no email-change flow. A forgotten password is permanent loss of the entire training history. | `grep -rn resetPasswordForEmail app lib` → nothing | 🔴 Total account loss |
 | [**R7**](./IMPROVEMENTS.md#r7--close-the-avatar-bucket) | **The `avatars` bucket is world-readable.** `0002` creates it `public = true` with `for select to public using (bucket_id = 'avatars')`, at the stable path `<uid>/avatar.<ext>`. No MIME allowlist, no size cap. Every user's face photo is fetchable unauthenticated. | `0002_profile_identity.sql` | 🔴 Security |
-| [**R33**](./IMPROVEMENTS.md#r41--strip-the-dev-login-credential-at-build-time) | **`lib/dev-auth.ts` reads `EXPO_PUBLIC_DEV_LOGIN_PASSWORD`, which Expo inlines at *build* time.** `devLoginEnabled` is only a *runtime* gate, so any web export produced on a machine with a populated `.env` ships a real account password as a string literal. CI currently passes no such variable, so the published bundles are clean — this is a landmine, not an active leak. | `lib/dev-auth.ts` | 🔴 Security |
-| [**R27**](./IMPROVEMENTS.md#r35--make-the-outbox-survivable) | **One failing operation wedges the outbox forever.** `Outbox.flush` is `try { send(items[0]) } catch { return; }` — no attempt counter, no dead-letter, and the error object is discarded. Any *terminal* error on the head (an RLS denial, a constraint violation, a 400 after a schema change) parks that operation at position 0 permanently, **across app restarts**, blocking every later set. | `lib/session/outbox.ts` | 🔴 Silent, permanent data loss |
-| [**R28**](./IMPROVEMENTS.md#r36--namespace-and-clear-the-outbox-on-sign-out) | **The outbox key is global and is never cleared on sign-out.** `signOut` calls only `supabase.auth.signOut()`. Sign out with pending writes, sign in as someone else on the same device, and their client flushes the previous user's operations — which RLS rejects, which is terminal, which wedges the new user's queue (R27). The `office-gym.profile.<uid>` cache is likewise never cleared. | `lib/session/outbox.ts`, `lib/auth.tsx` | 🔴 Cross-account corruption |
-| [**R29**](./IMPROVEMENTS.md#r37--make-queued-writes-genuinely-idempotent) | **`queueProgress` ids collide across sessions.** The id is `progress:<userId>:<sorted exercise ids>` with no session in it, and `enqueue` **replaces** on id match. Train the same plan day twice before the queue drains and the first session's progress update is silently discarded — `miss_streak` and `best_*` are accumulators, so a missed session vanishes from the deload logic. | `lib/session/sync.ts` | 🟠 Silent progression corruption |
-| [**R30**](./IMPROVEMENTS.md#r38--stamp-queued-writes-at-event-time) | **Queued writes are timestamped at flush time, not event time.** `finishSession` sets `completed_at: new Date()` when the flush finally succeeds, and `set_logs.completed_at` takes the server `default now()`. Train Saturday offline, open the app Tuesday, and the session is recorded as Tuesday — which also drives `getLastCompletedPlanDayIndex`, so the rotation cursor becomes a function of network conditions. | `queries.ts`, `sync.ts` | 🟠 Wrong history and rotation |
-| [**R31**](./IMPROVEMENTS.md#r39--stop-enqueue-blocking-behind-the-flush) | **"Advance immediately" does not hold.** `enqueue` and `flush` share one mutex and `flush` holds it for the *whole* drain, so on a slow-but-alive network the next set button waits for every queued round trip — exactly the flaky-signal case the outbox was built for. | `lib/session/outbox.ts` | 🟠 The core loop still stalls |
-| [**R32**](./IMPROVEMENTS.md#r40--fix-the-signed-out-gate-mapping) | **`profileGate` returns `'ready'` when signed out**, and `_layout.tsx` computes `onboarded = gate === 'ready'`, so `(tabs)`, `profile` and `session` are declared for a signed-out user. Those screens call `useUserId()`, which throws — and with no error boundary, a deep link to a session while signed out is a white screen. This violates the invariant the file's own comment states. | `lib/auth-gate.ts`, `app/_layout.tsx` | 🟠 Guard bypass |
+| [**R41**](./IMPROVEMENTS.md#r41--strip-the-dev-login-credential-at-build-time) | **`lib/dev-auth.ts` reads `EXPO_PUBLIC_DEV_LOGIN_PASSWORD`, which Expo inlines at *build* time.** `devLoginEnabled` is only a *runtime* gate, so any web export produced on a machine with a populated `.env` ships a real account password as a string literal. CI currently passes no such variable, so the published bundles are clean — this is a landmine, not an active leak. | `lib/dev-auth.ts` | 🔴 Security |
+| [**R35**](./IMPROVEMENTS.md#r35--make-the-outbox-survivable) | **One failing operation wedges the outbox forever.** `Outbox.flush` is `try { send(items[0]) } catch { return; }` — no attempt counter, no dead-letter, and the error object is discarded. Any *terminal* error on the head (an RLS denial, a constraint violation, a 400 after a schema change) parks that operation at position 0 permanently, **across app restarts**, blocking every later set. | `lib/session/outbox.ts` | 🔴 Silent, permanent data loss |
+| [**R36**](./IMPROVEMENTS.md#r36--namespace-and-clear-the-outbox-on-sign-out) | **The outbox key is global and is never cleared on sign-out.** `signOut` calls only `supabase.auth.signOut()`. Sign out with pending writes, sign in as someone else on the same device, and their client flushes the previous user's operations — which RLS rejects, which is terminal, which wedges the new user's queue (R35). The `office-gym.profile.<uid>` cache is likewise never cleared. | `lib/session/outbox.ts`, `lib/auth.tsx` | 🔴 Cross-account corruption |
+| [**R37**](./IMPROVEMENTS.md#r37--make-queued-writes-genuinely-idempotent) | **`queueProgress` ids collide across sessions.** The id is `progress:<userId>:<sorted exercise ids>` with no session in it, and `enqueue` **replaces** on id match. Train the same plan day twice before the queue drains and the first session's progress update is silently discarded — `miss_streak` and `best_*` are accumulators, so a missed session vanishes from the deload logic. | `lib/session/sync.ts` | 🟠 Silent progression corruption |
+| [**R38**](./IMPROVEMENTS.md#r38--stamp-queued-writes-at-event-time) | **Queued writes are timestamped at flush time, not event time.** `finishSession` sets `completed_at: new Date()` when the flush finally succeeds, and `set_logs.completed_at` takes the server `default now()`. Train Saturday offline, open the app Tuesday, and the session is recorded as Tuesday — which also drives `getLastCompletedPlanDayIndex`, so the rotation cursor becomes a function of network conditions. | `queries.ts`, `sync.ts` | 🟠 Wrong history and rotation |
+| [**R39**](./IMPROVEMENTS.md#r39--stop-enqueue-blocking-behind-the-flush) | **"Advance immediately" does not hold.** `enqueue` and `flush` share one mutex and `flush` holds it for the *whole* drain, so on a slow-but-alive network the next set button waits for every queued round trip — exactly the flaky-signal case the outbox was built for. | `lib/session/outbox.ts` | 🟠 The core loop still stalls |
+| [**R40**](./IMPROVEMENTS.md#r40--fix-the-signed-out-gate-mapping) | **`profileGate` returns `'ready'` when signed out**, and `_layout.tsx` computes `onboarded = gate === 'ready'`, so `(tabs)`, `profile` and `session` are declared for a signed-out user. Those screens call `useUserId()`, which throws — and with no error boundary, a deep link to a session while signed out is a white screen. This violates the invariant the file's own comment states. | `lib/auth-gate.ts`, `app/_layout.tsx` | 🟠 Guard bypass |
+| [**R42**](./IMPROVEMENTS.md#r42--fix-0003s-local_day-backfill-or-its-comment) | **`0003`'s `local_day` backfill uses UTC**, three lines under a comment saying calendar membership must not be recalculated in an arbitrary timezone. Every pre-migration session for a non-UTC user is filed on the wrong day, and `tz` was never backfilled, so it cannot be corrected later. | `0003_correctness_foundation.sql` | 🟠 The other half of R45 |
+| [**R45**](./IMPROVEMENTS.md#r45--finish-the-timezone-fix--the-read-side-still-uses-device-local-time) | **The timezone fix shipped on the write side only.** `local_day` is captured at session start, but `useDashboard` computes `today` from device-local `new Date()` twice, and `streakDays` / `recentDays` / `daysSinceLast` all default to it, and `sessions.tz` is **written and never read**. A user who flies east can have their streak silently zeroed. | `lib/stats.ts`, `lib/useDashboard.ts` | 🟠 The bug C7 was meant to close |
+| [**R46**](./IMPROVEMENTS.md#r46--document-and-fix-the-read-path-of-one-session) | **The summary reads from the network while the player writes to a queue.** `summary.tsx` does a live `getSetLogs`, so an undrained outbox shows a short or empty summary — and progression is computed from that same partial read and queued on mount. | `summary.tsx` | 🟠 Silent progression corruption |
 | [**R15**](./IMPROVEMENTS.md#r15--observability-for-a-blind-app) | **No error boundary, no crash reporting, no analytics.** A render error is a white screen you never hear about — and the app now contains a durable write queue whose failures you cannot see. | `grep -rl "ErrorBoundary\|Sentry"` → nothing | 🟠 Blind operation |
 | [**R25**](./IMPROVEMENTS.md#r25--migration-tooling-backups-and-an-rls-test-harness) | **No migration tooling, no backups, no RLS test.** No `supabase/config.toml`, no local stack, and no record of which of the four migrations are live on production. `0003` contains an irreversible backfill. | `ls supabase/config.toml` → absent | 🟠 Every schema change is a leap |
-| [**R14**](./IMPROVEMENTS.md#r14--fix-the-faint-token-contrast-failure) | **`colors.faint` (`#5A5A61`) fails WCAG contrast** — 2.89:1 on `bg`, 2.49:1 on `elevated` — and is used for real text in **nine** places. | `lib/theme.ts`; [§14.4](#144-accessibility-audit-of-the-palette) | 🟠 Accessibility |
-| [**R13**](./IMPROVEMENTS.md#r13--stop-parsing-1-mb-of-json-at-startup) | **1,082,256 bytes of exercise JSON is parsed at startup**, of which ~60% is three fields (`instructions`, `secondary_muscles`, `force_type`) that **no screen or domain function reads**. | `wc -c lib/data/exercises.json`; grep | 🟠 Cold-start time |
+| [**R14**](./IMPROVEMENTS.md#r14--fix-the-faint-token-contrast-failure) | **`colors.faint` (`#5A5A61`) fails WCAG contrast** — 2.89:1 on `bg`, 2.49:1 on `elevated` — and is used in **twelve** places — eleven text or placeholder uses, plus one icon tint (`(tabs)/_layout.tsx`), which WCAG 1.4.11 holds to 3:1 and which `#5A5A61` also fails. | `lib/theme.ts`; [§14.4](#144-accessibility-audit-of-the-palette) | 🟠 Accessibility |
+| [**R13**](./IMPROVEMENTS.md#r13--stop-parsing-1-mb-of-json-at-startup) | **1,082,256 bytes of exercise JSON is parsed at startup.** `secondary_muscles` and `force_type` have no runtime consumers; `instructions` now supplies the player's fallback for movements without demonstration images, so removing it requires a lazy-loading replacement. | `wc -c lib/data/exercises.json`; grep | 🟠 Cold-start time |
 | [**R11**](./IMPROVEMENTS.md#r11--decide-what-rpe-is-for) | **RPE is dead weight.** Two columns and a `nextLoad` branch exist; `run.tsx` writes `rpe: null` unconditionally, so the `rpe ≤ 8` gate is permanently true and progression is more aggressive than it claims. | `run.tsx`, `progression.ts` | 🟠 Untruthful behaviour |
 | [**R23**](./IMPROVEMENTS.md#r23--add-a-query-cache) | **No query cache.** Home and Plan each hold their own `useDashboard`, and **both** call `useFocusEffect(reload)` — so every tab switch refetches the plan, the history and the progress map. | `(tabs)/index.tsx`, `(tabs)/plan.tsx` | 🟠 Latency and cost |
 | [**R12**](./IMPROVEMENTS.md#r12--a-rest-timer-that-survives-a-locked-phone) | **The rest timer is a decrementing counter, not a clock.** `setInterval` with no wall-clock anchor; lock the phone mid-rest and the count is wrong, and the completion buzz only fires in the foreground. | `components/RestPage.tsx` | 🟠 Wrong rest = wrong training |
@@ -234,7 +266,7 @@ Ids match [IMPROVEMENTS.md](./IMPROVEMENTS.md).
 | Images | **expo-image** | `cachePolicy="memory-disk"` — a session repeats offline after its first run. |
 | Tests | **Jest** + `jest-expo` | 16 suites, 114 tests, including component suites and `queries`/`auth`/`outbox`. |
 | Native builds | **EAS** | `eas.json` with `preview` (internal APK) and `production` (autoIncrement) profiles. |
-| Hosting | **Vercel** primary; GitHub Pages + jsDelivr mirrors; a `wrangler.jsonc` for Cloudflare Workers | `npx expo export --platform web` → static SPA. See [§11.2](#112-the-deployed-targets). |
+| Hosting | **Vercel** primary; GitHub Pages + jsDelivr mirrors; a `wrangler.jsonc` for Cloudflare Workers | `npm run export:web` → static SPA using EAS production variables. See [§11.2](#112-the-deployed-targets). |
 
 ### 3.1 Choices worth defending in a review
 
@@ -347,6 +379,10 @@ export function profileGate(signedIn: boolean, state: ProfileState): ProfileGate
 // → 'loading' | 'error' | 'onboarding' | 'ready'
 ```
 
+> ⚠️ The diagram below is the *intended* model. In the code, `profileGate` returns **`'ready'`** when signed out —
+> signed-out is resolved separately by `_layout.tsx`'s `guard={!signedIn}`, and the `onboarded` flag is computed
+> from the same `'ready'` value. That is [R40](./IMPROVEMENTS.md#r40--fix-the-signed-out-gate-mapping).
+
 ```mermaid
 stateDiagram-v2
     [*] --> Loading: app start
@@ -371,19 +407,23 @@ Three rules, all commented in the code — do not undo them:
 ```mermaid
 sequenceDiagram
     actor U as User
+    participant Ov as session/[dayId]/index
     participant Run as session/[dayId]/run
     participant Rest as RestPage
     participant OB as session/sync + outbox
     participant DB as Supabase
     participant Sum as summary
 
-    U->>Run: Begin (startSession → sessionId)
+    U->>Ov: Begin
+    Note over Ov: the OVERVIEW starts the session, not the player
+    Ov->>DB: startSession() → sessionId
+    Ov->>Run: replace(run, {dayId, sessionId})
     Run->>Run: buildQueue(day) → flat list of sets
 
     loop every queue entry
         Run-->>U: demo + target reps + "last time"
         U->>Run: Complete set
-        %% seeded from last session, written immediately, corrected during rest
+        Note over Run,OB: seeded from last session, written before the user confirms
         Run->>OB: queueSet(sessionId, seed)
         OB-->>DB: logSet upsert (retried until it lands)
         Run->>Rest: phase = resting
@@ -395,11 +435,24 @@ sequenceDiagram
         Run->>OB: queueSet(correction) if sameDraft() says it changed
     end
 
+    Note over Run,OB: completion is queued by the PLAYER, not the summary
+    Run->>OB: queueCompletion(sessionId, elapsed)
+    Run->>OB: flushOutbox()
+    Note over OB: resolves even when the send failed
     Run->>Sum: replace(summary, {elapsed})
+    Sum->>DB: getSetLogs(sessionId)
+    Note over Sum,DB: LIVE network read — not the queue
     Sum->>Sum: group by exercise, nextLoad() per exercise
-    U->>Sum: Save & finish
-    Sum->>OB: queueProgress + queueCompletion
+    Sum->>OB: queueProgress(...)
+    Note over Sum: fires ON MOUNT, not on the button
+    U->>Sum: Done
+    Sum->>Sum: router.replace('/(tabs)') — navigation only
 ```
+
+> ⚠️ **The asymmetry in that diagram is the point.** The player writes through the queue; the summary reads from
+> the network. If the queue has not drained, the summary shows fewer sets than you just did — and it computes
+> progression from that same partial read, on mount, before you press anything. See
+> [R46](./IMPROVEMENTS.md#r46--document-and-fix-the-read-path-of-one-session).
 
 Behaviours to understand before changing anything here:
 
@@ -436,6 +489,16 @@ So adding a per-set `notes` field means touching the migration, `SetLog` (option
 doubles as the insert shape), the `SetDraft` and its UI, `run.tsx`'s seed, **`sameDraft`**, and confirming that
 an outbox item queued by an older build still replays. Missing `sameDraft` means a notes-only edit is silently
 never persisted; missing the outbox consideration means a queued write from a previous app version fails forever.
+
+**And there is a fifth box the diagram doesn't draw: the read side.** `getSetLogs` uses `select('*')`, so it picks
+up a new column for free — but **`getSetLogsForSessions` has an explicit column list**
+(`session_id, exercise_id, reps, weight_kg, is_bodyweight, added_load_kg`). That is the query Home and Plan use, so
+a new per-set field is silently absent from every screen except the summary until you add it there too.
+
+> Easy to conflate: **`sessions.rpe` and `set_logs.rpe` are two different columns.** `sync.ts` hardcodes
+> `finishSession(sessionId, { duration_s, rpe: null })` for the session-level one;
+> [R11](./IMPROVEMENTS.md#r11--decide-what-rpe-is-for) is about the per-set one. Both are dead, for different
+> reasons — and neither needs a migration, since both columns already exist.
 
 ### 5.4 State ownership
 
@@ -495,7 +558,7 @@ history, so `useDashboard` exists. Each screen still holds its *own* instance an
 │   ├── dev-auth.ts               # whitelisted one-tap test sign-in
 │   ├── useDashboard.ts           # the one shared read for both tabs
 │   ├── data/exercises.json       # 873 exercises — GENERATED, do not hand-edit
-│   ├── db/{supabase,queries}.ts  # client singleton; the only SQL boundary (15 functions)
+│   ├── db/{supabase,queries}.ts  # client singleton; the only SQL boundary (22 functions)
 │   ├── media/provider.ts
 │   ├── plan/{generate,splits,estimate,rng}.ts
 │   └── session/{queue,outbox,sync}.ts
@@ -505,7 +568,7 @@ history, so `useDashboard` exists. Each screen still holds its *own* instance an
 ├── tools/dev/                    # mock-supabase, drive, serve-dist
 ├── __tests__/                    # 16 suites, 114 tests
 ├── eas.json · wrangler.jsonc · vercel.json
-└── .github/workflows/            # publish-pages.yml, verify-deploy.yml — neither runs tests (R16)
+└── .github/workflows/            # publish-pages.yml · verify-deploy.yml · eas-update.yml — none runs tests (R16)
 ```
 
 ### 6.1 Where do I put a new…?
@@ -587,7 +650,7 @@ derived. **Never delete a "why" comment while changing the code it guards.**
 
 ### 7.7 Accessibility **[established, with gaps]**
 
-- Every `Pressable` carries `accessibilityRole` and, where the label is not its text, `accessibilityLabel`.
+- Almost every `Pressable` carries `accessibilityRole` and, where the label is not its text, `accessibilityLabel`. **One exception:** the session Close control (`run.tsx`, the `onPress={quit}` Pressable) has a label but no role.
 - Selection state is announced (`accessibilityState={{ selected }}` on `Chip`); `ProgressBar` exposes `progressbar` semantics with a value.
 - Animations respect the OS reduced-motion setting via `useReducedMotion()` / `ReduceMotion.System`.
 - Touch targets ≥ 44 pt.
@@ -708,21 +771,22 @@ interface Exercise {
   body_part: string;
   equipment: Equipment;       // normalised into 8 tokens
   mechanic: 'compound' | 'isolation' | null;
-  force_type: string | null;                                // ← never read by the app
+  force_type: string | null;                                // preset writer only; no runtime consumer
   level: Level;
   is_bodyweight: boolean;     // equipment === 'bodyweight'  ← feeds effectiveLoadKg
   is_unilateral: boolean;     // regex on the name → the "Per side" note
   primary_muscles: string[];
-  secondary_muscles: string[];                              // ← never read by the app
-  instructions: string[];                                   // ← never read by the app
+  secondary_muscles: string[];                              // preset writer only; no runtime consumer
+  instructions: string[];                                   // player fallback when demo images are absent
   media_refs: { start: string; end: string };               // two CDN stills
   category: Category;
   pattern: Pattern;           // ← the derived field the generator actually uses
 }
 ```
 
-`instructions`, `secondary_muscles` and `force_type` appear only in `lib/types.ts` and the build script — **no
-screen and no domain function reads them** ([R13](#2-risks-and-open-gaps)).
+`lib/data/gym-routine-exercises.ts` writes all three fields for authored movements. The player in
+`app/session/[dayId]/run.tsx` reads `instructions` when demonstration images are absent. No screen or domain
+function consumes `secondary_muscles` or `force_type` ([R13](#2-risks-and-open-gaps)).
 
 ### 9.3 The build pipeline
 
@@ -775,6 +839,12 @@ every demo image at once ([R24](./IMPROVEMENTS.md#r24--pin-and-version-the-catal
 | An intermediate | **561** |
 | An advanced user (specialist categories unlocked) | **634** |
 | The warm-up pool (bodyweight ∧ beginner ∧ {stretching, cardio, strength}) | **73** — of which only **13** are `mobility` |
+
+Per-pattern, the thin end is thinner than the totals suggest. Reachable at **intermediate**: `h_pull` 35, but
+`v_pull` 15, `delts` 14, `calves` 13, `lunge` 10, `traps` 8, `forearms` 5 — and **`carry` 0**, because both of the
+catalog's two carry exercises are filtered out. That last one is the concrete reason `SUBSTITUTES` and
+`ANY_PATTERN` exist in the generator ([§9.6](#96-selection-candidates-and-the-widening-search)): a slot whose
+pattern has an empty pool is not hypothetical.
 
 **239 exercises (27%) can never be selected** — [R18](#2-risks-and-open-gaps). Read that figure with its discount,
 though: of the 239, **100 are `stretching` and 46 `plyometrics`**, which classify as mobility and conditioning
@@ -939,9 +1009,15 @@ silently.
 one, inside one transaction; `0003`'s unique partial index makes "exactly one active plan" a database guarantee
 rather than a client convention.
 
-**Calendar days are captured, not derived.** `sessions.local_day` (and `tz`) are written at session start. The
-streak and calendar read that stored fact, so a user who travels does not see history rearrange itself. Anything
-new that groups by day should read `local_day`, never re-derive from `started_at`.
+**Calendar days are captured on the way in — and then compared against a device clock on the way out.**
+`sessions.local_day` (and `tz`) are written at session start, and `getTrainedDayKeys` reads `local_day`. Anything
+new that groups by day should read it too, never re-derive from `started_at`.
+
+> ⚠️ **This does not yet fix the traveller case, and an earlier draft of this document claimed it did.** The read
+> side still uses device-local `new Date()` in four places (`useDashboard` computes `today` twice, and `streakDays` /
+> `recentDays`' defaults), so a stored `local_day` from UTC−3 is compared against a "today" computed in UTC+9.
+> `sessions.tz` — the one field that could reconcile them — is **written and never read**: one hit in the entire
+> repo, the write itself. Tracked as [R45](./IMPROVEMENTS.md#r45--finish-the-timezone-fix--the-read-side-still-uses-device-local-time).
 
 > ⚠️ **One exported function still breaks that rule.** `lib/stats.ts` exports
 > `trainedDayKeys(sessions: { started_at }[])`, which re-derives day keys from `started_at`. No app code calls it —
@@ -997,8 +1073,8 @@ account** ([R25](#2-risks-and-open-gaps)).
 
 ### 10.6 The query layer — `lib/db/queries.ts`
 
-Every network call is one of **fifteen** exported functions. Nothing else touches `supabase` except `auth.tsx`,
-`deep-link.ts`, `dev-auth.ts` and `sign-in.tsx`.
+Data access goes through **twenty-two** exported query functions. Authentication also touches `supabase` in `auth.tsx`,
+`deep-link.ts`, `dev-auth.ts`, `social-auth.ts` and `sign-in.tsx`.
 
 | Function | Notes |
 |----------|-------|
@@ -1009,10 +1085,16 @@ Every network call is one of **fifteen** exported functions. Nothing else touche
 | `startSession` / `finishSession` | |
 | `getLastCompletedPlanDayIndex` | The rotation cursor — per plan, derived, idempotent |
 | `getTrainedDayKeys` | Calendar days, unbounded — reads `local_day` |
-| `logSet` | Upsert on `(session_id, plan_item_id, set_index)`. Idempotent, which is what makes the outbox safe |
+| `logSetVersioned` | Calls `log_set_versioned` with the journal revision, expected server version, and event time |
+| `getSetWriteState` / `checkLegacySet` | Read server state for ordered-write and legacy-write recovery |
 | `getSetLogs` / `getSetLogsForSessions` | One round trip instead of N |
-| `getProgress` / `upsertProgress` | Map keyed by `exercise_id` |
+| `getSessionSetSnapshot` | Reads set logs and version membership in one database snapshot |
+| `getProgress` | Map keyed by `exercise_id` |
+| `getWeightHistory` | Highest working load in each exercise's latest completed session; paginates and excludes the current session |
 | `getRecentSessions(userId, limit = 30)` | Called with `200` by `useDashboard` for the history list and counters |
+| `getSessionPlanDay` | Restores the session's original plan day, including its timed gym routine metadata |
+| `getSessionProgressResult` / `applySessionProgress` | Reads a saved summary or applies progression through the server RPC |
+| `getSessionResumeDetails` | Reads the owned session's start, completion, and duration for resume |
 
 **Convention:** queries throw on error and return plain data. No React, no formatting, no domain maths here.
 
@@ -1025,9 +1107,14 @@ production** ([R25](#2-risks-and-open-gaps)).
 `0002` and `0003` are written idempotently (`add column if not exists`, `drop policy if exists`) — **follow that
 style**, because a hand-applied migration will eventually be applied twice.
 
-> ⚠️ **`0003` contains a backfill that rewrites historical `sessions` rows** (marking sufficiently-complete
-> sessions as completed). Its own comment says to apply it only after a snapshot. It changes streaks and rotation
-> positions for existing users.
+> ⚠️ **`0003` contains two backfills that rewrite historical `sessions` rows.** One marks sufficiently-complete
+> sessions as completed — its own comment says to apply it only after a snapshot, and it changes streaks and
+> rotation positions for existing users. The other sets
+> `local_day = (started_at at time zone 'UTC')::date`, which **files every pre-migration session on a UTC calendar
+> day rather than the user's local one** — for a UTC−3 user, every evening session lands on the following day. That
+> directly contradicts the comment three lines above it, and `tz` is never backfilled, so the information needed to
+> correct it later was not captured. Tracked as
+> [R42](./IMPROVEMENTS.md#r42--fix-0003s-local_day-backfill-or-its-comment).
 
 ---
 
@@ -1038,29 +1125,33 @@ style**, because a hand-applied migration will eventually be applied twice.
 All runtime configuration is `EXPO_PUBLIC_*`, which Expo **inlines into the bundle at build time**. Anything here
 is public by construction.
 
-| File | Loaded by | Committed? |
-|------|-----------|-----------|
-| `.env` | `expo start` (local dev) | No |
-| `.env.production` | `expo export` (hosted builds) | **Yes, deliberately** |
-| `.env.test` | test / mock runs | Yes |
-| `.env.example` | humans | Yes |
+EAS stores `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_KEY` as plain text project variables in
+`development`, `preview`, and `production`. Each build profile in `eas.json` selects its matching environment.
+EAS Update explicitly selects production. `npm run export:web` reads EAS production values and disables
+local dotenv loading for hosted exports.
 
-`.env.production` is committed so any checkout builds the same app, and is safe because the publishable key is
-designed to ship in a client with RLS behind it. **Never put a service-role key, or any secret, in an
-`EXPO_PUBLIC_*` variable.**
+| Source | Used by | Committed? |
+|--------|---------|------------|
+| EAS environments | Cloud builds, updates, hosted web exports | No |
+| `.env.local` | Local development after `npm run env:pull` | No |
+| `.env.development.local` | Optional local test-login overrides | No |
+| `.env.test` | Mock configuration reference | Yes |
+| `.env.example` | Configuration template | Yes |
 
-> ⚠️ `.gitignore` ends with `.env*` followed by a single negation, `!.env.test`. So `.env.production` is matched by
-> the ignore rule and survives **only because it is already tracked**; a new `.env.staging` would be silently
-> ignored unless you add its own `!` line, the way `.env.test` has one.
+The committed `.env.production` was removed. `.gitignore` excludes all `.env*` files except `.env.example`
+and `.env.test`. Never put a service-role key or any secret in an `EXPO_PUBLIC_*` variable.
+GitHub uses the repository's `EXPO_TOKEN` secret. Vercel needs an `EXPO_TOKEN` in its Production and Preview
+build environments to fetch EAS variables. See [README setup](../README.md#environment-variables).
 
 The dev sign-in shortcut (`lib/dev-auth.ts`) needs a dev build *or* `EXPO_PUBLIC_ALLOW_DEV_LOGIN=1`, both
-credentials present, and a whitelisted address. Leave the flag unset for hosted builds.
+credentials present, and a whitelisted address. Keep all test-login variables out of EAS and in the local
+development override file; a hidden button does not remove an inlined password from a bundle.
 
 ### 11.2 The deployed targets
 
 ```mermaid
 flowchart LR
-    M["push to master"] --> V["Vercel: npx expo export --platform web<br/>rewrites all routes to index.html"]
+    M["push to master"] --> V["Vercel: npm run export:web<br/>EAS production variables; rewrites routes to index.html"]
     M --> W["publish-pages.yml"]
     W --> B1["baseUrl /personal-trainer → gh-pages branch<br/>404.html + .nojekyll"]
     W --> B2["baseUrl /gh/owner/repo@cdn → cdn branch"]
@@ -1091,16 +1182,27 @@ wired to CI before relying on it.
 
 ### 11.3 Native builds
 
-`eas.json` has `preview` (internal distribution, Android APK) and `production` (`autoIncrement`) profiles, with
-`appVersionSource: "remote"`. Missing: a `development` profile (needed for anything using `expo-notifications`),
-**EAS Update** for OTA, store metadata and privacy declarations.
+`eas.json` has `development` with a development client, `preview` for internal distribution, and `production`
+with `autoIncrement`. Development and preview produce Android APKs. Each profile selects the matching EAS
+environment, with `appVersionSource: "remote"`.
+
+**EAS Update is wired.** `expo-updates` is a dependency, `app.json` carries `runtimeVersion` and `updates.url`, and
+`.github/workflows/eas-update.yml` publishes `--branch production --environment production` **on every push to `master`**. With no custom
+native code, that means most fixes ship OTA rather than through store review — the high-leverage piece.
+
+> ⚠️ **It also makes `master` → installed clients an automatic, unguarded path.** That workflow runs no `tsc` and
+> no `jest`, and neither does anything else ([R16](#2-risks-and-open-gaps)). Before EAS Update, an untested commit
+> reached a web build; now it reaches phones.
+
+Still missing: store metadata and privacy declarations
+([R26](./IMPROVEMENTS.md#r26--finish-the-release-pipeline)).
 
 ### 11.4 Driving the UI without a device
 
 Use the mock backend from [§0.2](#02-zero-to-a-running-app). To check a real exported build:
 
 ```bash
-npx expo export --platform web
+npm run export:web
 node tools/dev/serve-dist.mjs dist 8090        # same rewrite rule Vercel applies
 ```
 
@@ -1186,7 +1288,8 @@ reinstalling the app or clearing its data is the blunt version.
 | "No plan yet" with a plan in the DB | `getActivePlan` uses `.maybeSingle()`; `0003`'s unique index should make two active plans impossible — verify the index is actually applied |
 | Wrong day "Up next" | `getLastCompletedPlanDayIndex` — check it is filtering by the *active* plan id |
 | A correction on the rest page never saves | `sameDraft` does not compare your new field ([§5.3](#53-the-write-path-of-one-set)) |
-| Streak or calendar looks wrong | Read `sessions.local_day`, not `started_at`. If `local_day` is null, `0003` was not applied |
+| Streak or calendar looks wrong | First check `sessions.local_day` is populated (if null, `0003` was not applied). **But if the user has travelled, the bug is on the comparison side, not the storage side** — the stored day is in the origin timezone and "today" is computed from the current device clock ([R45](./IMPROVEMENTS.md#r45--finish-the-timezone-fix--the-read-side-still-uses-device-local-time)). `sessions.tz` exists but nothing reads it. **And if their history predates `0003`, the stored `local_day` is a UTC day, not a local one** ([R42](./IMPROVEMENTS.md#r42--fix-0003s-local_day-backfill-or-its-comment)) |
+| "I logged sets and they never appeared" | Usually a **display** failure, not data loss. `summary.tsx` does a live `getSetLogs` network read while the player is optimistic, so an undrained queue shows fewer sets — and progression is computed from that same partial read ([R46](./IMPROVEMENTS.md#r46--document-and-fix-the-read-path-of-one-session)) |
 | Exercise renders as a raw id | `getExercise()` returned undefined — a stale `exercise_id` after a catalog rebuild |
 | A query returns `[]` that should have rows | **An RLS denial reads as an empty result, not an error.** Check the policy before the query |
 | A dialog does nothing | Should no longer happen — but check nothing reintroduced a direct `Alert.alert` |
@@ -1195,7 +1298,44 @@ reinstalling the app or clearing its data is the blunt version.
 **Supabase → Logs → API** shows the actual PostgREST requests — the fastest way to tell a bad filter from a policy
 denial. React DevTools and the Expo dev menu work normally.
 
-### 13.3 Ownership
+### 13.3 A worked example: "I logged sets and they never appeared"
+
+The debug table above is one line per symptom. Here is one run end to end, because the shape of the reasoning
+matters more than any single row.
+
+**The report.** "I did my whole session at the gym. The summary showed nothing, and my weights didn't go up."
+
+**1 — Resist the obvious read.** The instinct is "the writes were lost". Check that first *and expect it to be
+wrong*: ask the user to open the app on wifi and look at Plan → the day they trained. If the sets are there now,
+nothing was lost and this is a **display** bug.
+
+**2 — Trace the asymmetry.** The player writes through the outbox (`queueSet`), which is optimistic and durable.
+The summary reads with `getSetLogs(sessionId)` — a **live network read** ([§5.2](#52-a-live-session)). Those are
+different sources. Offline, the queue holds the sets and the summary sees an empty table. Both "the sets are safe"
+and "the summary was empty" are true at once.
+
+**3 — Find the second-order damage.** `summary.tsx` computes `nextLoad(...)` from that same read and calls
+`queueProgress` **on mount** — so the empty read did not just render wrong, it queued an `exercise_progress`
+update derived from nothing. That is the "my weights didn't go up" half of the report, and it is a real write, not
+a display artefact.
+
+**4 — Ask why nothing surfaced.** `run.tsx` does `queueCompletion(...).then(flushOutbox).then(navigate)`, and
+`Outbox.flush` swallows send errors ([R35](./IMPROVEMENTS.md#r35--make-the-outbox-survivable)) — so the flush
+"succeeded", navigation proceeded, and the summary's own effect ends in `.catch(() => setLoading(false))`. Three
+separate places declined to tell anyone. With no crash reporting ([R15](#2-risks-and-open-gaps)), nothing reached
+you either.
+
+**5 — Check the queue is not now wedged.** If any of those queued operations hit a terminal error, it is parked at
+the head of the outbox **permanently, across restarts**, silently blocking every later set. Inspect
+`pendingSyncCount()` and the stored queue before you close the ticket.
+
+**The fix is not "retry harder".** It is [R46](./IMPROVEMENTS.md#r46--document-and-fix-the-read-path-of-one-session)
+(don't compute progression from a possibly-partial read) and
+[R35](./IMPROVEMENTS.md#r35--make-the-outbox-survivable) (make failures visible and non-blocking). The lesson
+generalises: **in this app, an optimistic write path and an authoritative read path meet at the summary screen**,
+and most "my data is wrong" reports live in that seam.
+
+### 13.4 Ownership
 
 There is no team, no on-call and no reviewer. **After this handoff, you own it.**
 
@@ -1244,7 +1384,7 @@ workhorse label ("BLOCK 2 OF 4").
 > Every size is a fixed number and nothing reads the OS font scale, so large Dynamic Type settings will clip
 > fixed-height controls rather than reflow.
 
-**Motion** — `fast 140 · base 240 · slow 420 · crossfade 1200`, with springs in `lib/motion.ts`. Everything checks
+**Motion** — `duration.fast 140 · base 240 · slow 420 · crossfade 1200` live in **`lib/theme.ts`**; the springs (`settle`, `pop`) and the reduced-motion helpers live in `lib/motion.ts`. ⚠️ `fast` and `base` are **duplicated in both files** — a mirrored value of exactly the kind [§16](#16-appendix--where-everything-lives) exists to flag. Everything checks
 reduced motion.
 
 ### 14.2 Component inventory
@@ -1275,7 +1415,7 @@ reduced motion.
 
 ### 14.4 Accessibility audit of the palette
 
-Measured contrast ratios (WCAG 2.1):
+Measured contrast ratios (WCAG 2.1). **Opaque tokens only** — `overlay` and the alpha `border`/`borderStrong` tokens are excluded, because a ratio against a translucent colour depends on whatever sits behind it:
 
 | Foreground | on `bg` | on `surface` | on `elevated` | Verdict |
 |------------|--------:|-------------:|--------------:|---------|
@@ -1288,7 +1428,7 @@ Measured contrast ratios (WCAG 2.1):
 | **`faint` #5A5A61** | **2.89** | **2.69** | **2.49** | ❌ **fails AA (4.5) and AA-large (3.0) on all three** |
 | `accentInk` on `accent` | 15.95 | — | — | ✅ AAA |
 
-`faint` is used for real text in **nine** places — input placeholders, the inactive tab label *and* its icon, the
+`faint` has **twelve** call sites for input placeholders, including the two password-reset fields, the inactive tab label and its icon, the
 calendar's weekday headers, and the not-yet-reached onboarding stage labels. Several sit on `elevated`, its worst
 ground.
 
@@ -1306,12 +1446,18 @@ JSX.
 
 ## 15. Your first two weeks
 
+This is a sequence, not a second copy of the risk list — each item links to
+[IMPROVEMENTS.md](./IMPROVEMENTS.md), which holds the problem statement, the fix and the acceptance criterion.
+[§2](#2-risks-and-open-gaps) is where the severities live.
+
+
 **Day 1 — orient**
 - [ ] Run the app via [§0.2 Path A](#02-zero-to-a-running-app), then Path B against your own Supabase (all four migrations).
 - [ ] Read the eight files in [§0.3](#03-fifteen-minute-orientation), then [§2](#2-risks-and-open-gaps) and [§4.3](#43-where-each-number-is-computed).
 - [ ] Run [§0.5](#05-how-to-re-verify-this-document)'s commands and correct anything this document got wrong.
 
 **Day 2–3 — the shipped work is not finished**
+- [ ] [R45](./IMPROVEMENTS.md#r45--finish-the-timezone-fix--the-read-side-still-uses-device-local-time) + [R46](./IMPROVEMENTS.md#r46--document-and-fix-the-read-path-of-one-session): finish the timezone fix (only the write side shipped) and stop the summary computing progression from a partial network read.
 - [ ] [R35](./IMPROVEMENTS.md#r35--make-the-outbox-survivable) + [R36](./IMPROVEMENTS.md#r36--namespace-and-clear-the-outbox-on-sign-out) + [R37](./IMPROVEMENTS.md#r37--make-queued-writes-genuinely-idempotent) + [R38](./IMPROVEMENTS.md#r38--stamp-queued-writes-at-event-time): make the outbox survivable. **Every set, completion and progress write in the product goes through a queue that a single 4xx can wedge forever.** This outranks everything below it.
 - [ ] [R40](./IMPROVEMENTS.md#r40--fix-the-signed-out-gate-mapping): one-line gate fix, plus the two uncaught rejections in `auth.tsx`.
 
@@ -1341,7 +1487,7 @@ JSX.
 
 | I want to change… | Files |
 |-------------------|-------|
-| **⚠️ The allowed training frequencies** (e.g. add a 7-day split) | `lib/plan/splits.ts` (a `DayTemplate` + a `SPLITS` key) · `app/onboarding.tsx` (the day chips) · **a migration relaxing `profiles.days_per_week`'s `CHECK 2..6`** · the `[2,3,4,5,6]` matrices in `__tests__/generate.test.ts` and `__tests__/regressions.test.ts` · `tools/dev/mock-supabase.mjs`. Skip the migration and onboarding throws at the final write. |
+| **⚠️ The allowed training frequencies** (e.g. add a 7-day split) | `lib/plan/splits.ts` (a `DayTemplate` + a `SPLITS` key — it is a `Record<number, …>`, so no type change) · `app/onboarding.tsx` (the `[2, 3, 4, 5, 6]` chips) · **a migration relaxing `profiles.days_per_week`'s `CHECK 2..6`** — the constraint is inline and unnamed, so find `profiles_days_per_week_check`, and write the `ALTER` idempotently per [§10.7](#107-migrations) · the `DAYS` constant in `__tests__/generate.test.ts` and the three inline `[2, 3, 4, 5, 6]` literals in `__tests__/regressions.test.ts`. **Three traps:** `generate.ts` does `SPLITS[input.daysPerWeek] ?? SPLITS[3]`, so **forgetting the `SPLITS` key silently gives every 7-day user a 3-day Full Body plan with no error anywhere** — the highest-probability way to get this wrong; the mock backend enforces no `CHECK`s, so a 7-day plan passes on Path A and fails only against real Postgres; and `generatePlan` dedupes across the *whole week*, so a 7th day draws from already-thin pools (at intermediate: v_pull 15, lunge 10, traps 8) — `buildDay` does `if (!exercise) continue`, so exhaustion silently yields a day with fewer than four blocks, which `regressions.test.ts` will fail in a confusing way. |
 | **⚠️ Anything about a logged set** | [§5.3](#53-the-write-path-of-one-set) — migration, `SetLog`, `SetDraft`, `run.tsx`'s seed, **`sameDraft`**, and outbox forward-compatibility. |
 | **⚠️ The equipment the generator may use** | `ALL_EQUIPMENT` in `lib/plan/generate.ts` — **no test references it**, so a change here is uncovered. |
 | What exercises are chosen | `lib/plan/generate.ts` (`pick`, `SUBSTITUTES`) + `lib/catalog.ts` (`candidates`) |
@@ -1350,9 +1496,9 @@ JSX.
 | How loads progress | `lib/progression.ts` |
 | Onboarding questions | `STEPS` and the step blocks in `app/onboarding.tsx` |
 | Any colour, spacing or type size | `lib/theme.ts` — **only** here |
-| Animation timings | `lib/motion.ts` |
+| **⚠️ Animation timings** | `duration.*` (`fast`/`base`/`slow`/`crossfade`) is in **`lib/theme.ts`**; springs and reduced-motion helpers are in `lib/motion.ts`. `fast` and `base` exist in **both** — change them together. |
 | A shared visual component | `components/ui.tsx`; an icon → `components/Icon.tsx` |
-| Streak / totals / calendar maths | `lib/stats.ts` (reads `local_day`) |
+| Streak / totals / calendar maths | `lib/stats.ts` — note it does **not** read `local_day`; `queries.getTrainedDayKeys` does. `stats.trainedDayKeys` re-derives from `started_at` and is test-only — do not reach for it ([R45](./IMPROVEMENTS.md#r45--finish-the-timezone-fix--the-read-side-still-uses-device-local-time)) |
 | Pre-session projections | `lib/plan/estimate.ts` |
 | The order of sets in a session | `lib/session/queue.ts` |
 | Anything queued for retry | `lib/session/sync.ts` + `lib/session/outbox.ts` — **must stay idempotent** |

@@ -30,8 +30,10 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
-.env*.local
+# Environment values live in EAS; only templates and mock values are committed.
+.env*
+!.env.example
+!.env.test
 
 # typescript
 *.tsbuildinfo
@@ -40,11 +42,13 @@ yarn-error.*
 /ios
 /android
 
-# local env
-.env
-
 # agent worktrees
 .claude/
 .vercel
-.env*
-!.env.test
+
+# Local tooling and verification artifacts
+.agents/
+.playwright-cli/
+.superpowers/
+output/
+supabase/.temp/

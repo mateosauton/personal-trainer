@@ -2,8 +2,11 @@ import { validSet } from '@/lib/session/set-journal';
 import type { JournalWrite } from '@/lib/session/set-journal';
 import { supabase } from './supabase';
 import type { GeneratedPlan } from '@/lib/plan/generate';
+import { GYM_ROUTINE_BLOCK_TITLES, isGymRoutine } from '@/lib/plan/gym-routine';
+import { withDayTiming } from '@/lib/plan/timing';
 import { dayKey } from '@/lib/stats';
 import type { Plan, PlanDay, Profile, SetLog } from '@/lib/types';
+import type { ExerciseWeightHistory } from '@/lib/weights';
 
 export async function getProfile(userId: string): Promise<Profile | null> {
   const { data, error } = await supabase
@@ -111,7 +114,18 @@ export async function getActivePlan(userId: string): Promise<Plan | null> {
     })
     .sort((x, y) => x.day_index - y.day_index);
 
-  return { id: data.id, name: data.name, split: data.split, weeks: data.weeks, days };
+  // Timing is derived from the stored exercise prescriptions. This keeps old
+  // plans and the existing save_plan RPC compatible with the timed routine.
+  return {
+    id: data.id, name: data.name, split: data.split, weeks: data.weeks,
+    days: isGymRoutine(data) ? days.map((day) => withDayTiming({
+      ...day,
+      blocks: day.blocks.map((block) => ({
+        ...block,
+        title: GYM_ROUTINE_BLOCK_TITLES[block.block_index] ?? block.title,
+      })),
+    })) : days,
+  };
 }
 
 export async function startSession(userId: string, planDayId: string): Promise<string> {
@@ -310,6 +324,71 @@ export async function getProgress(userId: string): Promise<Map<string, ProgressR
   return new Map((data ?? []).map((row) => [row.exercise_id, row as ProgressRow]));
 }
 
+interface WeightHistorySetRow {
+  id: string;
+  exercise_id: string;
+  session_id: string;
+  weight_kg: number | null;
+  added_load_kg: number;
+  is_bodyweight: boolean;
+  reps: number | null;
+  completed_at: string;
+  sessions: { user_id: string; completed_at: string | null } | null;
+  plan_items: { plan_blocks: { kind: string } | null } | null;
+}
+
+/** The highest working load from each exercise's most recent completed session. */
+export async function getWeightHistory(
+  userId: string,
+  exerciseIds: string[],
+  excludeSessionId?: string,
+): Promise<Map<string, ExerciseWeightHistory>> {
+  const history = new Map<string, ExerciseWeightHistory>();
+  if (exerciseIds.length === 0) return history;
+
+  const requested = new Set(exerciseIds);
+  const pageSize = 500;
+  for (let offset = 0; ; offset += pageSize) {
+    let query = supabase
+      .from('set_logs')
+      .select('id, exercise_id, session_id, weight_kg, added_load_kg, is_bodyweight, reps, completed_at, sessions!inner(user_id, completed_at), plan_items(plan_blocks(kind))')
+      .eq('sessions.user_id', userId)
+      .not('sessions.completed_at', 'is', null)
+      .in('exercise_id', [...requested]);
+    if (excludeSessionId) query = query.neq('session_id', excludeSessionId);
+    const { data, error } = await query
+      .order('completed_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(offset, offset + pageSize - 1);
+    if (error) throw error;
+
+    // Both embedded relations are many-to-one foreign keys in the schema.
+    for (const row of (data ?? []) as unknown as WeightHistorySetRow[]) {
+      if (!requested.has(row.exercise_id) || row.session_id === excludeSessionId
+        || row.sessions?.user_id !== userId || !row.sessions.completed_at
+        || row.plan_items?.plan_blocks?.kind === 'warmup') continue;
+      const weightKg = row.is_bodyweight ? row.added_load_kg : row.weight_kg;
+      if (typeof weightKg !== 'number' || !Number.isFinite(weightKg) || weightKg < 0
+        || !Number.isFinite(Date.parse(row.completed_at))) continue;
+
+      const previous = history.get(row.exercise_id);
+      // Descending timestamps identify the newest valid session first. Keep
+      // reading its earlier sets, including those on later result pages.
+      if (previous && (previous.sessionId !== row.session_id || previous.weightKg >= weightKg)) continue;
+      history.set(row.exercise_id, {
+        exerciseId: row.exercise_id,
+        sessionId: row.session_id,
+        weightKg,
+        reps: typeof row.reps === 'number' && Number.isFinite(row.reps) && row.reps >= 0 ? row.reps : null,
+        completedAt: row.completed_at,
+        isBodyweight: row.is_bodyweight,
+      });
+    }
+    if (!data || data.length < pageSize) break;
+  }
+  return history;
+}
+
 export async function getRecentSessions(userId: string, limit = 30) {
   const { data, error } = await supabase
     .from('sessions')
@@ -340,19 +419,26 @@ export async function getSetLogsForSessions(sessionIds: string[]) {
 /** The session's original day remains valid after the active plan changes. */
 export async function getSessionPlanDay(sessionId: string, userId: string): Promise<PlanDay | null> {
   const { data, error } = await supabase.from('sessions').select(`
-    plan_days (id, day_index, name, focus,
+    plan_days (id, day_index, name, focus, plans(split),
       plan_blocks (id, block_index, kind, title, rounds, rest_seconds,
         plan_items (id, item_index, exercise_id, sets, reps_low, reps_high, seconds, tempo, notes)))
   `).eq('id', sessionId).eq('user_id', userId).maybeSingle();
   if (error) throw error;
   if (!data?.plan_days) return null;
   const raw = data.plan_days as unknown as Omit<PlanDay, 'blocks'> & {
+    plans?: { split: string };
     plan_blocks: (Omit<PlanDay['blocks'][number], 'items'> & { plan_items: PlanDay['blocks'][number]['items'] })[];
   };
-  const { plan_blocks, ...day } = raw;
-  return { ...day, blocks: plan_blocks.map(({ plan_items, ...block }) => ({
+  const { plan_blocks, plans, ...day } = raw;
+  const restored = { ...day, blocks: plan_blocks.map(({ plan_items, ...block }) => ({
     ...block, items: plan_items.slice().sort((a, b) => a.item_index - b.item_index),
   })).sort((a, b) => a.block_index - b.block_index) };
+  return plans && isGymRoutine(plans) ? withDayTiming({
+    ...restored,
+    blocks: restored.blocks.map(block => ({
+      ...block, title: GYM_ROUTINE_BLOCK_TITLES[block.block_index] ?? block.title,
+    })),
+  }) : restored;
 }
 
 export interface SessionSummaryLine {

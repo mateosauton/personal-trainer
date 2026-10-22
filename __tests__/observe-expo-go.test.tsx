@@ -16,6 +16,8 @@ jest.mock('expo-constants', () => ({
   ExecutionEnvironment: { StoreClient: 'storeClient' },
 }));
 
+jest.mock('@/lib/export-file', () => ({ cleanupExports: jest.fn() }));
+
 jest.mock('expo-observe', () => {
   throw new Error('ExpoObserve native module is unavailable in Expo Go');
 });

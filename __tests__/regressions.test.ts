@@ -172,8 +172,14 @@ describe('catalog is reachable and well formed', () => {
     for (const token of used) expect(offered).toContain(token);
   });
 
-  it('points every exercise at two https stills', () => {
+  it('provides two https stills or authored instructions for a routine variation', () => {
     for (const e of CATALOG) {
+      if (!e.media_refs.start) {
+        expect(e.id).toMatch(/^gym_/);
+        expect(e.media_refs.end).toBe('');
+        expect(e.instructions.length).toBeGreaterThan(0);
+        continue;
+      }
       expect(e.media_refs.start).toMatch(/^https:\/\//);
       expect(e.media_refs.end).toMatch(/^https:\/\//);
     }

@@ -137,3 +137,33 @@ it('rejects an invalid duration draft without replacing a saved workout', async 
   })).rejects.toThrow('saved workout could not be read');
   expect(disk.values).toEqual(before);
 });
+
+it('persists paused clocks and recovery metadata across a new store instance', async () => {
+  const disk = memory();
+  const timing = {
+    session: { endAt: 2_821_000, pausedAt: 11_000 },
+    block: { endAt: 301_000, pausedAt: 11_000 },
+    blockId: 'block', plannedSeconds: 2820, restSeconds: 290, recovering: true,
+  };
+  await new WorkoutStore(disk).create({ ...fixture(), timing });
+  expect((await new WorkoutStore(disk).read('A'))?.timing).toEqual(timing);
+});
+
+it.each([
+  { session: { endAt: Infinity, pausedAt: null } },
+  { session: { endAt: 3000, pausedAt: NaN } },
+  { block: { endAt: -1, pausedAt: null } },
+  { blockId: '' },
+  { plannedSeconds: -1 },
+  { restSeconds: Infinity },
+])('rejects corrupt clock metadata and preserves the prior snapshot: %p', async invalid => {
+  const disk = memory();
+  const store = new WorkoutStore(disk);
+  await store.create(fixture());
+  const before = new Map(disk.values);
+  await expect(store.update('A', 'session-A', { cursor: 0, phase: 'work' }, {
+    timing: { session: { endAt: 3000, pausedAt: null }, block: null,
+      blockId: 'block', plannedSeconds: 2, ...invalid },
+  })).rejects.toThrow('preserved');
+  expect(disk.values).toEqual(before);
+});

@@ -194,12 +194,32 @@ function matcher(url) {
   }
   return (row) =>
     filters.every(({ key, op, operand }) => {
-      const actual = row[key];
+      const actual = key.split('.').reduce((value, part) => value?.[part], row);
       if (op === 'eq') return String(actual) === operand || String(actual) === String(operand === 'true' ? true : operand);
-      if (op === 'not') return true; // only used as `not.is.null` on completed_at
+      if (op === 'neq') return String(actual) !== operand;
+      if (op === 'in') return operand.slice(1, -1).split(',').map((value) => value.replace(/^"|"$/g, '')).includes(String(actual));
+      if (op === 'not') return operand === 'is.null' ? actual != null : true;
       if (op === 'is') return operand === 'null' ? actual == null : actual === (operand === 'true');
       return true;
     });
+}
+
+/** PostgREST order fields are compared in order before applying the range. */
+function orderedPage(rows, url) {
+  const order = url.searchParams.get('order');
+  if (order) {
+    rows.sort((a, b) => {
+      for (const clause of order.split(',')) {
+        const [field, direction] = clause.split('.');
+        const comparison = String(a[field] ?? '').localeCompare(String(b[field] ?? ''));
+        if (comparison) return comparison * (direction === 'desc' ? -1 : 1);
+      }
+      return 0;
+    });
+  }
+  const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
+  const limit = url.searchParams.get('limit');
+  return rows.slice(offset, limit === null ? undefined : offset + Number(limit));
 }
 
 const wantsObject = (req) => (req.headers.accept ?? '').includes('pgrst.object');
@@ -264,6 +284,10 @@ const server = createServer(async (req, res) => {
       sessions: db.sessions,
       set_logs: db.set_logs,
       plans: db.plans.length,
+      active_plans: db.plans.filter((plan) => plan.is_active),
+      plan_days: db.plan_days,
+      plan_blocks: db.plan_blocks,
+      plan_items: db.plan_items,
     });
   }
 
@@ -330,6 +354,60 @@ const server = createServer(async (req, res) => {
     const userId = userFor(req);
     const body = await readBody(req);
     const where = matcher(url);
+
+    if (table === 'rpc/save_plan' && req.method === 'POST') {
+      if (!userId) return json(res, 401, { message: 'Not authenticated' });
+      const plan = body?.plan;
+      if (!plan || typeof plan.name !== 'string' || typeof plan.split !== 'string'
+        || !Array.isArray(plan.days) || plan.days.length < 1 || plan.days.length > 7) {
+        return json(res, 400, { message: 'A plan must have between 1 and 7 days' });
+      }
+      // Stage all nested rows before retiring the previous plan, mirroring the
+      // atomic production RPC rather than masking it with a successful [].
+      const planId = randomUUID();
+      const days = [];
+      const blocks = [];
+      const items = [];
+      try {
+        plan.days.forEach((day, dayIndex) => {
+          if (!Array.isArray(day.blocks)) throw new Error('Missing blocks');
+          const dayId = randomUUID();
+          days.push({ id: dayId, plan_id: planId, day_index: dayIndex, name: day.name, focus: day.focus });
+          day.blocks.forEach((block, blockIndex) => {
+            if (!['warmup', 'straight', 'superset', 'circuit'].includes(block.kind)
+              || !Array.isArray(block.items)) throw new Error('Invalid block');
+            const blockId = randomUUID();
+            blocks.push({
+              id: blockId, plan_day_id: dayId, block_index: blockIndex,
+              kind: block.kind, title: block.title, rounds: block.rounds,
+              rest_seconds: block.rest_seconds,
+            });
+            block.items.forEach((item, itemIndex) => {
+              if (typeof item.exercise_id !== 'string' || !Number.isInteger(item.sets)
+                || !Number.isInteger(item.reps_low) || !Number.isInteger(item.reps_high)) {
+                throw new Error('Invalid exercise prescription');
+              }
+              items.push({
+                id: randomUUID(), block_id: blockId, item_index: itemIndex,
+                exercise_id: item.exercise_id, sets: item.sets,
+                reps_low: item.reps_low, reps_high: item.reps_high,
+                seconds: item.seconds ?? null, tempo: item.tempo ?? null, notes: item.notes ?? null,
+              });
+            });
+          });
+        });
+      } catch (error) {
+        return json(res, 400, { message: error.message });
+      }
+      db.plans.forEach((existing) => {
+        if (existing.user_id === userId) existing.is_active = false;
+      });
+      db.plans.push({ id: planId, user_id: userId, name: plan.name, split: plan.split, weeks: plan.weeks ?? 4, is_active: true });
+      db.plan_days.push(...days);
+      db.plan_blocks.push(...blocks);
+      db.plan_items.push(...items);
+      return json(res, 200, planId);
+    }
 
     if (table === 'profiles') {
       if (req.method === 'GET') {
@@ -400,11 +478,33 @@ const server = createServer(async (req, res) => {
     if (table in plain) {
       const rows = plain[table];
       if (req.method === 'GET') {
-        const found = rows.filter((r) => where(r) && (!('user_id' in r) || r.user_id === userId || !userId));
+        const select = url.searchParams.get('select') ?? '';
+        const visible = table === 'set_logs' ? rows
+          .filter((row) => db.sessions.some((session) => session.id === row.session_id && session.user_id === userId))
+          .map((row) => {
+            const shaped = { ...row };
+            if (select.includes('sessions')) {
+              const session = db.sessions.find((candidate) => candidate.id === row.session_id);
+              shaped.sessions = { user_id: session.user_id, completed_at: session.completed_at };
+            }
+            if (select.includes('plan_items')) {
+              const item = db.plan_items.find((candidate) => candidate.id === row.plan_item_id);
+              const block = item && db.plan_blocks.find((candidate) => candidate.id === item.block_id);
+              shaped.plan_items = item ? { plan_blocks: block ? { kind: block.kind } : null } : null;
+            }
+            return shaped;
+          }) : rows;
+        const found = orderedPage(visible.filter((r) => where(r) && (!('user_id' in r) || r.user_id === userId || !userId)), url);
         return json(res, 200, wantsObject(req) ? (found[0] ?? null) : found);
       }
       if (req.method === 'POST') {
-        const incoming = (Array.isArray(body) ? body : [body]).map((r) => ({ id: randomUUID(), ...r }));
+        const incoming = (Array.isArray(body) ? body : [body]).map((r) => ({
+          id: randomUUID(),
+          ...(table === 'set_logs' ? {
+            completed_at: new Date().toISOString(), weight_kg: null, added_load_kg: 0, is_bodyweight: false,
+          } : {}),
+          ...r,
+        }));
         const onConflict = url.searchParams.get('on_conflict');
         for (const row of incoming) {
           if (onConflict) {
@@ -423,16 +523,17 @@ const server = createServer(async (req, res) => {
 
     if (table === 'sessions') {
       if (req.method === 'GET') {
-        const found = db.sessions
+        let found = db.sessions
           .filter((s) => s.user_id === userId)
-          .filter((s) => (url.searchParams.has('completed_at') ? s.completed_at != null : true))
           .map((s) => ({
             ...s,
             plan_days: (() => {
               const d = db.plan_days.find((x) => x.id === s.plan_day_id);
-              return d ? { name: d.name, focus: d.focus } : null;
+              return d ? { name: d.name, focus: d.focus, day_index: d.day_index, plan_id: d.plan_id } : null;
             })(),
-          }));
+          }))
+          .filter(where);
+        found = orderedPage(found, url);
         return json(res, 200, wantsObject(req) ? (found[0] ?? null) : found);
       }
       if (req.method === 'POST') {

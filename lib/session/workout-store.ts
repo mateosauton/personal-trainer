@@ -1,13 +1,23 @@
 import type { ProgressRow } from '@/lib/db/queries';
-import type { PlanDay, Units } from '@/lib/types';
+import type { PlanDay, SetLog, Units } from '@/lib/types';
 import { buildQueue } from './queue';
-import { nativeJournalLock, type JournalLock } from './set-journal';
+import { nativeJournalLock, validSet, type JournalLock } from './set-journal';
+import type { Deadline } from './timing';
 
 import { validDraft, validSeconds, type WorkoutDraft } from './set-values';
 export type { WorkoutDraft } from './set-values';
+export interface WorkoutTiming {
+  session: Deadline;
+  block: Deadline | null;
+  blockId: string;
+  plannedSeconds: number;
+  restSeconds?: number;
+  /** Warmups recover without creating a logged set or a rest draft. */
+  recovering?: boolean;
+}
 export interface SavedWorkout {
   version: 1;
-  recoveryCopies?: Pick<SavedWorkout, 'cursor' | 'phase' | 'draft' | 'savedDraft' | 'progress' | 'restUntilMs' | 'endedAtMs'>[];
+  recoveryCopies?: Pick<SavedWorkout, 'cursor' | 'phase' | 'draft' | 'savedDraft' | 'progress' | 'restUntilMs' | 'endedAtMs' | 'timing' | 'recordedSets'>[];
   ownerId: string;
   sessionId: string;
   day: PlanDay;
@@ -22,6 +32,9 @@ export interface SavedWorkout {
   restUntilMs: number | null;
   startedAtMs: number;
   endedAtMs: number | null;
+  timing?: WorkoutTiming;
+  /** UI copy of journaled sets, retained for offline feedback after a restart. */
+  recordedSets?: [string, SetLog][];
 }
 interface Storage {
   getItem(key: string): Promise<string | null>;
@@ -37,6 +50,8 @@ export type WorkoutPatch = Partial<
     | 'savedDraft'
     | 'restUntilMs'
     | 'endedAtMs'
+    | 'timing'
+    | 'recordedSets'
   >
 >;
 
@@ -48,6 +63,9 @@ const finite = (value: unknown): value is number =>
 const integer = (value: unknown, min = 0, max = 100) =>
   finite(value) && Number.isInteger(value) && value >= min && value <= max;
 const text = (value: unknown) => typeof value === 'string' && value.length > 0;
+const deadline = (value: unknown): value is Deadline => record(value)
+  && finite(value.endAt) && value.endAt >= 0
+  && (value.pausedAt === null || (finite(value.pausedAt) && value.pausedAt >= 0));
 
 
 export function validateWorkout(
@@ -82,6 +100,17 @@ export function validateWorkout(
     !Array.isArray(value.progress)
   )
     return invalid();
+  if (value.timing !== undefined && (!record(value.timing)
+    || !deadline(value.timing.session)
+    || (value.timing.block !== null && !deadline(value.timing.block))
+    || !text(value.timing.blockId)
+    || !finite(value.timing.plannedSeconds) || value.timing.plannedSeconds < 0
+    || (value.timing.restSeconds !== undefined && (!finite(value.timing.restSeconds) || value.timing.restSeconds < 0))
+    || (value.timing.recovering !== undefined && typeof value.timing.recovering !== 'boolean')))
+    return invalid();
+  if (value.recordedSets !== undefined && (!Array.isArray(value.recordedSets)
+    || value.recordedSets.some((entry: unknown) => !Array.isArray(entry) || entry.length !== 2
+      || !text(entry[0]) || !validSet(entry[1])))) return invalid();
   if (value.recoveryCopies !== undefined) {
     if (!Array.isArray(value.recoveryCopies)) return invalid();
     for (const copy of value.recoveryCopies) {
@@ -161,7 +190,7 @@ export class WorkoutStore {
         if (!patch || !current || persisted) return;
         const copy = { cursor: current.cursor, phase: current.phase, draft: current.draft,
           savedDraft: current.savedDraft, progress: current.progress, restUntilMs: current.restUntilMs,
-          endedAtMs: current.endedAtMs };
+          endedAtMs: current.endedAtMs, timing: current.timing, recordedSets: current.recordedSets };
         next = { ...current, ...patch, recoveryCopies: [...(current.recoveryCopies ?? []), copy] };
         validateWorkout(next, owner);
         await this.storage.setItem(keyFor(owner), JSON.stringify(next));
