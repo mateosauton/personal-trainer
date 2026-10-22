@@ -58,7 +58,8 @@ on screen long enough to see). `drive.mjs` holds one function per flow; add to
 it rather than writing a new script.
 
 To check the real thing rather than the dev server, `tools/dev/serve-dist.mjs`
-serves an exported `dist/` with the same SPA fallback Cloudflare applies:
+serves an exported `dist/` with the same SPA fallback Cloudflare applies.
+The preview listens only on `127.0.0.1` and refuses paths or symlinks outside the export:
 
 ```bash
 npx expo export --platform web
