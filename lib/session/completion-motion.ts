@@ -38,12 +38,15 @@ export function takeTrainedDayMotion(
 ): string | null {
   const previous = home.get(ownerId);
   const completed = sessions.find(session => session.id === previous?.sessionId);
-  // The single-day baseline survives Home remounts, without storing history.
+  const pending = previous?.sessionId != null
+    && (!completed || (completed.local_day === day && !trained));
+  // Dashboard reads can settle separately. Keep the baseline and cue until
+  // both reads confirm the completed session's day.
   home.set(ownerId, {
     ...previous,
     day,
-    trained,
-    sessionId: completed ? undefined : previous?.sessionId,
+    trained: pending && previous?.day === day ? previous.trained : trained,
+    sessionId: pending ? previous?.sessionId : undefined,
   });
   trim(home);
   return completed?.local_day === day && previous?.day === day
