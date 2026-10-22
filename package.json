@@ -67,7 +67,7 @@
     "build:web": "EXPO_NO_DOTENV=1 expo export --platform web",
     "check:web": "npm run lint && npm test -- --runInBand --testTimeout=20000",
     "lint": "tsc --noEmit",
-    "test": "jest",
+    "test": "node --test tools/dev/serve-dist.test.mjs && jest",
     "catalog": "node scripts/build-catalog.mjs",
     "env:pull": "npx eas-cli@23.2.0 env:pull --environment development",
     "env:pull:preview": "npx eas-cli@23.2.0 env:pull --environment preview",
