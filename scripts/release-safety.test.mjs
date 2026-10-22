@@ -60,7 +60,12 @@ for (const [name, mutate] of [
   ['channel rollout', d => { d.app.byId.productionChannel.branchMapping = JSON.stringify({ version: 1, data: [] }); }],
 ]) test(`rejects ${name}`, () => { const data = evidenceFixture(); mutate(data); assert.throws(() => validateRelease(data, releaseInputs(envFixture()), config)); });
 
-function sandbox() {
+function sandbox(inheritedEnvironment = process.env) {
+  // The fake GitHub production run must not inherit its test host's deployment
+  // identity or credentials (for example a Cloudflare preview running npm test).
+  const inherited = Object.fromEntries(Object.entries(inheritedEnvironment).filter(([name]) =>
+    !name.startsWith('WORKERS_CI') && name !== 'VERCEL_ENV' && name !== 'EAS_BUILD_PROFILE'
+    && !name.startsWith('EXPO_PUBLIC_') && !name.startsWith('RELEASE_TEST_')));
   const directory = mkdtempSync(join(tmpdir(), 'trainer-release-'));
   mkdirSync(join(directory, 'bin'));
   mkdirSync(join(directory, 'node_modules/expo/bin'), { recursive: true });
@@ -75,10 +80,8 @@ function sandbox() {
   executable('eas', `const fs=require('node:fs');const a=process.argv.slice(2);fs.appendFileSync(process.env.RELEASE_TEST_LOG,JSON.stringify(['eas',...a])+'\\n');
     if(a[0]==='--version')console.log(process.env.RELEASE_TEST_CLI_VERSION||'eas-cli/23.2.0 darwin-arm64 node-v22.1.0');
     else if(a[0]==='update:republish'){if(process.env.RELEASE_TEST_CLI_FAILED)process.exit(1);console.log('[{"group":"${PROMOTED}"}]');}else process.exit(2);`);
-  const env = { ...process.env, ...envFixture(), PATH: `${join(directory, 'bin')}:${process.env.PATH}`, RUNNER_TEMP: join(directory, 'receipt'),
+  const env = { ...inherited, ...envFixture(), PATH: `${join(directory, 'bin')}:${inherited.PATH || ''}`, RUNNER_TEMP: join(directory, 'receipt'),
     RELEASE_TEST_LOG: join(directory, 'commands.jsonl'), RELEASE_TEST_COUNTER: join(directory, 'count') };
-  // No developer login flags or local secrets enter fake release tests.
-  for (const name of Object.keys(env)) if (/^(DEV_LOGIN|EXPO_PUBLIC_DEV_LOGIN|EXPO_PUBLIC_ALLOW_DEV_LOGIN|EAS_BUILD_PROFILE)/.test(name)) delete env[name];
   const fetcher = async () => {
     const data = evidenceFixture();
     if (existsSync(env.RELEASE_TEST_LOG) && readFileSync(env.RELEASE_TEST_LOG, 'utf8').includes('update:republish')) {
@@ -100,6 +103,18 @@ test('runner promotes the exact tested group and saves checked identities withou
     assert.deepEqual(writes, [['eas', 'update:republish', '--group', GROUP, '--platform', 'android', '--destination-branch', 'production', '--message', 'Promote aaaaaaa (android)', '--non-interactive', '--json']]);
     const saved = readFileSync(join(s.env.RUNNER_TEMP, 'native-release.json'), 'utf8');
     assert.ok(!saved.includes(s.env.EXPO_TOKEN) && !saved.includes(s.env.EXPO_PUBLIC_SUPABASE_KEY));
+  } finally { s.close(); }
+});
+test('fake production promotion is isolated from a parent hosted preview context', async () => {
+  const s = sandbox({ ...process.env, WORKERS_CI: '1', WORKERS_CI_BRANCH: 'codex/environment-release-safety',
+    WORKERS_CI_COMMIT_SHA: 'parent-preview-sha', VERCEL_ENV: 'preview', EAS_BUILD_PROFILE: 'preview',
+    EXPO_PUBLIC_DEV_LOGIN_PASSWORD: 'parent-preview-password' });
+  try {
+    assert.ok(!Object.keys(s.env).some(name => name.startsWith('WORKERS_CI')));
+    for (const name of ['VERCEL_ENV', 'EAS_BUILD_PROFILE', 'EXPO_PUBLIC_DEV_LOGIN_PASSWORD']) assert.equal(s.env[name], undefined);
+    const receipt = await promoteRelease({ env: s.env, cwd: s.directory, fetcher: s.fetcher });
+    assert.equal(receipt.status, 'promoted');
+    assert.equal(s.commands().filter(command => command.includes('update:republish')).length, 1);
   } finally { s.close(); }
 });
 for (const [name, flag] of [['master moves immediately before publish', 'RELEASE_TEST_MASTER_MOVED'], ['dirty checkout', 'RELEASE_TEST_DIRTY'], ['binary source not in history', 'RELEASE_TEST_NOT_ANCESTOR'], ['CLI version changes', 'RELEASE_TEST_CLI_VERSION']]) {
