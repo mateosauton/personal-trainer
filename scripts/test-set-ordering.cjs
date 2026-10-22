@@ -1,6 +1,6 @@
 // Disposable PostgreSQL verification. No production credentials or data.
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
+const { readFileSync, readdirSync } = require('node:fs');
 const { randomUUID } = require('node:crypto');
 const path = require('node:path');
 const roots = [process.env.PGLITE_ROOT || path.resolve(__dirname, '..')];
@@ -83,6 +83,10 @@ async function database() {
     }
     await migrate('0007_ordered_set_writes.sql');
     assert.deepEqual((await db.query('select to_jsonb(l) as data from set_logs l order by id')).rows,historical,'historical sets/times must not change');
+    for (const name of readdirSync(path.join(__dirname, '../supabase/migrations'))
+      .filter((name) => name.endsWith('.sql') && name > '0007_ordered_set_writes.sql').sort()) {
+      await migrate(name);
+    }
     const event = '2026-10-06T09:00:00Z', origin = randomUUID(), otherOrigin = randomUUID();
     const call = async (client, session, set, writer=origin, revision=1, version=0, at=event) => (await client.query(
       'select public.log_set_versioned($1,$2::jsonb,$3,$4,$5,$6) as result', [session,JSON.stringify(set),writer,revision,version,at])).rows[0].result;

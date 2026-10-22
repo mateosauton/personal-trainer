@@ -1,27 +1,89 @@
-name: Checks
+name: CI/CD
 
 on:
   pull_request:
   push:
     branches: [master]
+  workflow_dispatch: {}
 
 permissions:
   contents: read
 
-concurrency:
-  group: checks-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   check:
+    name: Core and security checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: checks-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      EXPO_NO_DOTENV: '1'
+      EXPO_NO_TELEMETRY: '1'
+      # Bundle checks use fixture settings. PR jobs never receive release secrets.
+      EXPO_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      EXPO_PUBLIC_SUPABASE_KEY: mock
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          node-version: 22
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - run: npm run lint
-      - run: npm test -- --runInBand --testTimeout=20000
+      - name: Check types, core behavior, and security
+        run: npm run check:web
+      - name: Build web bundle
+        run: npm run build:web
+
+  update:
+    name: Publish native update
+    needs: check
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: eas-production
+      cancel-in-progress: false
+    env:
+      EXPO_NO_DOTENV: '1'
+      EXPO_NO_TELEMETRY: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Check this is still the current release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/master" --jq '.object.sha')
+          if [ "$latest" = "$GITHUB_SHA" ]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'Skipping a release superseded by a newer master commit.'
+            echo 'current=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Require Expo release credentials
+        if: steps.release.outputs.current == 'true'
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo '::error::Set the EXPO_TOKEN repository secret to publish native updates.'
+            exit 1
+          fi
+      - uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
+        if: steps.release.outputs.current == 'true'
+        with:
+          eas-version: 23.2.0
+          token: ${{ secrets.EXPO_TOKEN }}
+      - name: Publish compatible production builds
+        if: steps.release.outputs.current == 'true'
+        run: eas update --platform all --channel production --environment production --message "Release $GITHUB_SHA" --non-interactive

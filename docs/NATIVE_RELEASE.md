@@ -6,7 +6,7 @@ Build and update compatibility uses the Expo fingerprint policy. Changing native
 
 ## Verification
 
-1. Run `npm ci`, `npm run lint`, and `npm test -- --runInBand --testTimeout=20000`.
+1. Run `npm ci` and `npm run check:web` for core behavior and security checks. See [CI and releases](CI.md) for GitHub publishing.
 2. Build Android with `npx eas-cli@23.2.0 build --platform android --profile release-test`. This uses production configuration with a separate release-test update channel.
 3. Install the resulting APK and verify sign-in, onboarding, workout completion, offline replay, restart, account switching, history, and password recovery. Record the tested commit and build ID.
 4. Build production binaries from the same verified commit. The production profile uses the production environment and update channel.
