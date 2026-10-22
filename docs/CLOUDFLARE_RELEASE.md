@@ -19,22 +19,34 @@ checks or tests prevent both deployment and preview upload. The export writes
 `dist/`. Keep `expo.web.output` as `single` and the SPA fallback enabled in
 `wrangler.jsonc`. Do not run the GitHub Pages base-path script for Cloudflare.
 
-Set these build-time variables for production and preview builds:
+Set these build-time variables separately on the production and preview triggers:
 
-- `EXPO_PUBLIC_SUPABASE_URL`: the intended Supabase project URL.
-- `EXPO_PUBLIC_SUPABASE_KEY`: that project's publishable key.
-- `EXPO_NO_DOTENV=1`: use configured build variables rather than local files.
-- `EXPO_NO_TELEMETRY=1`.
-- `NODE_VERSION=22`.
+| Variable | Production (`master`) | Every other branch |
+| --- | --- | --- |
+| `APP_ENV` | `production` | `preview` |
+| `EXPO_PUBLIC_APP_ENV` | `production` | `preview` |
+| `EXPO_PUBLIC_SUPABASE_URL` | Registered production URL | Registered, isolated preview URL |
+| `EXPO_PUBLIC_SUPABASE_KEY` | Production public key | Preview public key |
+| `EXPO_NO_DOTENV` | `1` | `1` |
+| `EXPO_NO_TELEMETRY` | `1` | `1` |
+| `NODE_VERSION` | `22` | `22` |
 
-Only enable `EXPO_NO_DOTENV` after both public Supabase variables are configured.
-The two public values are mirrored from the EAS production environment into
-the Cloudflare build triggers. Local dotenv loading is disabled; actual env
-files are gitignored. Never put a service-role key or other server credential in `EXPO_PUBLIC_*`, Wrangler assets, or a committed env file.
+The shared guard checks Cloudflare's `WORKERS_CI_BRANCH` independently: `master`
+requires production and any other branch requires preview. Renaming production
+values to preview does not pass. Never put a service-role key or developer-login
+credentials in build variables or assets.
 
-Previews using the production project share production data. Use a dedicated
-test account for verification. A fully isolated preview needs its own Supabase
-project and migrations; a different hostname alone does not isolate data.
+**Migration prerequisite:** read-only inspection on 2026-10-22 found both
+Cloudflare triggers pointed at the production project and had no environment
+markers. This PR does not change those hosted settings. New preview builds will
+fail until a distinct preview project is provisioned, migrated, registered in
+`config/environments.json`, and configured on the preview trigger. Production
+builds also need the explicit markers above before merging. Existing deployed
+versions keep their old configuration until replaced. Follow [ENVIRONMENTS.md](ENVIRONMENTS.md).
+
+`npm run build:web:check` uses synthetic public values only to validate Metro
+in CI; its `.expo/web-check` output must never be deployed. Hosted builds use
+the guarded `npm run build:web` and real target-specific public configuration.
 
 ## Authentication
 
@@ -73,5 +85,4 @@ npx wrangler rollback <previous-version-id>
 
 Confirm the expected app loads after rollback, then revert the source change
 through a PR so the next automatic build does not deploy it again. Rolling back
-static assets does not undo Supabase data or migrations. This release changes
-no database schema.
+static assets does not undo Supabase data or migrations. The isolation and safety changes introduce no database migration.

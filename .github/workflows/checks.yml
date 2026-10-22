@@ -23,5 +23,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run lint
-      - run: npm test -- --runInBand --testTimeout=20000
+      - run: npm run check:web
+      # Synthetic public values exercise Metro without backend access. This
+      # output is outside dist and is never uploaded or deployed.
+      - run: npm run build:web:check

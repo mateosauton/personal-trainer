@@ -1,41 +1,89 @@
-# Publish updates only to compatible production native builds.
-name: Publish EAS Update
+name: Promote tested native update
 
 on:
-  push:
-    branches: [master]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full current master SHA of the tested candidate update
+        required: true
+        type: string
+      platform:
+        description: Platform tested on a physical phone
+        required: true
+        type: choice
+        options: [android, ios]
+      candidate_group:
+        description: Single-platform release-test update group exported with production environment
+        required: true
+        type: string
+      tested_build:
+        description: EAS release-test device build used for the phone test
+        required: true
+        type: string
+      production_build:
+        description: EAS production binary currently installed by the target users
+        required: true
+        type: string
+      phone_tested:
+        description: I tested this exact group on this build and checked backend compatibility
+        required: true
+        default: false
+        type: boolean
+      evidence_url:
+        description: GitHub issue or PR with phone test results and backend compatibility evidence
+        required: true
+        type: string
 
+permissions:
+  contents: read
+
+# Serialize both platforms. Never cancel a publisher with an ambiguous remote write.
 concurrency:
-  group: eas-update
-  cancel-in-progress: true
+  group: native-production-release
+  cancel-in-progress: false
 
 jobs:
-  update:
+  promote:
+    if: github.ref == 'refs/heads/master'
+    environment: production
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      EXPO_NO_DOTENV: '1'
+      RELEASE_SHA: ${{ inputs.source_sha }}
+      RELEASE_PLATFORM: ${{ inputs.platform }}
+      RELEASE_GROUP: ${{ inputs.candidate_group }}
+      RELEASE_TEST_BUILD: ${{ inputs.tested_build }}
+      RELEASE_PRODUCTION_BUILD: ${{ inputs.production_build }}
+      RELEASE_PHONE_TESTED: ${{ inputs.phone_tested }}
+      RELEASE_EVIDENCE: ${{ inputs.evidence_url }}
     steps:
       - uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-
+      - name: Validate dispatch before loading credentials
+        run: node --input-type=module -e 'import { releaseInputs } from "./scripts/release-policy.mjs"; releaseInputs(process.env)'
       - run: npm ci
-
-      - name: Check types
-        run: npm run lint
-
-      - name: Run tests
-        run: npm test -- --runInBand --testTimeout=20000
-
+      - run: npm run lint
+      - run: npm test -- --runInBand --testTimeout=20000
       - uses: expo/expo-github-action@v8
         with:
           eas-version: 23.2.0
           token: ${{ secrets.EXPO_TOKEN }}
-
-      - name: Publish update
-        run: eas update --channel production --environment production --message "$UPDATE_MESSAGE" --non-interactive
+      - name: Verify metadata and promote the exact tested bundle
+        run: eas env:exec production 'node scripts/release-native.mjs' --non-interactive
         env:
-          EXPO_NO_DOTENV: 1
-          UPDATE_MESSAGE: ${{ github.event.head_commit.message || 'Publish production update' }}
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      - name: Preserve release receipt, including uncertain writes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/native-release.json
+          if-no-files-found: ignore
+          retention-days: 90
