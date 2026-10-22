@@ -6,6 +6,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'reac
 import { Calendar } from '@/components/Calendar';
 import { ExerciseMedia } from '@/components/ExerciseMedia';
 import { GymRoutineCard } from '@/components/GymRoutineCard';
+import { PlanExpansion, PlanExpansionChevron } from '@/components/PlanExpansion';
 import { Body, Button, Card, Display, Heading, Muted, Overline, Screen } from '@/components/ui';
 import { useAuth, useUserId } from '@/lib/auth';
 import { getExercise } from '@/lib/catalog';
@@ -154,7 +155,7 @@ export default function PlanTab() {
           return (
             <Card key={day.id} style={isNext ? styles.nextCard : undefined}>
               <Pressable
-                onPress={() => setExpanded(open ? null : day.id)}
+                onPress={() => setExpanded((current) => current === day.id ? null : day.id)}
                 accessibilityRole="button"
                 accessibilityState={{ expanded: open }}
                 accessibilityLabel={`${day.name} details`}
@@ -168,7 +169,7 @@ export default function PlanTab() {
                   <Body style={styles.dayName}>{day.name}</Body>
                   <Muted numberOfLines={2}>{bodyPartLabel(estimate.bodyParts)}</Muted>
                 </View>
-                <Muted>{open ? '▲' : '▼'}</Muted>
+                <PlanExpansionChevron expanded={open} />
               </Pressable>
 
               <View style={styles.stats}>
@@ -178,8 +179,8 @@ export default function PlanTab() {
                 <Stat label="Sets" value={`${estimate.sets}`} />
               </View>
 
-              {open ? (
-                <View style={{ gap: space.lg, marginTop: space.lg }}>
+              <PlanExpansion expanded={open}>
+                <View style={{ gap: space.lg, paddingTop: space.lg }}>
                   {day.blocks.map((block) => (
                     <View key={block.id} style={{ gap: space.xs }}>
                       <Overline>{block.title}</Overline>
@@ -212,7 +213,7 @@ export default function PlanTab() {
                     </View>
                   ))}
                 </View>
-              ) : null}
+              </PlanExpansion>
 
               <Button
                 title={isNext ? 'Start this session' : 'View session'}

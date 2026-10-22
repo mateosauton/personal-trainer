@@ -2,6 +2,7 @@ import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import Animated, { FadeInDown, ReduceMotion } from 'react-native-reanimated';
 
 import { ExerciseMedia } from '@/components/ExerciseMedia';
 import { ExerciseWeightProgressCard, WeightSuggestionCard } from '@/components/ExerciseWeight';
@@ -40,9 +41,11 @@ import { buildQueue, restAfter, type QueueEntry } from '@/lib/session/queue';
 import { formatClock, getBlockDurationSeconds } from '@/lib/plan/timing';
 import { pauseDeadline, remainingSeconds, resumeDeadline, startDeadline } from '@/lib/session/timing';
 import { colors, radius, space, type } from '@/lib/theme';
+import { motion } from '@/lib/motion';
 import { displayToKg, kgToDisplay } from '@/lib/units';
 import { exerciseWeightProgress, getWeightHistoryIds, getWeightSuggestion, type ExerciseWeightHistory } from '@/lib/weights';
 import { workouts } from '@/lib/session/workout';
+import { signalWorkoutCompletion } from '@/lib/session/completion-motion';
 import type { SavedWorkout, WorkoutTiming } from '@/lib/session/workout-store';
 import type { SetLog, Units } from '@/lib/types';
 import { draftMeasurement } from '@/lib/session/set-values';
@@ -67,6 +70,9 @@ const setLogFromDraft = (target: QueueEntry, value: SetDraft, units: Units): Set
 
 const plannedDuration = (day: SavedWorkout['day']) => day.blocks.reduce(
   (sum, block) => sum + (getBlockDurationSeconds(block) ?? 0), 0);
+const phaseEntrance = FadeInDown.duration(motion.base)
+  .withInitialValues({ transform: [{ translateY: motion.focused.distance }] })
+  .reduceMotion(ReduceMotion.System);
 const initialTiming = (saved: SavedWorkout, timestamp = Date.now()): WorkoutTiming => {
   const entry = buildQueue(saved.day)[saved.cursor];
   const duration = entry ? getBlockDurationSeconds(entry.block) : null;
@@ -108,6 +114,8 @@ export default function SessionRun() {
     identity.current.sessionId === sessionId;
   const baselineRetry = useRef<{ userId: string; sessionId: string; observed: SetLog[]; needsReview: boolean } | null>(null);
   const completionStarted = useRef(false);
+  const freshFinish = useRef(false);
+  const savedSetKey = useRef<string | null>(null);
   const draftAttempt = useRef(0);
   const persistedWorkout = useRef<SavedWorkout | null>(null);
   const draftWrites = useRef<Promise<void>>(Promise.resolve());
@@ -147,6 +155,8 @@ export default function SessionRun() {
     setServerSets([]);
     timingFallback.current = null;
     completionStarted.current = false;
+    freshFinish.current = false;
+    savedSetKey.current = null;
     baselineRetry.current = null;
     (async () => {
       let saved = await workouts.read(userId);
@@ -272,11 +282,13 @@ export default function SessionRun() {
     void queueCompletion(userId, sessionId, elapsed)
       .then(() => flushOutbox())
       .then(() => {
-        if (!cancelled)
+        if (!cancelled) {
+          if (freshFinish.current) signalWorkoutCompletion(userId, sessionId);
           router.replace({
             pathname: '/session/[dayId]/summary',
-            params: { dayId, sessionId, elapsed: String(elapsed) },
+            params: { dayId, sessionId, elapsed: String(elapsed), celebrate: freshFinish.current ? '1' : undefined },
           });
+        }
       })
       .catch((error) => {
         if (!cancelled) {
@@ -339,6 +351,8 @@ export default function SessionRun() {
     );
     if (isCurrent()) {
       persistedWorkout.current = saved;
+      if (patch.phase === 'resting' && phase === 'work') savedSetKey.current = entry?.key ?? null;
+      if (patch.endedAtMs != null && active.endedAtMs == null) freshFinish.current = true;
       setWorkout(saved);
       setSnapshotError(null);
     }
@@ -490,6 +504,7 @@ export default function SessionRun() {
   const changeDraft = (value: SetDraft) => {
     if (!active || busy || paused) return;
     const attempt = ++draftAttempt.current;
+    savedSetKey.current = null;
     setWorkout({ ...active, draft: value });
     draftWrites.current = draftWrites.current.then(async () => {
       if (!isCurrent()) return;
@@ -694,6 +709,12 @@ export default function SessionRun() {
         <Button title="Review saved set" variant="surface" loading={busy}
           onPress={() => { void reviewSavedSet(); }} />
       </> : null}
+      <Animated.View
+        key={`${entry.key}:${timing?.recovering ? 'recovery' : phase}`}
+        entering={phaseEntrance}
+        style={styles.flex}
+        collapsable={false}
+      >
       {timing?.recovering ? (
         <View style={styles.recovery}>
           <Heading>Block complete · recover</Heading>
@@ -729,6 +750,7 @@ export default function SessionRun() {
               progress={exerciseWeightProgress(matchingFeedbackSets, comparableHistory ? suggestion.previousWeightKg : null)}
               units={units} isBodyweight={draft.asBodyweight} setsCompleted={matchingFeedbackSets.length}
               historyAvailable={comparableHistory} /> : undefined}
+            justSaved={savedSetKey.current === entry.key}
           />
         </View>
       ) : (
@@ -792,6 +814,7 @@ export default function SessionRun() {
           </View>
         </>
       )}
+      </Animated.View>
     </Screen>
   );
 }

@@ -5,7 +5,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { ExerciseStrip } from '@/components/ExerciseStrip';
 import { Header } from '@/components/Header';
 import { SyncRecovery } from '@/components/SyncRecovery';
-import { Streak } from '@/components/Streak';
+import { Streak, type StreakCompletion } from '@/components/Streak';
 import {
   Body,
   Button,
@@ -25,6 +25,8 @@ import {
 import { colors, space, type } from '@/lib/theme';
 import { formatHeight, formatWeight } from '@/lib/units';
 import { workouts } from '@/lib/session/workout';
+import { takeTrainedDayMotion } from '@/lib/session/completion-motion';
+import { dayKey } from '@/lib/stats';
 import type { SavedWorkout } from '@/lib/session/workout-store';
 import { useDashboard } from '@/lib/useDashboard';
 
@@ -40,11 +42,14 @@ export default function Home() {
   const [savedWorkout, setSavedWorkout] = useState<SavedWorkout | null>(null);
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [resumeAttempt, setResumeAttempt] = useState(0);
+  const [streakCompletion, setStreakCompletion] = useState<StreakCompletion | null>(null);
+  const today = dayKey(new Date());
   const bodyweightKg = profile?.bodyweight_kg ?? null;
   const {
     plan,
     nextDay,
     completedCount,
+    sessions,
     trainedDays,
     streak,
     todaySessions,
@@ -54,6 +59,15 @@ export default function Home() {
     error,
     reload,
   } = useDashboard(userId, bodyweightKg);
+
+  useEffect(() => {
+    if (loading || error) return;
+    const completedSessionId = takeTrainedDayMotion(userId, today, trainedDays.has(today), sessions);
+    // A normal initial load or history refresh never celebrates an old day.
+    if (completedSessionId) {
+      setStreakCompletion({ ownerId: userId, sessionId: completedSessionId, day: today });
+    }
+  }, [error, loading, sessions, today, trainedDays, userId]);
 
   // Coming back from a finished session must move the rotation on.
   useFocusEffect(
@@ -197,6 +211,7 @@ export default function Home() {
           streak={streak}
           total={completedCount}
           trainedDays={trainedDays}
+          completion={streakCompletion?.ownerId === userId ? streakCompletion : null}
         />
       </View>
 

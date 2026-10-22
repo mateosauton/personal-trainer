@@ -2,7 +2,7 @@ import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
-import Animated, { FadeIn, ReduceMotion } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeInDown, ReduceMotion } from 'react-native-reanimated';
 
 import { DoodlePop } from '@/components/Doodle';
 import {
@@ -34,6 +34,7 @@ import {
   pendingSyncCount,
 } from '@/lib/session/sync';
 import { workouts } from '@/lib/session/workout';
+import { claimCompletionMotion, isFreshWorkoutCompletion } from '@/lib/session/completion-motion';
 import { nextLoad } from '@/lib/progression';
 import { sessionTotals } from '@/lib/stats';
 import { colors, space, type } from '@/lib/theme';
@@ -42,10 +43,11 @@ import { effectiveLoadKg, estimateOneRepMax, formatWeight } from '@/lib/units';
 import type { Units } from '@/lib/types';
 
 export default function SessionSummary() {
-  const { dayId, sessionId, elapsed } = useLocalSearchParams<{
+  const { dayId, sessionId, elapsed, celebrate } = useLocalSearchParams<{
     dayId: string;
     sessionId: string;
     elapsed: string;
+    celebrate?: string;
   }>();
   const userId = useUserId();
   const { profile } = useAuth();
@@ -56,6 +58,8 @@ export default function SessionSummary() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
+  const [animateIntro, setAnimateIntro] = useState(false);
+  const [animatePr, setAnimatePr] = useState(false);
 
   const durationS = Number.parseInt(elapsed ?? '0', 10) || 0;
   const profileUnits = profile?.units ?? 'kg';
@@ -65,6 +69,17 @@ export default function SessionSummary() {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setAnimateIntro(false);
+    setAnimatePr(false);
+    const freshFinish = celebrate === '1' && isFreshWorkoutCompletion(userId, sessionId);
+    let revealed = false;
+    const revealSummary = () => {
+      if (!revealed) {
+        revealed = true;
+        setAnimateIntro(freshFinish && claimCompletionMotion(userId, sessionId, 'intro'));
+      }
+      setLoading(false);
+    };
 
     (async () => {
       // A failed send leaves operations queued even though flush resolves.
@@ -88,7 +103,7 @@ export default function SessionSummary() {
         await workouts.clear(userId, sessionId);
         if (cancelled) return;
         setLines(previous);
-        setLoading(false);
+        revealSummary();
         return;
       }
       const local = await workouts.read(userId);
@@ -221,8 +236,11 @@ export default function SessionSummary() {
           await workouts.clear(userId, sessionId);
           if (cancelled) return;
           setLines(saved);
-          setLoading(false);
-          if (saved.some((l) => l.isPr)) {
+          revealSummary();
+          const freshPr = freshFinish && saved.some((line) => line.isPr)
+            && claimCompletionMotion(userId, sessionId, 'pr');
+          setAnimatePr(freshPr);
+          if (freshPr) {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           }
           return;
@@ -242,7 +260,7 @@ export default function SessionSummary() {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, userId, dayId, profile?.bodyweight_kg, profileUnits, retry]);
+  }, [sessionId, userId, dayId, profile?.bodyweight_kg, profileUnits, retry, celebrate]);
 
   const save = async () => {
     setSaving(true);
@@ -288,13 +306,19 @@ export default function SessionSummary() {
 
   return (
     <Screen>
-      <Overline>Session complete</Overline>
-      <Display style={{ marginTop: space.sm }}>Nice work.</Display>
+      <Animated.View
+        entering={animateIntro ? FadeInDown.duration(motion.base)
+          .withInitialValues({ transform: [{ translateY: motion.focused.distance }] })
+          .reduceMotion(ReduceMotion.System) : undefined}
+      >
+        <Overline>Session complete</Overline>
+        <Display style={{ marginTop: space.sm }}>Nice work.</Display>
+      </Animated.View>
 
       <Animated.View
-        entering={FadeIn.duration(motion.base).reduceMotion(
+        entering={animateIntro ? FadeIn.duration(motion.base).reduceMotion(
           ReduceMotion.System,
-        )}
+        ) : undefined}
       >
         <Card style={{ marginTop: space.xl }}>
           <View style={styles.stats}>
@@ -312,9 +336,9 @@ export default function SessionSummary() {
         {lines.map((line, index) => (
           <Animated.View
             key={line.exerciseId}
-            entering={FadeIn.delay(index * 55)
+            entering={animateIntro ? FadeIn.delay(Math.min(index, 4) * motion.focused.stagger)
               .duration(motion.base)
-              .reduceMotion(ReduceMotion.System)}
+              .reduceMotion(ReduceMotion.System) : undefined}
             style={styles.line}
           >
             <View style={{ flex: 1, gap: 2 }}>
@@ -328,7 +352,7 @@ export default function SessionSummary() {
               </Muted>
             </View>
             {line.isPr ? (
-              <DoodlePop>
+              <DoodlePop active={animatePr} scale={motion.focused.popScale}>
                 {/* The badge carries the number that earned it: a bare "PR" makes
                     you go looking for the weight it is talking about. */}
                 <Chip label={prLabel(line.topLoadKg, units)} selected />
