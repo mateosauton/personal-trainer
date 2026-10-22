@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
 import 'react-native-url-polyfill/auto';
+import { ensureAuthCrypto } from './auth-crypto';
 
 import { installAuthCrypto } from '../auth-crypto';
 
@@ -14,6 +15,8 @@ if (!url || !key) {
     'Missing EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_KEY. Run npm run env:pull or configure these variables in the selected EAS environment.',
   );
 }
+
+ensureAuthCrypto();
 
 export const supabase = createClient(url, key, {
   auth: {
