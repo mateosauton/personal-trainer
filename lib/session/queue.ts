@@ -1,4 +1,5 @@
 import type { PlanBlock, PlanDay, PlanItem } from '@/lib/types';
+import { estimateSetWorkSeconds, getBlockDurationSeconds, proportionalSeconds } from '@/lib/plan/timing';
 
 /**
  * One thing the user does: a single set of a single exercise. Flattening the
@@ -17,6 +18,10 @@ export interface QueueEntry {
   setsTotal: number;
   blockOrdinal: number;
   blockCount: number;
+  /** Timed blocks divide their complete budget across the prescribed sets. */
+  slotSeconds?: number;
+  workSeconds?: number;
+  restSeconds?: number;
 }
 
 export function buildQueue(day: PlanDay): QueueEntry[] {
@@ -58,6 +63,25 @@ export function buildQueue(day: PlanDay): QueueEntry[] {
       }
     }
   }
+
+  for (const block of day.blocks) {
+    const duration = getBlockDurationSeconds(block);
+    if (duration == null) continue;
+    const blockEntries = entries.filter((entry) => entry.block.id === block.id);
+    const work = blockEntries.map((entry) => estimateSetWorkSeconds(entry.item));
+    const weights = blockEntries.map((entry, index) => {
+      const betweenRounds = index % block.items.length === block.items.length - 1;
+      const recovery = block.kind === 'warmup' ? 0
+        : block.kind === 'straight' || betweenRounds ? block.rest_seconds : 10;
+      return work[index] + recovery;
+    });
+    const slots = proportionalSeconds(duration, weights);
+    blockEntries.forEach((entry, index) => {
+      entry.slotSeconds = slots[index];
+      entry.workSeconds = Math.min(work[index], slots[index]);
+      entry.restSeconds = slots[index] - entry.workSeconds;
+    });
+  }
   return entries;
 }
 
@@ -70,7 +94,7 @@ export function partnerOf(entry: QueueEntry): PlanItem | null {
 
 /** Supersets and circuits rest after the whole round, including block transitions. */
 export function restAfter(entry: QueueEntry): number {
-  return partnerOf(entry) ? 0 : entry.block.rest_seconds;
+  return entry.restSeconds ?? (partnerOf(entry) ? 0 : entry.block.rest_seconds);
 }
 
 export type { PlanBlock, PlanItem };

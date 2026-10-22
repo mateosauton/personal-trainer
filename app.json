@@ -12,7 +12,8 @@
       "bundleIdentifier": "co.officegym.trainer",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "usesAppleSignIn": true
     },
     "android": {
       "adaptiveIcon": {
@@ -38,7 +39,9 @@
           "resizeMode": "contain",
           "backgroundColor": "#0A0A0B"
         }
-      ]
+      ],
+      "expo-apple-authentication",
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true

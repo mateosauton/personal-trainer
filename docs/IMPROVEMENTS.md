@@ -7,6 +7,9 @@ This one describes what to do about it: make it **work**, then **safe**, then **
 Every proposal states the problem with evidence from the code, the fix, what it depends on, the effort, the risk,
 and how you know it worked. Every number in it was measured against this commit, not estimated.
 
+**Snapshot baseline:** `9245b5a`. The post-merge R14 inventory was refreshed to twelve `colors.faint` call sites;
+the remaining proposals retain their historical baseline unless they include a later status note.
+
 **Effort:** S = under a day · M = 1–3 days · L = a week or more.
 
 ---
@@ -23,6 +26,7 @@ and how you know it worked. Every number in it was measured against this commit,
 | [Faster](#faster) | [R13](#r13--stop-parsing-1-mb-of-json-at-startup) · [R23](#r23--add-a-query-cache) · [R24](#r24--pin-and-version-the-catalog) |
 | [Easier to use](#easier-to-use) | [R11](#r11--decide-what-rpe-is-for) · [R29](#r29--let-people-swap-an-exercise) · [R32](#r32--accessibility-beyond-contrast) · [R28](#r28--session-resume-and-zombie-sessions) |
 | [More scalable](#more-scalable) | [R18](#r18--reach-the-rest-of-the-catalog) · [R26](#r26--finish-the-release-pipeline) · [R27](#r27--data-export-and-account-deletion) · [R30](#r30--make-plans-editable) · [R31](#r31--semantic-colour-tokens) · [R33](#r33--i18n-or-an-explicit-decision-not-to) · [R34](#r34--abuse-surface-and-rate-limiting) |
+| [Shipped-work audit trail](#shipped-work-audit-trail) | the ✅ → audit → follow-up mapping |
 | [The shipped work is not finished](#the-shipped-work-is-not-finished) | [R35](#r35--make-the-outbox-survivable) · [R36](#r36--namespace-and-clear-the-outbox-on-sign-out) · [R37](#r37--make-queued-writes-genuinely-idempotent) · [R38](#r38--stamp-queued-writes-at-event-time) · [R39](#r39--stop-enqueue-blocking-behind-the-flush) · [R40](#r40--fix-the-signed-out-gate-mapping) · [R41](#r41--strip-the-dev-login-credential-at-build-time) · [R42](#r42--fix-0003s-local_day-backfill-or-its-comment) · [R43](#r43--make-the-training-profile-editable) · [R44](#r44--make-progression-accumulators-server-derived) |
 | [Quality](#quality) | [R19](#r19--make-the-dev-harness-runnable) · [R21](#r21--enforce-the-architecture) |
 | [How to know it worked](#how-to-know-it-worked) · [What not to do](#what-not-to-do) | |
@@ -41,20 +45,21 @@ rotation cursor is derived per plan. Each is marked ✅ in place, with its analy
 |---|------|--------|----------|
 | 1 | [R16](#r16--run-types-and-tests-in-ci) — types and tests in CI | S | A broken build has reached `master` before. Nothing else should land first. Budget a generous `--testTimeout`: the suite is minutes from a cold cache and has been seen failing one test there. |
 | **2** | **[R35](#r35--make-the-outbox-survivable) + [R36](#r36--namespace-and-clear-the-outbox-on-sign-out) + [R37](#r37--make-queued-writes-genuinely-idempotent) + [R38](#r38--stamp-queued-writes-at-event-time) — make the outbox survivable** | M | **The shipped work is not finished.** Every set, completion and progress write goes through a queue that one 4xx wedges permanently, that is never cleared on sign-out, whose progress ids collide across sessions, and that stamps writes at flush time. This outranks everything below it. |
-| **3** | **[R40](#r40--fix-the-signed-out-gate-mapping) — the signed-out gate + two uncaught rejections** | S | A one-line sign error mounts protected screens for signed-out users; two missing `.catch`es can park the app on the splash forever. |
-| 4 | [R41](#r41--strip-the-dev-login-credential-at-build-time) — dev-login credential | S | `EXPO_PUBLIC_*` is inlined at build time; a web export from a populated `.env` ships a real password. Not currently leaking — a landmine. |
-| 5 | [R14](#r14--fix-the-faint-token-contrast-failure) — the `faint` contrast failure | S | One token, nine call sites, measurable. Ideal first PR. |
-| 6 | [R20](#r20--housekeeping) — unused deps, `.nvmrc`, stale comments | S | Cheap. |
-| 7 | [R24](#r24--pin-and-version-the-catalog) step 1 — pin the upstream ref | S | One line; makes builds reproducible and removes a class of upstream breakage. |
-| 8 | [R15](#r15--observability-for-a-blind-app) — error boundary + crash reporting | M | **Now more urgent than before:** the app has a durable write queue whose failures are currently invisible. |
-| 9 | [R25](#r25--migration-tooling-backups-and-an-rls-test-harness) — CLI, backups, RLS tests | M | Four migrations are live-by-hand with no record and no snapshot, and `0003` contains an irreversible backfill. |
-| 10 | [R6](#r6--no-password-reset) — password reset | S–M | A forgotten password is still total, unrecoverable account loss. |
-| 11 | [R7](#r7--close-the-avatar-bucket) — close the avatar bucket | S | The one real security finding. |
-| 12 | [R11](#r11--decide-what-rpe-is-for) — wire RPE up or delete it | S–M | An inert branch that makes progression more aggressive than it claims. |
-| 13 | [R12](#r12--a-rest-timer-that-survives-a-locked-phone) — wall-clock rest timer | S | R12a ships today; R12b needs a dev build ([R26](#r26--finish-the-release-pipeline)). |
-| 14 | [R13](#r13--stop-parsing-1-mb-of-json-at-startup) + [R23](#r23--add-a-query-cache) — speed | M | ~60% of the bundled catalog is unread fields; both tabs refetch everything on focus. |
-| 15 | [R19](#r19--make-the-dev-harness-runnable) — make `drive.mjs` run, then one smoke flow | S + M | The end-to-end gap unit tests structurally cannot close. |
-| 16+ | [R18](#r18--reach-the-rest-of-the-catalog) · [R21](#r21--enforce-the-architecture) · [R22](#r22--extract-the-inline-arithmetic) · [R26](#r26--finish-the-release-pipeline)–[R34](#r34--abuse-surface-and-rate-limiting) | | Product and polish, once the foundation holds. |
+| **3** | **[R40](#r40--fix-the-signed-out-gate-mapping) — the signed-out gate + three uncaught rejections** | S | A one-line sign error mounts protected screens for signed-out users; two missing `.catch`es can park the app on the splash forever. |
+| **4** | **[R45](#r45--finish-the-timezone-fix--the-read-side-still-uses-device-local-time) + [R46](#r46--document-and-fix-the-read-path-of-one-session) — finish the timezone fix; fix the summary read path** | M / L | The traveller bug C7 was meant to close is **still open** — only the write side shipped. And the summary computes progression from a possibly-incomplete network read. |
+| 5 | [R41](#r41--strip-the-dev-login-credential-at-build-time) — dev-login credential | S | `EXPO_PUBLIC_*` is inlined at build time; a web export from a populated `.env` ships a real password. Not currently leaking — a landmine. |
+| 6 | [R14](#r14--fix-the-faint-token-contrast-failure) — the `faint` contrast failure | S | One token, twelve call sites, measurable. Ideal first PR. |
+| 7 | [R20](#r20--housekeeping) — unused deps, `.nvmrc`, stale comments | S | Cheap. |
+| 8 | [R24](#r24--pin-and-version-the-catalog) step 1 — pin the upstream ref | S | One line; makes builds reproducible and removes a class of upstream breakage. |
+| 9 | [R15](#r15--observability-for-a-blind-app) — error boundary + crash reporting | M | **Now more urgent than before:** the app has a durable write queue whose failures are currently invisible. |
+| 10 | [R25](#r25--migration-tooling-backups-and-an-rls-test-harness) — CLI, backups, RLS tests | **L** | Four migrations are live-by-hand with no record and no snapshot. ⚠️ **Everything below that touches SQL depends on this** — R7, R42, R44, R47, R27, R30 — so if you plan to do any of them sooner, this moves up with them. |
+| 11 | [R6](#r6--no-password-reset) — password reset | S–M | A forgotten password is still total, unrecoverable account loss. |
+| 12 | [R7](#r7--close-the-avatar-bucket) — close the avatar bucket | S | A world-readable bucket of face photos. Paired with [R41](#r41--strip-the-dev-login-credential-at-build-time) as the two security items. |
+| 13 | [R11](#r11--decide-what-rpe-is-for) — wire RPE up or delete it | S–M | An inert branch that makes progression more aggressive than it claims. |
+| 14 | [R12](#r12--a-rest-timer-that-survives-a-locked-phone) — wall-clock rest timer | S | R12a ships today; R12b needs a dev build ([R26](#r26--finish-the-release-pipeline)). |
+| 15 | [R13](#r13--stop-parsing-1-mb-of-json-at-startup) + [R23](#r23--add-a-query-cache) — speed | M | Split optional instructions from startup data; both tabs refetch everything on focus. |
+| 16 | [R19](#r19--make-the-dev-harness-runnable) — make `drive.mjs` run, then one smoke flow | S + M | The end-to-end gap unit tests structurally cannot close. |
+| 17+ | [R18](#r18--reach-the-rest-of-the-catalog) · [R21](#r21--enforce-the-architecture) · [R22](#r22--extract-the-inline-arithmetic) · [R26](#r26--finish-the-release-pipeline)–[R34](#r34--abuse-surface-and-rate-limiting) | | Product and polish, once the foundation holds. |
 
 > [R22](#r22--extract-the-inline-arithmetic) has largely been overtaken by events — `lib/stats.ts` and
 > `lib/plan/estimate.ts` now exist and own the arithmetic. What remains is to keep it that way; see
@@ -72,7 +77,12 @@ The band headings below describe the original triage and are kept for context.
 
 ### R1 · Fix the build
 
-> ✅ **Shipped.** `tsc` is clean and 114 tests pass at `9245b5a`. The analysis below is kept as the record of why it was done.
+> ✅ **Shipped**, with two divergences worth knowing. `tsc` is clean and 114 tests pass at `9245b5a`. But the fix
+> below says `updateProfile({ equipment })` "is deleted" — the shipped `app/profile.tsx` still calls
+> `updateProfile(userId, { equipment: ALL_EQUIPMENT })`, so the write survived in a different form. And
+> `summary.tsx`'s restored `pendingProgress` ref is now **write-only**: it is assigned in the load effect and never
+> read, because the progression write moved to `queueProgress` on mount. Both are harmless; both are the kind of
+> orphan this item was originally about.
 
 **Depends on:** nothing. **This is item one.**
 
@@ -148,13 +158,20 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm test -- --ci
+      - run: npm run docs:verify   # the handoff's numeric claims, mechanised
 ```
 
-Then make it mean something: mark it required on `master`, and rename the `lint` script to `typecheck` so nobody
-believes a linter ran. Adding ESLint (`eslint-config-expo` + `eslint-plugin-react-hooks`) is the natural follow-up
+Then make it mean something. **Branch protection alone is not enough here:** the recent working pattern pushes
+straight to `master`, and `.github/workflows/eas-update.yml` publishes an OTA update on every such push — so
+untested code reaches **installed clients**, not just a web build. Gate that workflow on the check job (`needs:`,
+or a `workflow_run` conditioned on conclusion), and write down an `expo-updates` rollback procedure, because an
+update that crashes on startup can leave a client unable to fetch the fix. Also rename the `lint` script to
+`typecheck` so nobody believes a linter ran. Adding ESLint (`eslint-config-expo` + `eslint-plugin-react-hooks`) is the natural follow-up
 and would have flagged the orphaned `equipment` reference at edit time.
 
-**Effort** S · **Risk** none. **Done when:** a PR with a type error cannot be merged.
+**Effort** S · **Risk** none.
+**Done when:** a type error cannot reach the production update branch **by any path** — neither merged nor pushed
+directly to `master` and shipped OTA.
 
 ---
 
@@ -243,18 +260,24 @@ and obeys, and a forced `logSet` failure shows a message.
 `elevated`. WCAG 2.1 AA needs 4.5:1 for body text and 3.0:1 even for large text — it fails all three placements at
 every size.
 
-`faint` has **nine** call sites today, and they are not all placeholders: `sign-in.tsx` ×2, `onboarding.tsx:212`,
-`app/profile.tsx:172` and `NumberField.tsx:54` (placeholders); `onboarding.tsx:400` (the not-yet-reached build-stage
-label) and `Calendar.tsx:112` (weekday headers) — **both real body text**; `(tabs)/_layout.tsx:59` (inactive tab
-label); and `(tabs)/_layout.tsx:15`, which is an **icon tint** — a non-text case WCAG 1.4.11 holds to 3:1, and which
-`#5A5A61` also fails. Extend the guard test to assert that case at 3:1 separately.
+`faint` has **twelve** call sites after the merge, and they are not all placeholders: `sign-in.tsx` ×2,
+`reset-password.tsx` ×2, `onboarding.tsx`, `app/profile.tsx`, `NumberField.tsx` and `ExerciseWeight.tsx`
+(placeholders); `onboarding.tsx` (the not-yet-reached build-stage label) and `Calendar.tsx` (weekday headers)
+— **both real body text**; `(tabs)/_layout.tsx` (inactive tab label and an **icon tint**). The icon tint needs
+3:1 under WCAG 1.4.11, which `#5A5A61` also fails. Extend the guard test to assert that case separately.
 
 **Fix — re-tier `muted` and `faint` together, not `faint` alone.** `#85858B` clears AA on every ground
 (**5.40 / 5.02 / 4.63**), but `muted` is `#8E8E93` at 6.07 / 5.64 / 5.21, and the two measure **1.12:1 against each
 other**. Moving `faint` there collapses the three-tier hierarchy (`text` / `muted` / `faint`) into two, and this
 item's own "Done when" — *still reads as secondary* — becomes unverifiable because it will read as *identical to
 `muted`*. Lift the pair: `muted` toward **`#A0A0A6`** (7.61 / 7.07 / 6.54) and `faint` to **`#85858B`**, which
-restores a visible 1.41:1 separation between them while both clear AA.
+leaves **1.41:1** between them while both clear AA.
+
+> ⚠️ **Be honest about what that costs.** `muted` and `faint` sit at **2.10:1** against each other today. The pair
+> above is 1.41:1 — a *reduction*. It is better than the 1.12:1 you get by moving `faint` alone, but the three-tier
+> hierarchy still narrows. If the tiers matter more than the AA line for `faint`'s non-text uses, the alternative
+> is to keep `faint` where it is for the **icon tint only** (which WCAG 1.4.11 holds to 3:1, and which `#5A5A61`
+> still fails at 2.89) and introduce a separate text token. Decide deliberately rather than inheriting this.
 
 > Do **not** use `#7A7A82`. It clears 4.5:1 on `bg` only (4.65) and fails on `surface` (4.32) and `elevated`
 > (3.99) — and `elevated` is where the Profile and `NumberField` placeholders sit. **`elevated` is the binding
@@ -360,10 +383,15 @@ npx supabase init                     # commit supabase/config.toml
 npx supabase link --project-ref <ref>
 
 # ⚠️ DO THIS BEFORE THE FIRST PUSH. All four migrations were applied by hand, so
-# supabase_migrations.schema_migrations is EMPTY. `db push` would try to re-run
-# them — and 0001 is not idempotent (bare `create type` / `create table` /
-# `create policy`), so it aborts on the first statement; worse, 0003's backfill
-# would re-run against live data.
+# supabase_migrations.schema_migrations is almost certainly EMPTY (all four were
+# pasted by hand). CONFIRM FIRST — it is an inference from the workflow, not
+# something the repo proves:
+#   select * from supabase_migrations.schema_migrations;
+# If it is empty, `db push` would try to re-run them — and 0001 is NOT idempotent
+# (bare `create type` / `create table` / `create policy`), so it aborts on the
+# first statement. (0003's backfills are guarded by `where local_day is null`
+# and `and s.completed_at is null`, so they are safe to re-run — and unreachable
+# anyway behind 0001's abort. The hazard is the abort, not the backfill.)
 npx supabase migration repair --status applied 0001 0002 0003 0004
 
 npx supabase db push                  # now applies only what is genuinely new
@@ -731,6 +759,7 @@ fixed users. Budget half a day for a SQL fixture.)*
 **Problem.** `components/RestPage.tsx`:
 
 ```ts
+// paraphrased; the real block in RestPage.tsx spans a few lines
 const id = setInterval(() => setRemaining((v) => (v <= 0 ? 0 : v - 1)), 1000);
 ```
 
@@ -814,8 +843,10 @@ if (!ok) return;                    // ← the user cannot advance
 `logSet` failing shows an alert — which on web shows **nothing** ([R3](#r3--every-dialog-is-a-no-op-on-the-web-build)) — and **blocks the set**. Gyms, especially basement office gyms, have poor signal. This is a total failure
 of the primary use case in exactly the environment the app is named after.
 
-**Fix.** Local-first writes, reconciled in the background. The schema already supports it: `logSet` upserts on
-`(session_id, plan_item_id, set_index)`, so replay is idempotent.
+**Fix.** Local-first writes, reconciled in the background. The schema mostly supports it: `logSet` upserts on
+`(session_id, plan_item_id, set_index)`, so replay is idempotent — **as long as `plan_item_id` is non-null.** Once
+it is NULL, Postgres's NULLs-are-distinct rule turns the upsert into an insert and replay duplicates rows. See the
+note in [R35](#r35--make-the-outbox-survivable).
 
 ```mermaid
 flowchart LR
@@ -863,36 +894,39 @@ const BY_ID = new Map(CATALOG.map((e) => [e.id, e]));
 renders; on native it is evaluated on first import. `catalog.ts` is imported by `plan/generate`, Today, Plan, the
 session overview, the player and the summary — i.e. immediately.
 
-Now measure what is in it. Verified by grep, **three fields are never read by any screen or domain function** —
-they appear only in `lib/types.ts` and `scripts/build-catalog.mjs`:
+`secondary_muscles` and `force_type` have no runtime consumers. In addition to the type and build script,
+`lib/data/gym-routine-exercises.ts` writes these fields for authored movements. It also writes `instructions`,
+which the player now reads as a fallback when demonstration images are absent. Instructions must remain
+available when reducing the startup payload.
 
-| Removal | Resulting file size | Saved |
+| Startup-data change | Resulting file size | Saved |
 |---------|--------------------:|------:|
 | (baseline) | **1,057 KB** | — |
-| drop `instructions`, `secondary_muscles`, `force_type` | **421 KB** | −636 KB (**60%**) |
+| drop `secondary_muscles`, `force_type` | **1,003 KB** | −54 KB (**5%**) |
+| …and move source `instructions` into lazily loaded data | **421 KB** | −636 KB total (**60%**) |
 | …and derive `media_refs` from `id` | **229 KB** | −828 KB total (**78%**) |
 
 `media_refs` is safe to derive: across all 873 rows, `start` is **exactly** `<prefix>/<id>/0.jpg` and `end`
 `<prefix>/<id>/1.jpg`, with zero exceptions. Move the prefix into `lib/media/provider.ts` and build the URL there.
 
 **Fix.**
-1. Stop copying the three unread fields in `build-catalog.mjs`, and remove them from the `Exercise` interface so the compiler proves nothing broke. **−636 KB, free.**
+1. Stop copying `secondary_muscles` and `force_type` in `build-catalog.mjs`, and remove their declarations and authored-preset writes. This saves about **54 KB**. Split source instructions into lazily fetched data while retaining the player's fallback and authored movement instructions to save another **581 KB** from startup data.
 2. Derive `media_refs`. **A further −192 KB** — but only after [R24](#r24--pin-and-version-the-catalog), because deriving hard-codes the two-image assumption and moves the CDN ref from generated data into runtime code. The build script's `images[1] ?? images[0]` fallback exists because upstream *can* ship one image.
 
 > **Do not add a pattern index.** It is tempting ("`candidates()` scans all 873 rows on every `pick`"), but
 > measured: **20 full plan generations in 25 ms — 1.25 ms per plan**, once per onboarding or rebuild. That is a
 > rounding error, and this document should not manufacture scalability work.
 
-Two caveats on the framing. **The compiler does not enforce step 1** — `scripts/build-catalog.mjs` is untyped
-`.mjs`, so the proof that the three fields are unread is the grep, not `tsc`. And **the byte figures are raw, not
+Two caveats on the framing. **The compiler does not check the build script** because `scripts/build-catalog.mjs` is untyped
+`.mjs`; inspect field consumers and verify the generated payload as well as running `tsc`. And **the byte figures are raw, not
 gzipped**: highly repetitive JSON compresses well, so a user's connection sees far less than −60%. The change is
 still worth making, but the real win is parse time on device, not transfer.
 
 **Effort** S for step 1, S for step 2 · **Risk** low.
 **Done when:** `wc -c lib/data/exercises.json` is under 300 KB and the suite is green.
 
-**If you later want the instructions back** — see [R29](#r29--let-people-swap-an-exercise) — do not re-bundle them.
-Put them in a lazily fetched JSON keyed by id, and cache it.
+Keep source instructions in a lazily fetched JSON keyed by id and cache it. Preserve the existing player fallback
+and make that data available to [R29](#r29--let-people-swap-an-exercise) when exercise swapping ships.
 
 ---
 
@@ -1007,11 +1041,14 @@ fetching `instructions` lazily (see [R13](#r13--stop-parsing-1-mb-of-json-at-sta
 
 **Problem.** The roles-and-labels hygiene is good, but three gaps are unaddressed:
 
-- **`ProgressBar` is invisible to assistive tech** — no `accessibilityRole="progressbar"`, no `accessibilityValue`. It is the session's only progress signal.
+> **Correction to an earlier draft of this item.** It claimed `ProgressBar` exposed no accessibility semantics and
+> that no animation checked reduced motion. **Both are false** — `components/ui.tsx` sets
+> `accessibilityRole="progressbar"` with an `accessibilityValue`, and `ReduceMotion.System` / `useReducedMotion()`
+> appear ~20 times across `onboarding.tsx`, `run.tsx`, `summary.tsx`, `ui.tsx` and `Doodle.tsx`, with
+> `__tests__/motion.test.ts` covering the helpers. Those gaps are closed; the ones below are real.
 - **The rest clock is a raw `<Text>` updating every second with no live region.** A blind user is never told rest ended — and [R12](#r12--a-rest-timer-that-survives-a-locked-phone)'s whole premise is that rest ending must be perceivable.
 - **No Dynamic Type support.** Every size in `theme.ts` is a fixed number, nothing touches `allowFontScaling`, and `Button` has a hard `minHeight: 56` with 56×56 steppers. At the larger iOS text sizes, labels and the two oversized numerals clip rather than reflow.
-- **The session Close control has a label but no `accessibilityRole`** (`run.tsx:203`).
-- **No animation anywhere checks reduced motion** — currently minor (only fades and the media crossfade), but it should be the habit before more motion is added.
+- **The session Close control has a label but no `accessibilityRole`** (the `onPress={quit}` Pressable in `run.tsx`).
 
 **Fix.** Add the role and value to `ProgressBar`; give the clock `accessibilityLiveRegion="polite"` and announce
 "Rest complete"; test at the largest Dynamic Type setting and let the type scale respond; add the missing role.
@@ -1227,6 +1264,28 @@ with no mocks in a plain environment. It is protected by nothing but discipline:
 
 ---
 
+## Shipped-work audit trail
+
+Nine proposals were marked ✅ before anyone re-read the code they produced. This table is the mapping that was
+missing — **shipped item → what the audit found → where the follow-up lives**. Keep it current: a ✅ should mean
+"the *Done when* was run and passed", not "the module exists". That distinction is what every row below fell
+through.
+
+| Shipped | Status after audit | Follow-up |
+|---------|--------------------|-----------|
+| [R1](#r1--fix-the-build) fix the build | ✅ met — but two orphans survived (`updateProfile({ equipment })`, a write-only `pendingProgress`, and an unreachable `notify` in `save()`) | noted in R1 |
+| [R2](#r2--delete-the-dead-onboarding-route) dead route | ✅ met | — |
+| [R3](#r3--every-dialog-is-a-no-op-on-the-web-build) web dialogs | ✅ met | convention only; a lint rule would make it real ([R21](#r21--enforce-the-architecture)) |
+| [R4](#r4--make-saveplan-transactional) transactional plan write | ✅ met, and better than proposed | three edges: input bound, missing `revoke`, raw `23505` |
+| [R5](#r5--stop-a-failed-profile-read-looking-like-a-new-user) profile gate | ⚠️ partial | [R40](#r40--fix-the-signed-out-gate-mapping) |
+| [R8](#r8--offline-tolerant-set-logging) offline logging | ⚠️ partial — criterion **not** met | [R35](#r35--make-the-outbox-survivable) · [R36](#r36--namespace-and-clear-the-outbox-on-sign-out) · [R37](#r37--make-queued-writes-genuinely-idempotent) · [R38](#r38--stamp-queued-writes-at-event-time) · [R39](#r39--stop-enqueue-blocking-behind-the-flush) · [R48](#r48--make-the-outbox-safe-across-browser-tabs) |
+| [R9](#r9--fix-the-rotation-cursor) rotation cursor | ✅ met — but distorted by flush-time stamping | [R38](#r38--stamp-queued-writes-at-event-time) |
+| [R10](#r10--complete-the-session-when-it-ends) session completion | ⚠️ partial | [R38](#r38--stamp-queued-writes-at-event-time) |
+| [R17](#r17--guard-against-a-duplicate-active-plan) one active plan | ✅ met | — |
+| *(C7, never a numbered item)* timezone-stable days | ⚠️ **write side only** | [R42](#r42--fix-0003s-local_day-backfill-or-its-comment) · [R45](#r45--finish-the-timezone-fix--the-read-side-still-uses-device-local-time) |
+
+---
+
 ## The shipped work is not finished
 
 These are defects **inside the code that shipped**, found by auditing the implementations rather than the
@@ -1255,18 +1314,28 @@ async flush() {
 ```
 
 `catch { return; }` cannot tell a transient network failure from a terminal one. Any non-retryable error on the
-head — an RLS denial, a `23505`, a check-constraint violation, a `set_logs` row whose `plan_item_id` was nulled by
-`on delete set null`, a 400 after a schema change — parks that operation at position 0 **permanently, across app
+head — an RLS denial, a `23505`, a check-constraint violation, a 400 after a schema change — parks that operation at position 0 **permanently, across app
 restarts**, blocking every set behind it. There is no attempt counter, no dead-letter, no max age, no cap on queue
 length, and the `catch` discards the error object, so nothing is loggable even once
 [R15](#r15--observability-for-a-blind-app) lands. The queue then grows until `AsyncStorage.setItem` throws on
 quota, at which point `enqueue` rejects and the player shows "Could not save that set" — the exact failure
 [R8](#r8--offline-tolerant-set-logging) existed to remove.
 
+> **A related trap this item originally misdiagnosed.** `set_logs.plan_item_id` is **nullable**
+> (`references plan_items on delete set null`) and is part of `unique (session_id, plan_item_id, set_index)`.
+> Postgres treats NULLs as **distinct** in a unique index by default, so once that column is NULL, `logSet`'s
+> `onConflict: 'session_id,plan_item_id,set_index'` **never matches and every retry INSERTs a duplicate row** —
+> silently inflating set counts, tonnage and PR detection. That is worse than a terminal error, because nothing
+> fails. It is latent today (nothing deletes `plan_items`), but [R27](#r27--data-export-and-account-deletion) and
+> [R30](#r30--make-plans-editable) both introduce deletes and would arm it. Fix with `NULLS NOT DISTINCT` (PG 15+)
+> or a generated non-null surrogate before either lands.
+
 **Fix.** Per-operation `attempts`, `firstFailedAt` and `lastError`. Classify PostgREST errors: 4xx except 408/429
 is terminal, everything else retryable. Terminal operations move to a bounded `dead` list and **the drain continues
 past them** instead of returning. Exponential backoff with jitter for retryables. Hard caps on queue length and
-operation age, dropping the oldest loudly. Surface `pending` and `dead` counts plus the last error on Profile, with
+operation age, dropping the oldest loudly. Note `flush()` swallows *send* errors but not *storage* errors, and
+`sync.ts` calls it as `void outbox.flush()` in four places — so an `AsyncStorage` failure is an unhandled rejection
+rather than a handled one. Surface `pending` and `dead` counts plus the last error on Profile, with
 "retry all" and "discard" controls, and report `dead` to the crash reporter.
 
 **Effort** M · **Risk** low (it only makes a stuck queue move).
@@ -1321,7 +1390,7 @@ against a stale server read — so a missed session is erased from the deload lo
 This makes the handoff's former claim that "every wrapped write is idempotent" false: this operation is not
 idempotent, it is **lossy-collapsing**.
 
-**Fix.** `id: \`progress:${sessionId}\``. Then re-audit the other two ids for the same property — `queueSet` keys on
+**Fix.** `id: \`progress:${sessionId}\`` — note this changes `queueProgress`'s signature, which is `(userId, rows)` today and carries no session id. Guard the degenerate case too: `queueProgress(userId, [])` is reachable whenever `updates` is empty (exactly [R46](#r46--document-and-fix-the-read-path-of-one-session)'s partial-read case) and currently produces a trailing-colon id that collides across sessions. Then re-audit the other two ids for the same property — `queueSet` keys on
 `(sessionId, planItemId, setIndex)` and `queueCompletion` on `sessionId`, both of which are correct.
 
 **Effort** S · **Risk** low. **Done when:** two sessions of the same plan day queued offline both apply on flush.
@@ -1344,7 +1413,10 @@ this correctly — captured client-side at session start — which shows the pri
 exactly one place.
 
 **Fix.** Add `occurredAt` to the operation payload at enqueue time; send it as `completed_at` for both `logSet` and
-`finishSession`. Clamp or reject a future `completed_at` so a badly-set device clock cannot write one.
+`finishSession`. While you are here: **`duration_s` measures the wrong interval.** `run.tsx` sets
+`startedAt = useRef(Date.now())` at *component mount*, not session start, so it resets on any remount — and the
+server already holds the truth in `sessions.started_at`. Derive the duration from that instead, which also makes it
+agree with `0003`'s backfill. Clamp or reject a future `completed_at` so a badly-set device clock cannot write one.
 
 **Effort** S–M · **Risk** low.
 **Done when:** a session logged with the radio off and flushed 48 hours later appears in History on the day it was
@@ -1364,10 +1436,25 @@ flaky-signal case the outbox was built for. [R8](#r8--offline-tolerant-set-loggi
 exercises the trace, asserting it as "does not drop an operation enqueued during a flush" — true, and the same
 trace is the stall.
 
-**Fix.** Hold the mutex only across `read` → `write`; let the send loop re-read between operations.
+> ⚠️ **The obvious fix is wrong — it loses data.** "Hold the mutex only across `read` → `write` and let the send
+> loop re-read" opens this race: `flush` takes head `set:S:I:N` and sends it; meanwhile `leaveRest()` enqueues a
+> **correction with the same id** (by design — `run.tsx`'s comment says "any later correction land on the same
+> row"), which `enqueue` *replaces in place*; the original send then resolves and `flush` drops the head. **The
+> user's weight correction is gone and the server holds the uncorrected seed.** That is exactly the
+> slow-but-alive network this item exists to fix, so the naive fix creates the bug in its own target scenario —
+> and a test that only asserts "`enqueue` resolves while a send is in flight" would pass.
 
-**Effort** S · **Risk** low — but add a test that `enqueue` resolves while a send is in flight, so the fix does not
-silently regress the drop-safety the current test protects.
+**Fix.** Release the mutex between operations, but make removal *conditional*: stamp each operation with a version
+(or an in-flight dirty flag) on enqueue, and after a successful send drop the head **only if its version is
+unchanged**. If it was replaced mid-flight, leave it queued and send again.
+
+**Effort** M, not S · **Risk** medium — this is concurrency, and the failure mode is silent.
+**Done when:** a correction enqueued *while its original is in flight* still reaches the server, and "Complete set"
+resolves immediately with a drain in progress.
+
+> Severity note: because the mutex is currently held for the whole drain and `supabase-js` sets no default timeout,
+> a single hung fetch blocks `enqueue` **indefinitely** — "Complete set" never resolves. This is an unbounded UI
+> hang, not just added latency.
 
 ---
 
@@ -1385,14 +1472,16 @@ comment states: *"a screen the user does not belong on must never mount in the f
 Two related defects in `lib/auth.tsx`, same fix session:
 
 - **`refreshProfile` has no cached fallback** and sets `{status:'error'}` on failure, unlike the mount path. An offline onboarded user who taps Retry is thrown to the error screen. It then rethrows into a `void` call — an unhandled rejection on every failed retry.
+- **`run.tsx`'s load effect has no `.catch` either** — `Promise.all([getActivePlan, getProgress]).then(...).finally(...)`. A failed plan load is an unhandled rejection that leaves the player on a spinner. Same defect class, most critical screen; fix it in the same pass.
 - **`getSession()` and `Linking.getInitialURL()` have no `.catch`.** `loading` starts `true` and is only cleared inside those `then` bodies, so a rejection (a corrupt persisted session, a Safari private-mode storage error on the web build) parks the app on the splash **forever** — a state `profileGate` never sees, because it never runs.
 
 **Fix.** Give `profileGate` a distinct `'signed-out'`, or gate on `signedIn && gate === 'ready'`. Add the cached
 fallback to `refreshProfile`. Add `.catch` to both promises, clearing `loading` and routing into the `error` state.
 
 **Effort** S · **Risk** low.
-**Done when:** a deep link to a session URL while signed out lands on sign-in, and a forced `getSession()` rejection
-shows the retry screen rather than an indefinite splash. Restate [R5](#r5--stop-a-failed-profile-read-looking-like-a-new-user)'s
+**Done when:** a deep link to a session URL while signed out lands on sign-in; a forced `getSession()` rejection
+shows the retry screen rather than an indefinite splash; and a forced `getActivePlan` rejection in the player shows
+an error rather than a permanent spinner. Restate [R5](#r5--stop-a-failed-profile-read-looking-like-a-new-user)'s
 criterion to exclude the splash: *"reaches Today or a retry screen within N seconds — never onboarding, never an
 indefinite splash."*
 
@@ -1406,8 +1495,8 @@ indefinite splash."*
 `EXPO_PUBLIC_*` is inlined at **build** time regardless — so any web export produced on a machine with a populated
 `.env` ships a real Supabase account password as a string literal in a public JS file.
 
-**Currently not leaking:** `publish-pages.yml` passes only `EXPO_NO_TELEMETRY`/`EXPO_OFFLINE`, so the published
-gh-pages and jsDelivr bundles are clean. This is a landmine, not an active breach — but it means
+**Currently not leaking:** `publish-pages.yml` passes no dev-login variable, so the published
+gh-pages and jsDelivr bundles are clean — though note that survey predates `eas-update.yml`, which also builds and publishes and should be checked the same way. This is a landmine, not an active breach — but it means
 [R7](#r7--close-the-avatar-bucket) is no longer "the one security finding", and
 [R26](#r26--finish-the-release-pipeline)'s "keep dev-login variables out of the production profile" understates the
 fix.
@@ -1480,8 +1569,116 @@ id collision; this fixes the class.
 as a max over `set_logs` and `miss_streak` from the actual set history. Replay order then stops mattering, which is
 exactly the property an outbox needs from everything it carries.
 
-**Effort** M · **Risk** medium (it moves logic into the database; test it with the RLS harness from
-[R25](#r25--migration-tooling-backups-and-an-rls-test-harness)).
+**Effort** L, not M — `best_e1rm` needs `effectiveLoadKg`, which needs `profiles.bodyweight_kg`, so the trigger has
+to join `profiles`; and recomputing `miss_streak` "from the actual set history" needs the rep targets, which live
+in `plan_items`. That is a cross-table derivation, not a one-table aggregate · **Risk** medium (it moves logic into
+the database; test it with the RLS harness from [R25](#r25--migration-tooling-backups-and-an-rls-test-harness)).
+
+---
+
+### R45 · Finish the timezone fix — the read side still uses device-local time
+
+**Depends on:** [R42](#r42--fix-0003s-local_day-backfill-or-its-comment) · **Corrects:** the claim that C7 closed the traveller bug.
+
+**Problem.** `0003` captured `sessions.local_day` (and `tz`) at session start, and `getTrainedDayKeys` reads
+`local_day`. That is the *write* side, and it is right. **The read side was never changed.** Every "today" the
+stored days are compared against is current-device-local:
+
+```
+lib/useDashboard.ts   const today = dayKey(new Date());     // ×2
+lib/stats.ts          streakDays(days, today = new Date())
+lib/stats.ts          recentDays(count, today = new Date())
+components/Streak.tsx recentDays(14)
+```
+
+Capturing the write in the origin timezone and evaluating the read in the destination timezone does not fix the
+traveller case — **it creates the mismatch**. Train Sunday 21:00 in Buenos Aires → `local_day = 2026-08-30`. Fly to
+Tokyo; the device clock is now `2026-09-01`. `streakDays` checks today (untrained), falls back to yesterday
+(`2026-08-31` — you were on the plane), and returns **0**. Westward, `daysSinceLast` can return −1 and the 14-day
+strip can render a dot in the future.
+
+**And `sessions.tz` is written and never read** — one hit in the whole repo, the write itself. So nothing can
+reconcile the offset even in principle.
+
+Compounding it, `lib/stats.ts` still exports `trainedDayKeys(sessions: { started_at }[])`, which re-derives keys
+from `started_at`. No app code calls it (`useDashboard` uses `queries.getTrainedDayKeys`), but it is exported and
+tested, so it reads as sanctioned API.
+
+**Fix.** Decide what a streak means across timezones and implement *both* sides of it:
+
+- If a streak is "consecutive local days as the user experienced them", then `today` must be derived the same way the write was — which means reading `tz` off the most recent session, or storing the user's home timezone on the profile — not `new Date()` on whatever device is in hand.
+- Push `today` in as an explicit parameter from one place rather than defaulting to `new Date()` in three.
+- Delete `trainedDayKeys`, or rename it to make its `started_at` input unmissable.
+- Add tests at the boundaries: 23:59 / 00:01, and a session written in UTC−3 read from UTC+9.
+
+**Effort** M · **Risk** low.
+**Done when:** changing the device timezone does not change any past day's key **or** the current streak.
+
+---
+
+### R46 · Document and fix the read path of one session
+
+**Depends on:** [R35](#r35--make-the-outbox-survivable), [R38](#r38--stamp-queued-writes-at-event-time)
+
+**Problem.** The player is optimistic; the summary is not. The asymmetry is undocumented and it is the most likely
+user-visible bug in the app:
+
+1. `run.tsx` fires `queueCompletion(...).then(() => flushOutbox()).then(navigate)` — but `Outbox.flush` **swallows send errors** ([R35](#r35--make-the-outbox-survivable)), so offline it resolves "successfully" and navigates anyway.
+2. `summary.tsx` then calls `getSetLogs(sessionId)` — a **live network read**. If the queue has not drained, the summary shows fewer sets, or none.
+3. Worse: that possibly-incomplete read is what progression is computed from. `summary.tsx` runs `nextLoad(...)` over those rows and calls `queueProgress(userId, updates)` **inside the load effect, on mount** — so a partial read persists a wrong `exercise_progress`.
+4. The whole effect ends in `.catch(() => setLoading(false))`, so a total network failure renders a silent, empty summary.
+
+So "I logged sets and they vanished" is usually a *display* failure — and, silently, a progression corruption.
+
+**Fix.** Compute the summary from the outbox's own view (pending + confirmed) rather than a bare network read;
+gate progression on a *complete* set of logs for the session, or recompute it server-side
+([R44](#r44--make-progression-accumulators-server-derived)); and surface the failure instead of swallowing it. At
+minimum, do not write progression from a read that may be partial.
+
+**Effort** L, not M — "compute the summary from the outbox's own view (pending + confirmed)" is a read-through
+merge layer over the queue, the same class of work as [R8](#r8--offline-tolerant-set-logging) itself · **Risk**
+medium — it touches the one calculation that changes future training loads.
+**Done when:** finishing a session with the radio off shows the sets you just did, and does not write progression
+until they are confirmed.
+
+---
+
+### R47 · Wrap `auth.uid()` in every RLS policy
+
+**Depends on:** [R25](#r25--migration-tooling-backups-and-an-rls-test-harness) — its two-tenant harness is what
+proves the rewrite is semantically identical.
+
+**Problem.** All eight policies in `0001` use bare `auth.uid()` — 13 occurrences, zero wrapped. Postgres
+re-evaluates a bare function call **per row**; `(select auth.uid())` is cached as an InitPlan and evaluated once
+per statement. The worst case is `plan_items_rw`, which runs a **three-table join per row** on the table
+`save_plan` bulk-inserts into and `PLAN_SELECT` bulk-selects from.
+
+**Fix.** Mechanical: `auth.uid()` to `(select auth.uid())` in all 13 places, in one migration. No behaviour change —
+which is exactly what R25's harness should demonstrate before and after.
+
+**Effort** S · **Risk** low, given the harness.
+**Done when:** the RLS suite passes identically before and after, and `explain analyze` on `PLAN_SELECT` shows the
+uid resolved once rather than per row.
+
+---
+
+### R48 · Make the outbox safe across browser tabs
+
+**Depends on:** [R35](#r35--make-the-outbox-survivable) · **Not covered by** [R36](#r36--namespace-and-clear-the-outbox-on-sign-out)
+
+**Problem.** On web, `AsyncStorage` is `localStorage`, and `Outbox`'s `tail` mutex is **per-JS-context**. Two
+browser tabs on the hosted build each run `startOutboxSync`, each read-modify-write the same key with no
+cross-context lock, and each flush the same operations concurrently. Interleaved enqueues are lost.
+
+R36 namespaces the key by user id, which does nothing here — it is the *same* user in both tabs. And the web build
+is the only publicly reachable target, so this is not a corner case.
+
+**Fix.** A `storage`-event listener to notice another tab's writes, plus a lease: a lock record in the same store
+(holder id + expiry) that a flusher must hold and renew, or `navigator.locks` where available with the lease as
+fallback. The invariant is one flusher at a time per key.
+
+**Effort** M · **Risk** medium.
+**Done when:** two tabs logging sets concurrently lose nothing, and only one flushes at a time.
 
 ---
 

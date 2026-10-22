@@ -5,11 +5,13 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'reac
 
 import { Calendar } from '@/components/Calendar';
 import { ExerciseMedia } from '@/components/ExerciseMedia';
+import { GymRoutineCard } from '@/components/GymRoutineCard';
 import { Body, Button, Card, Display, Heading, Muted, Overline, Screen } from '@/components/ui';
 import { useAuth, useUserId } from '@/lib/auth';
 import { getExercise } from '@/lib/catalog';
 import { getSetLogsForSessions } from '@/lib/db/queries';
 import { bodyPartLabel, estimateDay } from '@/lib/plan/estimate';
+import { isGymRoutine } from '@/lib/plan/gym-routine';
 import { sessionTotals, type Totals } from '@/lib/stats';
 import { colors, space, type } from '@/lib/theme';
 import { formatWeight } from '@/lib/units';
@@ -84,6 +86,7 @@ export default function PlanTab() {
       <Screen>
         <Display>No plan yet.</Display>
         <Muted style={{ marginTop: space.md }}>Build one from your profile.</Muted>
+        <GymRoutineCard userId={userId} onActivated={reload} />
       </Screen>
     );
   }
@@ -93,8 +96,15 @@ export default function PlanTab() {
       <Overline>Your plan</Overline>
       <Display style={{ marginTop: space.sm }}>{plan.name}</Display>
       <Muted style={{ marginTop: space.sm }}>
-        {plan.days.length} days a week · {plan.weeks} week block · {sessions.length} logged
+        {isGymRoutine(plan) ? `${plan.days.length}-session rotation` : `${plan.days.length} days a week`}
+        {' · '}{plan.weeks} week block · {sessions.length} logged
       </Muted>
+      {isGymRoutine(plan) ? (
+        <Muted style={{ marginTop: space.sm }}>
+          47 min target · Push A → Pull A → Legs A → Push B → Pull B → Legs B.
+          Take rest days between sessions.
+        </Muted>
+      ) : <GymRoutineCard userId={userId} onActivated={reload} />}
 
       <View
         style={{ marginTop: space.xl }}
@@ -174,7 +184,11 @@ export default function PlanTab() {
                     <View key={block.id} style={{ gap: space.xs }}>
                       <Overline>{block.title}</Overline>
                       <Muted>
-                        {block.kind === 'warmup'
+                        {block.duration_seconds != null ? `${formatBlockTime(block.duration_seconds)} · ` : ''}
+                        {block.duration_seconds != null && block.kind !== 'warmup'
+                          ? block.kind === 'straight' ? 'Straight sets · timed recovery'
+                            : `${block.kind === 'superset' ? 'Superset' : 'Circuit'} · ${block.rounds} ${block.rounds === 1 ? 'round' : 'rounds'} · timed recovery`
+                          : block.kind === 'warmup'
                           ? 'Move through once'
                           : block.kind === 'straight'
                             ? `Straight sets · rest ${block.rest_seconds}s`
@@ -182,15 +196,16 @@ export default function PlanTab() {
                       </Muted>
                       {block.items.map((item) => (
                         <View key={item.id} style={styles.itemRow}>
-                          <Body style={styles.itemName} numberOfLines={1}>
-                            {getExercise(item.exercise_id)?.name ?? item.exercise_id}
-                          </Body>
+                          <View style={{ flex: 1, gap: 2 }}>
+                            <Body style={styles.itemName}>
+                              {getExercise(item.exercise_id)?.name ?? item.exercise_id}
+                            </Body>
+                            {item.notes ? <Muted>{item.notes}</Muted> : null}
+                          </View>
                           <Muted>
                             {item.seconds
-                              ? `${item.seconds}s`
-                              : block.kind === 'straight'
-                                ? `${item.sets} × ${item.reps_low}–${item.reps_high}`
-                                : `${item.reps_low}–${item.reps_high}`}
+                              ? `${block.kind === 'straight' ? item.sets : block.rounds} × ${item.seconds}s`
+                              : `${block.kind === 'straight' ? item.sets : block.rounds} × ${item.reps_low}${item.reps_high !== item.reps_low ? `–${item.reps_high}` : ''}`}
                           </Muted>
                         </View>
                       ))}
@@ -238,6 +253,10 @@ export default function PlanTab() {
       ) : null}
     </Screen>
   );
+}
+
+function formatBlockTime(seconds: number): string {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} min`;
 }
 
 const Stat = ({ label, value }: { label: string; value: string }) => (

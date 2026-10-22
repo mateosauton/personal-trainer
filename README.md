@@ -10,7 +10,8 @@ Built with Expo / React Native (runs in Expo Go, no Xcode needed) and Supabase.
 
 ```bash
 npm install
-cp .env.example .env   # fill in your Supabase URL and publishable key
+npx eas-cli@23.2.0 login
+npm run env:pull       # development values from EAS into .env.local
 npx expo start --lan
 ```
 
@@ -22,6 +23,54 @@ npm test        # plan generation, progression, load maths, session queue
 npm run lint    # tsc --noEmit
 npm run catalog # rebuild lib/data/exercises.json from source datasets
 ```
+
+## Environment variables
+
+Manage app configuration in [the Expo project's environment settings](https://expo.dev/accounts/mrsauron/projects/office-gym-trainer/environment-variables).
+Each EAS environment, `development`, `preview`, and `production`, needs these
+project variables with **plain text** visibility:
+
+| Variable | Value |
+| --- | --- |
+| `EXPO_PUBLIC_SUPABASE_URL` | Supabase project URL |
+| `EXPO_PUBLIC_SUPABASE_KEY` | Supabase publishable key |
+
+The app reads these through `process.env.EXPO_PUBLIC_*`. They are public in
+the bundle; never use a Supabase service-role key or secret key here.
+
+`eas.json` selects the matching environment for each build profile. EAS Update
+uses `--environment production`, and the web export command fetches production
+values through `eas env:exec`. It disables local dotenv loading so local testing
+credentials cannot enter the hosted export. See [Expo's EAS environment guide](https://docs.expo.dev/eas/environment-variables/).
+
+```bash
+npm run env:pull             # development
+npm run env:pull:preview     # preview
+npm run env:pull:production  # production
+npm run export:web          # production web bundle in dist/
+```
+
+Pulls replace `.env.local`. Keep local test-login overrides in
+`.env.development.local`, and keep provider-specific tokens outside that pull
+target. Restart Expo after switching environments. `.env.example` is a template
+for offline setup; `.env.test` contains only mock settings. Actual values are
+gitignored and managed in EAS.
+
+GitHub publishing uses the repository's `EXPO_TOKEN` secret. Cloudflare and
+Vercel builds use `npm run build:web` with the two public values mirrored from
+EAS production into their build environments. These hosts do not need an Expo
+access token. Local production exports use `npm run export:web` to fetch EAS
+values directly.
+
+## Authentication
+
+Social sign-in shares the existing Supabase session and onboarding flow.
+Email/password remains available. Google requires `EXPO_PUBLIC_GOOGLE_SIGN_IN_ENABLED=1`
+after its provider setup. Apple is skipped and hidden by default; its
+implementation can be enabled later with `EXPO_PUBLIC_APPLE_SIGN_IN_ENABLED=1`
+after provider setup. Google uses the system browser or a web redirect.
+See [provider setup and release checks](docs/auth-setup.md) for the Supabase
+credentials, redirect URLs, Apple capability, and native rebuild requirements.
 
 ## The hosted build
 
@@ -46,7 +95,7 @@ when there is no phone (or no route to Supabase) to hand:
 
 ```bash
 node tools/dev/mock-supabase.mjs 54321 &          # GoTrue + the PostgREST slice this app uses
-NODE_ENV=test npx expo start --web --port 8081 &  # loads the committed .env.test mock settings
+EXPO_NO_DOTENV=1 EXPO_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 EXPO_PUBLIC_SUPABASE_KEY=mock npx expo start --web --port 8081 &
 node tools/dev/drive.mjs session ./shots            # screenshots a whole flow
 ```
 
@@ -62,7 +111,7 @@ serves an exported `dist/` with the same SPA fallback Cloudflare applies.
 The preview listens only on `127.0.0.1` and refuses paths or symlinks outside the export:
 
 ```bash
-npx expo export --platform web
+npm run export:web
 node tools/dev/serve-dist.mjs dist 8090
 ```
 
@@ -84,12 +133,12 @@ The numbers behind all of that are pure functions, tested rather than trusted:
 `lib/useDashboard.ts`, so they cannot disagree.
 
 **Signing in for testing.** With `EXPO_PUBLIC_DEV_LOGIN_EMAIL` and
-`EXPO_PUBLIC_DEV_LOGIN_PASSWORD` set in `.env`, the sign-in screen grows a
+`EXPO_PUBLIC_DEV_LOGIN_PASSWORD` set in `.env.development.local`, the sign-in screen grows a
 one-tap button for that account — see `lib/dev-auth.ts`, which also holds the
 address whitelist. It signs a real account in, so RLS and every query behave
 normally. It only appears in a dev build unless `EXPO_PUBLIC_ALLOW_DEV_LOGIN=1`
-is set; leave that unset for the hosted build, since `EXPO_PUBLIC_*` values are
-baked into the shipped bundle.
+is set. Keep all three test-login variables out of EAS; `EXPO_PUBLIC_*` values
+are baked into the shipped bundle even when the button is hidden.
 
 **The plan generator** (`lib/plan/`) is a deterministic rule engine, not a model
 call. It picks a split from your training frequency, then fills each day with a

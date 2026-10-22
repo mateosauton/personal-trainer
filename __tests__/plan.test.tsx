@@ -7,6 +7,13 @@ const mockState: { value: Record<string, unknown> } = { value: {} };
 const mockGetSetLogs = jest.fn().mockResolvedValue([
   { session_id: 's1', exercise_id: 'barbell-bench-press', reps: 8, weight_kg: 60, is_bodyweight: false, added_load_kg: 0 },
 ]);
+const mockSavePlan = jest.fn().mockResolvedValue('gym-plan');
+const mockGymPlan = { name: 'Gym PPL · 47 min', split: 'Gym PPL · 6-session rotation', weeks: 6, days: [] };
+
+jest.mock('@/lib/plan/gym-routine', () => ({
+  generateGymRoutine: () => mockGymPlan,
+  isGymRoutine: (value: { split: string }) => value.split === 'Gym PPL · 6-session rotation',
+}));
 
 jest.mock('@/lib/auth', () => ({
   useAuth: () => ({ profile: { display_name: 'Mateo', units: 'kg', bodyweight_kg: 80 } }),
@@ -17,6 +24,7 @@ jest.mock('@/lib/useDashboard', () => ({ useDashboard: () => mockState.value }))
 
 jest.mock('@/lib/db/queries', () => ({
   getSetLogsForSessions: (...args: unknown[]) => mockGetSetLogs(...args),
+  savePlan: (...args: unknown[]) => mockSavePlan(...args),
 }));
 
 jest.mock('@/components/ExerciseMedia', () => ({ ExerciseMedia: () => null }));
@@ -81,6 +89,8 @@ const state = {
 describe('Plan tab', () => {
   beforeEach(() => {
     mockState.value = state;
+    mockSavePlan.mockClear().mockResolvedValue('gym-plan');
+    state.reload.mockClear();
   });
 
   it('marks trained days on the calendar', () => {
@@ -119,5 +129,50 @@ describe('Plan tab', () => {
   it('keeps the history list on the same screen', () => {
     const { getByText } = render(<PlanTab />);
     expect(getByText('Recent')).toBeTruthy();
+  });
+
+  it('activates the timed gym routine and reloads the saved plan', async () => {
+    const { getByText } = render(<PlanTab />);
+    fireEvent.press(getByText('Use 47 min PPL routine'));
+    await waitFor(() => expect(mockSavePlan).toHaveBeenCalledWith('test-user', mockGymPlan));
+    expect(state.reload).toHaveBeenCalledTimes(1);
+    expect(getByText('Recent')).toBeTruthy();
+  });
+
+  it('offers the routine when there is no active plan', async () => {
+    mockState.value = { ...state, plan: null, nextDay: null };
+    const { getByText } = render(<PlanTab />);
+    fireEvent.press(getByText('Use 47 min PPL routine'));
+    await waitFor(() => expect(mockSavePlan).toHaveBeenCalledTimes(1));
+  });
+
+  it('shows an activation error without claiming the routine is active', async () => {
+    mockSavePlan.mockRejectedValueOnce(new Error('Could not save routine'));
+    const { getByText } = render(<PlanTab />);
+    fireEvent.press(getByText('Use 47 min PPL routine'));
+    await waitFor(() => expect(getByText('Could not save routine')).toBeTruthy());
+    expect(state.reload).not.toHaveBeenCalled();
+    expect(getByText('Use 47 min PPL routine')).toBeTruthy();
+  });
+
+  it('describes six sessions as a rotation rather than six days a week', () => {
+    const timed = {
+      ...plan, split: 'Gym PPL · 6-session rotation', name: 'Gym PPL · 47 min',
+      days: Array.from({ length: 6 }, (_, index) => ({ ...day, id: `day-${index}`, day_index: index })),
+    };
+    mockState.value = { ...state, plan: timed };
+    const { getByText, queryByText } = render(<PlanTab />);
+    expect(getByText(/6-session rotation/)).toBeTruthy();
+    expect(queryByText(/6 days a week/)).toBeNull();
+    expect(queryByText('Use 47 min PPL routine')).toBeNull();
+  });
+
+  it('describes allocated recovery instead of promising the old fixed rest', () => {
+    const timedDay = { ...day, blocks: [{ ...day.blocks[0], duration_seconds: 960 }] };
+    mockState.value = { ...state, plan: { ...plan, days: [timedDay] } };
+    const { getByLabelText, getByText, queryByText } = render(<PlanTab />);
+    fireEvent.press(getByLabelText('Push A details'));
+    expect(getByText(/16:00 min · Straight sets · timed recovery/)).toBeTruthy();
+    expect(queryByText(/rest 90s/)).toBeNull();
   });
 });

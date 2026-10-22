@@ -387,6 +387,16 @@ export async function reviewSetConflict(userId: string, write: JournalWrite): Pr
     ]);
   } finally { if (timer !== undefined) clearTimeout(timer); }
 }
+
+/** A reviewed choice replaces the offline UI copy even after its cursor advanced. */
+function chosenSetCopy(local: SavedWorkout | null, sessionId: string, chosen: SetLog): WorkoutPatch | undefined {
+  if (local?.sessionId !== sessionId) return undefined;
+  const key = (set: SetLog) => `${set.plan_item_id}:${set.set_index}`;
+  const sets = new Map((local.recordedSets ?? []).map(([, set]) => [key(set), set]));
+  sets.set(key(chosen), chosen);
+  return { recordedSets: [...sets.entries()] };
+}
+
 export async function resolveSetConflict(userId: string, review: SetConflictReview, choice: 'saved' | 'server') {
   requireAccount(userId);
   const generation = accountGeneration;
@@ -405,7 +415,7 @@ export async function resolveSetConflict(userId: string, review: SetConflictRevi
   const chosen = choice === 'server' ? review.server!.set : review.write.set;
   const local = review.workout;
   const entry = local ? buildQueue(local.day)[local.cursor] : null;
-  let patch: WorkoutPatch | undefined;
+  let patch = chosenSetCopy(local, review.write.sessionId, chosen);
   if (local?.sessionId === review.write.sessionId && local.phase === 'resting'
     && entry?.item.id === chosen.plan_item_id && entry.set === chosen.set_index) {
     const kg = chosen.is_bodyweight ? chosen.added_load_kg : chosen.weight_kg;
@@ -416,7 +426,7 @@ export async function resolveSetConflict(userId: string, review: SetConflictRevi
     const row = { exercise_id: chosen.exercise_id, last_weight_kg: kg, last_reps: chosen.reps,
       best_weight_kg: previous?.best_weight_kg ?? null, best_e1rm: previous?.best_e1rm ?? null,
       miss_streak: previous?.miss_streak ?? 0 };
-    patch = { draft,
+    patch = { ...patch, draft,
       progress: [...local.progress.filter(row => row.exercise_id !== chosen.exercise_id), row] };
   }
   await workouts.withSnapshot(userId, local, persistDraft => journalFor(userId).resolve(review.write,
@@ -424,7 +434,7 @@ export async function resolveSetConflict(userId: string, review: SetConflictRevi
     choice === 'server' ? review.server!.eventAt : review.write.eventAt,
     async write => { guard(); await enqueueWrite(userId, write); }, async () => { guard(); await persistDraft(); guard(); },
     { saved: review.write, server: review.server, choice,
-      ...(patch && local ? { draftCopy: { units: local.units, draft: local.draft, savedDraft: local.savedDraft, bodyweightKg: local.bodyweightKg } } : {}) }), patch, guard, patch ? { savedDraft: patch.draft } : undefined);
+      ...(patch?.draft && local ? { draftCopy: { units: local.units, draft: local.draft, savedDraft: local.savedDraft, bodyweightKg: local.bodyweightKg } } : {}) }), patch, guard, patch?.draft ? { savedDraft: patch.draft } : undefined);
   guard();
 }
 
@@ -555,19 +565,19 @@ export async function resolveLegacySetConflict(userId: string, review: LegacySet
   const eventAt = choice === 'server' ? review.server!.eventAt : completedAt!;
   const local = review.workout;
   const entry = local ? buildQueue(local.day)[local.cursor] : null;
-  let patch: WorkoutPatch | undefined;
+  let patch = chosenSetCopy(local, review.saved.sessionId, chosen);
   if (local?.sessionId === review.saved.sessionId && local.phase === 'resting'
     && entry?.item.id === chosen.plan_item_id && entry.set === chosen.set_index) {
     const kg = chosen.is_bodyweight ? chosen.added_load_kg : chosen.weight_kg;
     if ((chosen.reps === null && chosen.seconds == null) || kg === null) throw new Error('This set has incomplete reps or load. Your saved draft is preserved.');
     const draft = { reps: chosen.reps ?? 0, ...(chosen.seconds != null ? { seconds: chosen.seconds } : {}), weight: kgToDisplay(kg, local.units), asBodyweight: chosen.is_bodyweight };
     const previous = local.progress.find(row => row.exercise_id === chosen.exercise_id);
-    patch = { draft, progress: [...local.progress.filter(row => row.exercise_id !== chosen.exercise_id),
+    patch = { ...patch, draft, progress: [...local.progress.filter(row => row.exercise_id !== chosen.exercise_id),
       { exercise_id: chosen.exercise_id, last_weight_kg: kg, last_reps: chosen.reps,
         best_weight_kg: previous?.best_weight_kg ?? null, best_e1rm: previous?.best_e1rm ?? null,
         miss_streak: previous?.miss_streak ?? 0 }] };
   }
-  const recoveryRest = review.rest ?? (patch ? local : null);
+  const recoveryRest = review.rest ?? (patch?.draft ? local : null);
   await workouts.withSnapshot(userId, local, persistDraft => journalFor(userId).importLegacy(
     review.saved, chosen, review.server?.serverVersion ?? 0, eventAt,
     (write, persist) => queueFor(userId).replaceRejected(review.captured, async () => {
@@ -576,7 +586,7 @@ export async function resolveLegacySetConflict(userId: string, review: LegacySet
     }), async () => { guard(); await persistDraft(); guard(); },
     { saved: review.saved, server: review.server, choice, eventAt,
       ...(recoveryRest ? { draftCopy: { units: recoveryRest.units, draft: recoveryRest.draft, savedDraft: recoveryRest.savedDraft, bodyweightKg: recoveryRest.bodyweightKg } } : {}) }),
-    patch, guard, patch ? { savedDraft: patch.draft } : undefined);
+    patch, guard, patch?.draft ? { savedDraft: patch.draft } : undefined);
   guard();
   void flushAccount(userId).catch(() => undefined);
 }

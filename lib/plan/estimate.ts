@@ -1,5 +1,6 @@
 import { getExercise } from '@/lib/catalog';
 import type { PlanDay } from '@/lib/types';
+import { getBlockDurationSeconds, isPerSide } from './timing';
 
 export interface DayEstimate {
   /** Work blocks only; the warm-up is not one of them. */
@@ -30,6 +31,7 @@ export function estimateDay(day: PlanDay): DayEstimate {
 
   for (const block of day.blocks) {
     const isWork = block.kind !== 'warmup';
+    const budget = getBlockDurationSeconds(block);
     // Straight sets repeat per item; supersets and circuits repeat the block.
     const rounds = block.kind === 'straight' ? 1 : block.rounds;
 
@@ -37,10 +39,10 @@ export function estimateDay(day: PlanDay): DayEstimate {
       const itemSets = block.kind === 'straight' ? item.sets : rounds;
       const itemSeconds = item.seconds ?? SECONDS_PER_SET;
 
-      seconds += itemSets * itemSeconds;
+      if (budget == null) seconds += itemSets * itemSeconds;
       if (isWork) {
         sets += itemSets;
-        if (item.seconds == null) reps += itemSets * midpoint(item.reps_low, item.reps_high);
+        if (item.seconds == null) reps += itemSets * midpoint(item.reps_low, item.reps_high) * (isPerSide(item) ? 2 : 1);
       }
 
       const exercise = getExercise(item.exercise_id);
@@ -59,7 +61,7 @@ export function estimateDay(day: PlanDay): DayEstimate {
       block.kind === 'straight'
         ? block.items.reduce((sum, i) => sum + i.sets, 0)
         : block.rounds;
-    seconds += restUnits * block.rest_seconds;
+    seconds += budget ?? restUnits * block.rest_seconds;
   }
 
   return {
@@ -104,7 +106,7 @@ export function estimateVolumeKg(
         ? bodyweightKg
         : (lastLoadKg.get(item.exercise_id) ?? null);
       if (load == null) continue;
-      volume += sets * midpoint(item.reps_low, item.reps_high) * load;
+      volume += sets * midpoint(item.reps_low, item.reps_high) * (isPerSide(item) ? 2 : 1) * load;
     }
   }
 

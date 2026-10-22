@@ -12,6 +12,12 @@ const signedOutState = {
 const mockAuthState: { value: typeof signedOutState | Record<string, unknown> } = { value: signedOutState };
 const mockUseAuth = jest.fn(() => mockAuthState.value);
 
+jest.mock('expo', () => ({
+  requireOptionalNativeModule: () => ({}),
+}));
+
+jest.mock('@/lib/export-file', () => ({ cleanupExports: jest.fn() }));
+
 jest.mock('expo-observe', () => ({
   ObserveRoot: {
     wrap: (Component: React.ComponentType) => (props: object) => {

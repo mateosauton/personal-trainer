@@ -53,6 +53,8 @@ jest.mock('expo-router', () => ({
   useRouter: () => mockRouter,
 }));
 jest.mock('@/lib/db/queries', () => ({
+  getSessionSetSnapshot: async () => ({ logs: [], versions: [] }),
+  getWeightHistory: async () => new Map(),
   getSessionResumeDetails: async () => ({
     started_at: new Date(Date.now()).toISOString(),
     completed_at: null,

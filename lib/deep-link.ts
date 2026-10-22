@@ -2,15 +2,12 @@ import * as Linking from 'expo-linking';
 
 import { supabase } from './db/supabase';
 
-/**
- * Where Supabase should send the browser after it verifies an email link.
- *
- * In Expo Go this resolves to the dev server's exp:// address; in a standalone
- * build it uses the `officegym` scheme from app.json. Either way it deep-links
- * back into the app rather than stranding the user on Supabase's default Site
- * URL (http://localhost:3000), which is nothing on a phone.
- */
-export const authRedirectTo = () => Linking.createURL('/');
+/** The same root callback serves email confirmation and social sign-in. */
+export const authRedirectTo = () => {
+  const url = Linking.createURL('/');
+  return url ? new URL(url).toString() : url;
+};
+
 export const authRecoveryRedirectTo = () => Linking.createURL('/reset-password');
 
 function callbackUrl(value: string): URL {

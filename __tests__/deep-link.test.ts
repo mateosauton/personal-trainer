@@ -1,4 +1,4 @@
-import { authRecoveryRedirectTo, completeAuthFromUrl, isRecoveryLink } from '@/lib/deep-link';
+import { authRedirectTo, authRecoveryRedirectTo, completeAuthFromUrl, isRecoveryLink } from '@/lib/deep-link';
 
 const mockExchange = jest.fn();
 const mockSetSession = jest.fn();
@@ -127,6 +127,7 @@ it('ignores ordinary startup and navigation links', async () => {
 
 it('surfaces expired-link errors without trying to sign in', async () => {
   await expect(completeAuthFromUrl('officegym://reset-password#error=access_denied&error_description=Link+expired')).rejects.toThrow('Link expired');
+  expect(mockExchange).not.toHaveBeenCalled();
   expect(mockSetSession).not.toHaveBeenCalled();
   expect(mockExchange).not.toHaveBeenCalled();
 });

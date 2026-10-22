@@ -115,6 +115,7 @@ export interface GeneratedBlock {
   title: string;
   rounds: number;
   rest_seconds: number;
+  duration_seconds?: number | null;
   items: GeneratedItem[];
 }
 

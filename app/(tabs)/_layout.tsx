@@ -1,5 +1,6 @@
 import { Tabs } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Icon, type IconName } from '@/components/Icon';
 import { colors, radius, space, type } from '@/lib/theme';
@@ -20,27 +21,34 @@ function TabItem({ icon, label, focused }: { icon: IconName; label: string; focu
 }
 
 export default function TabsLayout() {
+  const insets = useSafeAreaInsets();
+  const bottom = Math.max(insets.bottom, space.lg);
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarStyle: styles.bar,
-        tabBarShowLabel: true,
-        sceneStyle: { backgroundColor: colors.bg, paddingBottom: 64 + space.lg },
+        tabBarStyle: [styles.bar, { bottom }],
+        tabBarShowLabel: false,
+        tabBarLabelPosition: 'below-icon',
+        tabBarIconStyle: styles.iconSlot,
+        sceneStyle: { backgroundColor: colors.bg, paddingBottom: 64 + bottom },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
-          tabBarIcon: () => null,
-          tabBarLabel: ({ focused }) => <TabItem icon="home" label="Home" focused={focused} />,
+          title: 'Home',
+          tabBarAccessibilityLabel: 'Home',
+          tabBarIcon: ({ focused }) => <TabItem icon="home" label="Home" focused={focused} />,
         }}
       />
       <Tabs.Screen
         name="plan"
         options={{
-          tabBarIcon: () => null,
-          tabBarLabel: ({ focused }) => <TabItem icon="plan" label="Plan" focused={focused} />,
+          title: 'Plan',
+          tabBarAccessibilityLabel: 'Plan',
+          tabBarIcon: ({ focused }) => <TabItem icon="plan" label="Plan" focused={focused} />,
         }}
       />
     </Tabs>
@@ -54,7 +62,9 @@ const styles = StyleSheet.create({
     right: space.lg,
     bottom: space.lg,
     height: 64,
-    paddingTop: space.xs,
+    // The floating dock handles its safe-area offset outside the content.
+    paddingTop: 0,
+    paddingBottom: 0,
     backgroundColor: colors.overlay,
     borderWidth: 1,
     borderColor: colors.borderStrong,
@@ -65,7 +75,8 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
   },
-  tab: { alignItems: 'center', gap: 3, width: 96 },
+  iconSlot: { flex: 1, width: '100%', height: 'auto' },
+  tab: { alignItems: 'center', justifyContent: 'center', gap: 3 },
   label: { ...type.overline, color: colors.faint },
   labelActive: { color: colors.text },
   dot: { width: 4, height: 4, borderRadius: 2, backgroundColor: 'transparent' },

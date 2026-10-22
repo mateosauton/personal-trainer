@@ -2,7 +2,7 @@ import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import Run from '@/app/session/[dayId]/run';
 import { LegacySetRecovery } from '@/components/LegacySetRecovery';
 import { workouts } from '@/lib/session/workout';
-import { flushOutbox, getLegacySetConflicts, getSetConflicts, queueSet, resolveSetConflict, reviewSetConflict, setSyncAccount } from '@/lib/session/sync';
+import { flushOutbox, getLegacySetConflicts, getSetConflicts, queueSet, resolveLegacySetConflict, resolveSetConflict, reviewLegacySetConflict, reviewSetConflict, setSyncAccount, stageLegacyRestRecovery } from '@/lib/session/sync';
 import type { SavedWorkout } from '@/lib/session/workout-store';
 const owner = 'abababab-1111-4111-8111-abababababab';
 const session = 'cdcdcdcd-1111-4111-8111-cdcdcdcdcdcd';
@@ -27,6 +27,7 @@ jest.mock('@/lib/db/supabase', () => ({
   clientForAccessToken: () => ({}),
 }));
 jest.mock('@/lib/db/queries', () => ({
+  getWeightHistory: async () => new Map(),
   logSetVersioned: (...args: unknown[]) => mockLog(...args),
   getSetWriteState: (...args: unknown[]) => mockServer(...args),
   getSessionSetSnapshot: (...args: unknown[]) => mockSnapshot(...args),
@@ -58,6 +59,49 @@ beforeEach(() => {
     exercise_id: 'unknown', set_index: 1, reps: 8, weight_kg: 60, is_bodyweight: false, added_load_kg: 0,
     rpe: null, completed_at: '2026-09-01T10:00:00.000Z',
   }], versions: [{ logId: '00000099-1111-4111-8111-000000000099', serverVersion: 7 }] });
+});
+
+it.each(['versioned', 'legacy'] as const)('uses the selected server load after a %s conflict is resolved beyond its rest screen', async kind => {
+  mockValues.clear(); setSyncAccount(owner);
+  const oldSet = { plan_item_id: item, exercise_id: 'unknown', set_index: 1,
+    reps: 8, weight_kg: 100, is_bodyweight: false, added_load_kg: 0, rpe: null };
+  const local = fixture();
+  local.draft = local.savedDraft = { reps: 8, weight: 100, asBodyweight: false };
+  local.recordedSets = [[`${item}:1`, oldSet]];
+  local.progress = [{ exercise_id: 'unknown', last_weight_kg: 100, last_reps: 8,
+    best_weight_kg: null, best_e1rm: null, miss_streak: 0 }];
+  await workouts.create(local);
+  if (kind === 'legacy') await stageLegacyRestRecovery(owner, local);
+  else {
+    mockLog.mockRejectedValue({ code: 'PT409' });
+    await queueSet(owner, session, oldSet); await flushOutbox();
+  }
+  await workouts.update(owner, session, { cursor: 0, phase: 'resting' }, {
+    cursor: 1, phase: 'work', draft: null, savedDraft: null, restUntilMs: null,
+  });
+  const selected = { ...oldSet, weight_kg: 60 };
+  mockServer.mockResolvedValue({ serverVersion: 7, set: selected, eventAt: '2026-10-06T11:00:00Z' });
+  mockLog.mockResolvedValue({ status: 'applied', serverVersion: 8 });
+  if (kind === 'legacy') {
+    const [captured] = await getLegacySetConflicts(owner);
+    await resolveLegacySetConflict(owner, await reviewLegacySetConflict(owner, captured), 'server');
+  } else {
+    const [blocked] = await getSetConflicts(owner);
+    await resolveSetConflict(owner, await reviewSetConflict(owner, blocked.write), 'server');
+  }
+  await flushOutbox();
+
+  const saved = await workouts.read(owner);
+  expect(saved?.cursor).toBe(1);
+  expect(saved?.draft).toBeNull();
+  expect(saved?.savedDraft).toBeNull();
+  expect(saved?.recordedSets?.map(([, set]) => set.weight_kg)).toEqual([60]);
+  const screen = render(<Run />);
+  await waitFor(() => expect(screen.getByLabelText('Weight to use (kg)').props.value).toBe('60'));
+  fireEvent.press(screen.getByText('Complete set'));
+  await waitFor(() => expect(mockLog).toHaveBeenLastCalledWith(expect.objectContaining({
+    set: expect.objectContaining({ set_index: 2, weight_kg: 60 }),
+  }), expect.anything(), expect.anything()));
 });
 it('preserves the explicit server choice through a warm rest screen and a restarted resume', async () => {
   mockValues.clear(); setSyncAccount(owner);

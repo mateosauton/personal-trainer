@@ -35,6 +35,7 @@ import {
 } from '@/lib/session/sync';
 import { workouts } from '@/lib/session/workout';
 import { nextLoad } from '@/lib/progression';
+import { sessionTotals } from '@/lib/stats';
 import { colors, space, type } from '@/lib/theme';
 import { motion } from '@/lib/motion';
 import { effectiveLoadKg, estimateOneRepMax, formatWeight } from '@/lib/units';
@@ -134,10 +135,7 @@ export default function SessionSummary() {
           const seconds = allSets.reduce((sum, s) => sum + (s.seconds ?? 0), 0);
           sets = sets.filter(s => s.seconds == null && itemById.get(s.plan_item_id ?? '')?.item.seconds == null);
           const loads = sets.map((s) => effectiveLoadKg(s, bodyweightKg));
-          const volumeKg = sets.reduce(
-            (sum, s, i) => sum + (loads[i] ?? 0) * (s.reps ?? 0),
-            0,
-          );
+          const { volumeKg } = sessionTotals(sets, bodyweightKg);
           const topLoadKg = loads.reduce<number | null>(
             (best, l) => (l != null && (best == null || l > best) ? l : best),
             null,

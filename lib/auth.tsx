@@ -19,6 +19,7 @@ interface AuthState {
   processingAuthLink: boolean;
   authError: Error | null;
   retrySession: () => Promise<void>;
+  clearAuthError: () => void;
   refreshProfile: () => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -27,9 +28,16 @@ const AuthContext = createContext<AuthState | null>(null);
 const profileCacheKey = (userId: string) => `office-gym.profile.${userId}`;
 
 const cachedProfile = async (userId: string): Promise<Profile | null> => {
-  const raw = await AsyncStorage.getItem(profileCacheKey(userId));
-  if (!raw) return null;
-  try { return JSON.parse(raw) as Profile; } catch { return null; }
+  try {
+    const raw = await AsyncStorage.getItem(profileCacheKey(userId));
+    return raw ? JSON.parse(raw) as Profile : null;
+  } catch { return null; }
+};
+
+const cacheProfile = async (profile: Profile) => {
+  try {
+    await AsyncStorage.setItem(profileCacheKey(profile.id), JSON.stringify(profile));
+  } catch { /* A cache failure must not discard a profile loaded from the server. */ }
 };
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -39,6 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [recoveringPassword, setRecoveringPassword] = useState(false);
   const [processingAuthLink, setProcessingAuthLink] = useState(false);
   const [authError, setAuthError] = useState<Error | null>(null);
+  const clearAuthError = useCallback(() => setAuthError(null), []);
   const authEpoch = useRef(0);
   const currentUser = useRef<string | null>(null);
 
@@ -63,6 +72,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (authEpoch.current === epoch) applySession(data.session);
     } catch (error) {
       if (authEpoch.current === epoch) {
+        if (!currentUser.current) setProfileState({ status: 'ready', profile: null });
         setAuthError(error instanceof Error ? error : new Error('Could not restore your session.'));
         setLoading(false);
       }
@@ -70,8 +80,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [applySession]);
 
   useEffect(() => {
+    let active = true;
     void retrySession();
     const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
+      if (!active) return;
       authEpoch.current += 1;
       setAuthError(null);
       if (event === 'PASSWORD_RECOVERY') setRecoveringPassword(true);
@@ -80,17 +92,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     const handleLink = async (url: string) => {
+      if (!active) return;
       setProcessingAuthLink(true);
       try {
         const recovery = isRecoveryLink(url);
         const completed = await completeAuthFromUrl(url);
+        if (!active) return;
         if (recovery && !completed) throw new Error('Open the password reset link from your email.');
         if (completed) setRecoveringPassword(recovery);
       } catch (error) {
+        if (!active) return;
         setRecoveringPassword(false);
         setAuthError(error instanceof Error ? error : new Error('Could not open the sign-in link.'));
         setLoading(false);
-      } finally { setProcessingAuthLink(false); }
+      } finally { if (active) setProcessingAuthLink(false); }
     };
     let linkWork = Promise.resolve();
     let receivedLiveLink = false;
@@ -98,12 +113,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     Linking.getInitialURL().then((url) => {
       if (url && !receivedLiveLink) queueLink(url);
     }).catch((error) => {
+      if (!active) return;
       setAuthError(error instanceof Error ? error : new Error('Could not open the sign-in link.'));
       setLoading(false);
     });
     const linkSub = Linking.addEventListener('url', ({ url }) => { receivedLiveLink = true; queueLink(url); });
 
     return () => {
+      active = false;
       authEpoch.current += 1;
       sub.subscription.unsubscribe();
       linkSub.remove();
@@ -124,20 +141,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setProfileState({ status: 'loading' });
     getProfile(userId)
       .then((p) => {
-        if (!cancelled) {
+        if (!cancelled && currentUser.current === userId) {
           setProfileState({ status: 'ready', profile: p });
-          if (p) void AsyncStorage.setItem(profileCacheKey(userId), JSON.stringify(p)).catch(() => undefined);
+          if (p) void cacheProfile(p);
         }
       })
       .catch(async (error: unknown) => {
-        let cached: Profile | null = null;
-        try { cached = await cachedProfile(userId); } catch { /* Keep the server error recoverable. */ }
-        if (!cancelled) setProfileState(cached
+        const cached = await cachedProfile(userId);
+        if (!cancelled && currentUser.current === userId) setProfileState(cached
           ? { status: 'ready', profile: cached }
           : { status: 'error', error: error instanceof Error ? error : new Error('Could not load profile') });
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && currentUser.current === userId) setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -154,6 +170,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       processingAuthLink,
       authError,
       retrySession,
+      clearAuthError,
       refreshProfile: async () => {
         if (!userId || currentUser.current !== userId) return;
         setProfileState({ status: 'loading' });
@@ -161,9 +178,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const profile = await getProfile(userId);
           if (currentUser.current !== userId) return;
           setProfileState({ status: 'ready', profile });
-          if (profile) await AsyncStorage.setItem(profileCacheKey(userId), JSON.stringify(profile));
+          if (profile) await cacheProfile(profile);
         } catch (error) {
-          if (currentUser.current === userId) setProfileState({ status: 'error', error: error instanceof Error ? error : new Error('Could not load profile') });
+          if (currentUser.current !== userId) return;
+          setProfileState({ status: 'error', error: error instanceof Error ? error : new Error('Could not load profile') });
           throw error;
         }
       },
@@ -177,7 +195,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       },
     }),
-    [session, profileState, loading, userId, recoveringPassword, processingAuthLink, authError, retrySession],
+    [session, profileState, loading, userId, recoveringPassword, processingAuthLink, authError, retrySession, clearAuthError],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

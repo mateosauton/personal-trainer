@@ -28,9 +28,9 @@ Set these build-time variables for production and preview builds:
 - `NODE_VERSION=22`.
 
 Only enable `EXPO_NO_DOTENV` after both public Supabase variables are configured.
-The existing committed `.env.production` contains public client configuration
-and remains a fallback for legacy builds. Never put a service-role key or other
-server credential in `EXPO_PUBLIC_*`, Wrangler assets, or a committed env file.
+The two public values are mirrored from the EAS production environment into
+the Cloudflare build triggers. Local dotenv loading is disabled; actual env
+files are gitignored. Never put a service-role key or other server credential in `EXPO_PUBLIC_*`, Wrangler assets, or a committed env file.
 
 Previews using the production project share production data. Use a dedicated
 test account for verification. A fully isolated preview needs its own Supabase
