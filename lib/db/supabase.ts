@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
 import 'react-native-url-polyfill/auto';
+import { ensureAuthCrypto } from './auth-crypto';
 
 const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const key = process.env.EXPO_PUBLIC_SUPABASE_KEY;
@@ -11,11 +12,14 @@ if (!url || !key) {
   );
 }
 
+ensureAuthCrypto();
+
 export const supabase = createClient(url, key, {
   auth: {
     storage: AsyncStorage,
     autoRefreshToken: true,
     persistSession: true,
+    flowType: 'pkce',
     // React Native has no URL bar to parse a session out of.
     detectSessionInUrl: false,
   },
