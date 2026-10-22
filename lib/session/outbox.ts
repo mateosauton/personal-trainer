@@ -12,7 +12,7 @@ export interface RejectedOperation {
   resolved: boolean;
   localRest?: SavedWorkout;
 }
-const validOperation = (item: any): item is OutboxOperation =>
+export const validOperation = (item: any): item is OutboxOperation =>
   item &&
   typeof item.id === 'string' &&
   item.id.length > 0 &&

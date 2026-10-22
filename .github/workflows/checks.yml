@@ -4,7 +4,23 @@ on:
   pull_request:
   push:
     branches: [master]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      publish_native:
+        description: Publish after completing the native verification checklist
+        type: boolean
+        default: false
+      tested_sha:
+        description: Full master commit SHA verified on the selected platform
+        type: string
+      native_build_id:
+        description: EAS build UUID installed for that verification
+        type: string
+      release_platform:
+        description: Platform verified with that build
+        type: choice
+        options: [android, ios]
+        default: android
 
 permissions:
   contents: read
@@ -32,7 +48,7 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - name: Check types, core behavior, and security
+      - name: Check types, behavior, fresh schema, and baseline upgrade
         run: npm run check:web
       - name: Build web bundle
         run: npm run build:web
@@ -40,7 +56,7 @@ jobs:
   update:
     name: Publish native update
     needs: check
-    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/master' && github.event_name == 'workflow_dispatch' && inputs.publish_native == true
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -49,10 +65,35 @@ jobs:
     env:
       EXPO_NO_DOTENV: '1'
       EXPO_NO_TELEMETRY: '1'
+      TESTED_SHA: ${{ inputs.tested_sha }}
+      NATIVE_BUILD_ID: ${{ inputs.native_build_id }}
+      RELEASE_PLATFORM: ${{ inputs.release_platform }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      - name: Validate native verification record
+        run: |
+          if [[ ! "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || [ "$TESTED_SHA" != "$GITHUB_SHA" ]; then
+            echo '::error::Provide the full tested SHA matching this master run.'
+            exit 1
+          fi
+          if [[ ! "$NATIVE_BUILD_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+            echo '::error::Provide the EAS build UUID installed for native verification.'
+            exit 1
+          fi
+          if [ "$RELEASE_PLATFORM" != android ] && [ "$RELEASE_PLATFORM" != ios ]; then
+            echo '::error::Publish only the platform verified with this build.'
+            exit 1
+          fi
+          {
+            echo '## Native verification record'
+            echo "Operator: $GITHUB_ACTOR"
+            echo "Tested commit: $TESTED_SHA"
+            echo "EAS build: $NATIVE_BUILD_ID"
+            echo "Platform: $RELEASE_PLATFORM"
+            echo 'The operator attests to the device checklist. CI does not verify these device results or the build contents.'
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: .nvmrc
@@ -68,6 +109,7 @@ jobs:
             echo 'current=true' >> "$GITHUB_OUTPUT"
           else
             echo 'Skipping a release superseded by a newer master commit.'
+            echo 'Publication skipped because a newer master commit exists.' >> "$GITHUB_STEP_SUMMARY"
             echo 'current=false' >> "$GITHUB_OUTPUT"
           fi
       - name: Require Expo release credentials
@@ -84,6 +126,6 @@ jobs:
         with:
           eas-version: 23.2.0
           token: ${{ secrets.EXPO_TOKEN }}
-      - name: Publish compatible production builds
+      - name: Publish to compatible verified-platform builds
         if: steps.release.outputs.current == 'true'
-        run: eas update --platform all --channel production --environment production --message "Release $GITHUB_SHA" --non-interactive
+        run: eas update --platform "$RELEASE_PLATFORM" --channel production --environment production --message "Release $GITHUB_SHA" --non-interactive

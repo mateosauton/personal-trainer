@@ -1,13 +1,13 @@
 # CI and releases
 
-GitHub Actions runs `.github/workflows/checks.yml` on pull requests, pushes to
-`master`, and manual runs. Node 22 and `npm ci` use the committed lockfile.
+This checkout's [workflow](../.github/workflows/checks.yml) runs on pull requests,
+pushes to `master`, and manual dispatch. These changes take effect in GitHub
+after merging. Hosted settings and secrets require separate verification.
 
-The checks run TypeScript, core workout and security tests, and a web export.
-Pull requests use mock public Supabase settings and receive no release secrets.
-There are no screen, layout, animation, screenshot, or browser interaction tests.
-The auth-provider test mounts a null-returning probe to check account isolation
-and recovery races without exercising a screen.
+Node 22 and `npm ci` use the committed lockfile. Checks run TypeScript, core
+workout and security tests, database tests, and a web export. Pull requests use
+mock public Supabase settings and receive no release secrets. The suite does
+not test screen layout, gestures, or the complete mobile workout journey.
 
 ## Local checks
 
@@ -17,36 +17,43 @@ npm run check:web
 EXPO_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 EXPO_PUBLIC_SUPABASE_KEY=mock npm run build:web
 ```
 
-`npm test` runs the retained Jest suite and disposable PostgreSQL checks.
-`npm run test:unit` and `npm run test:db` run them separately. Database checks use
-PGlite in memory and need no Supabase credentials or running database. They cover
-row policies, account isolation, progression replay, write ordering, timed sets,
-and complete account exports. The latest-schema checks apply every migration
-and execute the SQL tests in `supabase/tests/`. Historical migration checks also
-remain to protect existing workout records during upgrades.
+`npm test` runs Jest and disposable PostgreSQL checks. `npm run test:unit` and
+`npm run test:db` run them separately. Database checks use PGlite in memory and
+need no Supabase credentials. They cover row policies, account isolation,
+progression replay, write ordering, timed sets, and account exports. Latest-schema
+checks apply every migration and execute `supabase/tests/`; historical checks
+protect existing workout records during upgrades.
 
-## Native CD
+## Native publishing
 
-After checks pass on `master`, Actions publishes an EAS Update with the
-production channel and production environment. Manual runs on other branches
-run checks only. The repository needs the `EXPO_TOKEN` Actions secret, which was
-already configured when this workflow was added. Public app configuration stays
-in the EAS production environment.
+Automatic checks do not publish to phones. After completing
+[native verification](NATIVE_RELEASE.md), manually run `CI/CD` on `master` with:
 
-Production publishing is serialized and an active publish is never cancelled by
-a new push. Queued releases skip commits that are no longer the head of `master`.
-Expo's fingerprint runtime policy limits delivery to compatible
-installed builds. Native dependency changes require a new binary through EAS
-Build; this workflow does not build or submit store binaries.
+- `publish_native` enabled.
+- `tested_sha` equal to the run's full 40-character master SHA.
+- `native_build_id` equal to the installed EAS build UUID.
+- `release_platform` equal to the platform verified with that build.
 
-## Web CD
+Actions reruns checks, validates the record, and records the operator, commit,
+build, and platform in its summary. These are human attestations. CI cannot
+confirm that the operator tested the build or that it contains that SHA.
+Publish Android and iOS separately after testing each.
 
-Cloudflare Workers Builds keeps deploying the `personal-trainer` web app from
-`master`. Its existing `npx wrangler deploy` command runs the same
-`npm run check:web` gate before exporting the production web bundle through the
-custom build in `wrangler.jsonc`. Its build environment supplies the real public
-Supabase settings. It does not use the mock bundle built by the PR check job.
+Publishing needs the repository's `EXPO_TOKEN` secret and EAS production public
+configuration. Native publishes are serialized; an active publish is not
+cancelled. A queued release skips if its SHA no longer matches master. This
+check cannot prevent a push during an already active publish.
 
-Cloudflare runs independently of GitHub's native release job. This change keeps
-that integration and requires no new Cloudflare token in GitHub. Legacy GitHub
-Pages/CDN publishing and the Vercel polling workflow have been removed.
+Expo's fingerprint policy delivers updates only to compatible installed
+builds. Native runtime changes require new binaries. Actions does not build or
+submit those binaries, apply migrations, or verify device behavior.
+
+## Web publishing
+
+`wrangler.jsonc` runs `npm run check:web && npm run build:web` when Wrangler
+deploys the `personal-trainer` web app. Cloudflare's branch trigger and build
+environment are hosted settings, not declared here. Its configured integration
+can deploy independently of GitHub's native job. Real public Supabase settings
+must come from that build environment, rather than the mock PR bundle.
+
+See [releases](RELEASES.md) for release types and recovery.

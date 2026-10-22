@@ -138,6 +138,27 @@ describe('auth account isolation', () => {
     expect(mockGetItem).toHaveBeenCalledWith('office-gym.profile.first');
   });
 
+  it('normalizes cached public photo URLs to an owner path before offline rendering', async () => {
+    mockGetSession.mockResolvedValueOnce({ data: { session: session('first') }, error: null });
+    mockGetProfile.mockRejectedValueOnce(new Error('Offline'));
+    mockGetItem.mockResolvedValueOnce(JSON.stringify({ ...profile('first'),
+      avatar_url: 'https://project.supabase.co/storage/v1/object/public/avatars/first/avatar.jpeg',
+    }));
+    const auth = mountAuth();
+    await waitFor(() => expect(auth.current.loading).toBe(false));
+    expect(auth.current.profile?.avatar_url).toBe('first/avatar.jpeg');
+  });
+
+  it('rejects a foreign cached profile even when stored under the current account key', async () => {
+    mockGetSession.mockResolvedValueOnce({ data: { session: session('first') }, error: null });
+    mockGetProfile.mockRejectedValueOnce(new Error('Offline'));
+    mockGetItem.mockResolvedValueOnce(JSON.stringify(profile('second')));
+    const auth = mountAuth();
+    await waitFor(() => expect(auth.current.loading).toBe(false));
+    expect(auth.current.profile).toBeNull();
+    expect(auth.current.profileState.status).toBe('error');
+  });
+
   it('discards a pending profile refresh after the account changes', async () => {
     mockGetSession.mockResolvedValueOnce({ data: { session: session('first') }, error: null });
     mockGetProfile.mockResolvedValueOnce(profile('first'));

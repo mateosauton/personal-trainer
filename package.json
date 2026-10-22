@@ -70,13 +70,15 @@
     "lint": "tsc --noEmit",
     "test": "npm run test:unit && npm run test:db",
     "test:unit": "jest --runInBand --testTimeout=20000",
-    "test:db": "node scripts/test-account-isolation.cjs && node scripts/test-session-progression.cjs && node scripts/test-set-ordering.cjs && node scripts/test-database.cjs",
+    "test:db": "node scripts/test-account-isolation.cjs && node scripts/test-session-progression.cjs && node scripts/test-set-ordering.cjs && node scripts/test-session-context.cjs && npm run test:migrations && node scripts/test-database.cjs",
     "catalog": "node scripts/build-catalog.mjs",
     "env:pull": "npx eas-cli@23.2.0 env:pull --environment development",
     "env:pull:preview": "npx eas-cli@23.2.0 env:pull --environment preview",
     "env:pull:production": "npx eas-cli@23.2.0 env:pull --environment production",
     "export:web": "EXPO_NO_DOTENV=1 npx eas-cli@23.2.0 env:exec production 'npx expo export --platform web' --non-interactive",
-    "docs:verify": "node scripts/verify-docs.mjs"
+    "docs:verify": "node scripts/verify-docs.mjs",
+    "test:migrations": "node --test scripts/test-migration-baseline.cjs",
+    "migrations:check": "node scripts/migration-baseline.cjs"
   },
   "private": true
 }

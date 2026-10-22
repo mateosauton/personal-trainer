@@ -2,7 +2,10 @@ import { exportAccountData } from '@/lib/account-export';
 import { supabase } from '@/lib/db/supabase';
 jest.mock('@/lib/db/supabase', () => ({ supabase: { rpc: jest.fn(), auth: { getSession: jest.fn() } } }));
 jest.mock('@/lib/export-file', () => ({ deliverExport: jest.fn() }));
+jest.mock('@react-native-async-storage/async-storage', () => ({ getItem: jest.fn().mockResolvedValue(null) }));
+jest.mock('@/lib/session/storage-lock', () => ({ storageLock: (_: string, work: () => unknown) => work() }));
 import { deliverExport } from '@/lib/export-file';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 const snapshot = { format_version: 1, account_id: 'owner', profile: null,
   exported_at: '2026-10-07T18:00:00Z', plans: [], plan_days: [], plan_blocks: [], plan_items: [],
   sessions: [], session_summaries: [], set_logs: [], exercise_progress: [] };
@@ -11,6 +14,15 @@ beforeEach(() => {
   jest.resetAllMocks();
   jest.mocked(supabase.auth.getSession).mockResolvedValue(session('owner') as never);
   jest.mocked(supabase.rpc).mockResolvedValue({ data: snapshot, error: null } as never);
+  jest.mocked(AsyncStorage.getItem).mockResolvedValue(null);
+});
+it('includes raw malformed local data without exporting another account or the unowned legacy queue', async () => {
+  jest.mocked(AsyncStorage.getItem).mockImplementation(async key => key.endsWith('.owner') ? '{broken-json' : null);
+  await exportAccountData('owner', true);
+  const payload = JSON.parse(jest.mocked(deliverExport).mock.calls[0][0]);
+  expect(payload.local_recovery.account_id).toBe('owner');
+  expect(payload.local_recovery.records['office-gym.recovery-backups.v1.owner']).toBe('{broken-json');
+  expect(Object.keys(payload.local_recovery.records).every(key => key.includes('.owner'))).toBe(true);
 });
 it('delivers a complete versioned JSON snapshot without passing a caller-selected owner to the RPC', async () => {
   await exportAccountData('owner');

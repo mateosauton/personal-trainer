@@ -53,7 +53,7 @@ const src = ['app', 'components', 'lib', 'scripts']
 
 const fieldReferences = {
   instructions: ['app/session/[dayId]/run.tsx', 'lib/data/gym-routine-exercises.ts'],
-  secondary_muscles: ['lib/data/gym-routine-exercises.ts'],
+  secondary_muscles: ['lib/catalog.ts', 'lib/data/gym-routine-exercises.ts'],
   force_type: ['lib/data/gym-routine-exercises.ts'],
 };
 for (const [field, expected] of Object.entries(fieldReferences)) {
@@ -65,7 +65,7 @@ for (const [field, expected] of Object.entries(fieldReferences)) {
 
 // ------------------------------------------------------------------ tests --
 const queryFns = (read('lib/db/queries.ts').match(/^export (async )?function /gm) ?? []).length;
-check('exported query functions', queryFns, 22);
+check('exported query functions', queryFns, 24);
 
 // ------------------------------------------------- invariants docs rely on --
 const alertCallers = src.filter(

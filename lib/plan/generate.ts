@@ -88,14 +88,12 @@ export interface GenerateInput {
   daysPerWeek: number;
   sessionMinutes: number;
   equipment: Exercise['equipment'][];
+  /** Limits every search tier to exercises supported by an exact inventory. */
+  exerciseIds?: ReadonlySet<string>;
   limitations: string[];
 }
 
-/**
- * Every kind of kit the generator can slot an exercise into. The app no longer
- * asks what the gym has — a rack of dumbbells is a safe assumption in the kind
- * of gym this is for, and one fewer question is worth more than the filtering.
- */
+/** Catalog categories, not evidence that any particular gym has this kit. */
 export const ALL_EQUIPMENT: Exercise['equipment'][] = [
   'barbell', 'dumbbell', 'kettlebell', 'cable', 'machine', 'bands', 'bodyweight',
 ];
@@ -238,6 +236,7 @@ function buildDay(
       : (['bodyweight'] as GenerateInput['equipment']),
     level: input.experience,
     limitations: input.limitations,
+    exerciseIds: input.exerciseIds,
   };
 
   // Warm-up picks land here too, so today's work cannot repeat a drill the

@@ -12,22 +12,28 @@ The local environment points to Supabase project `asbudyijvunpnhrhsubm`, named
 `office-gym-trainer`. After the owner resumed it on October 21, 2026, its Auth
 settings endpoint returned HTTP 200 and its dashboard became accessible.
 An empty read-only query against `profiles` also returned HTTP 200.
-Email authentication is enabled. Google and Apple are disabled, and both
-provider forms have empty client IDs and OAuth secrets. No hosted provider
-settings have been changed yet. Live Google sign-in requires the provider
-credentials below and `EXPO_PUBLIC_GOOGLE_SIGN_IN_ENABLED=1` in the applicable
-EAS environment, followed by a rebuild and a real provider sign-in.
+Email authentication and Google are enabled. The Google web OAuth client is
+configured in Supabase; its client secret is stored only there. The public Auth
+settings endpoint confirms `google: true` and `apple: false`. Apple setup was
+skipped and its UI remains disabled. `EXPO_PUBLIC_GOOGLE_SIGN_IN_ENABLED=1` is
+set and read back on Cloudflare production and non-production build triggers,
+in the project-scoped EAS development, preview, and production environments,
+and in the ignored local `.env`. The Apple flag is omitted. The production
+rebuild succeeded. Live Google consent and callback exchange signed an existing
+account into Home; the callback code was removed from the URL and reloading
+preserved the signed-in session.
 
 The connected Supabase MCP account still cannot access this project. The
 dashboard session for `mateosauton's Org` can access it, so dashboard setup can
 continue. The owner approved Google Cloud and Apple Developer console access
 for this app and chose personal ownership for both providers. Personal Google
-Cloud is now accessible. Its existing projects belong to other apps, so a new
-`Office Gym` project, ID `office-gym-512401`, is prepared for OAuth configuration.
-Project creation awaits explicit owner approval; it has not been submitted
-successfully. The owner chose to skip unavailable Apple sign-in, so Apple console
-setup is stopped and its UI stays disabled. No provider credentials have been
-created or entered.
+Cloud is now accessible. The dedicated personal `Office Gym` project,
+ID `office-gym-512401`, contains the configured web OAuth client. Google's
+audience is verified as External with publishing status Testing and zero test
+users. The saved scopes are limited to basic Sign in with Google, so Google's
+test-user list and seven-day authorization expiry do not apply. The homepage is
+saved, but publication remains disabled because branding lacks privacy-policy
+and terms URLs. Apple console setup is stopped at the owner's request.
 
 Use the project selected by `EXPO_PUBLIC_SUPABASE_URL` in each EAS environment.
 Do not switch projects just to enable a provider: existing users and training
@@ -65,23 +71,46 @@ stable provider redirect and does not verify the production Apple entitlement.
 
 ## Google
 
-Leave `EXPO_PUBLIC_GOOGLE_SIGN_IN_ENABLED` unset until the hosted provider is
-configured. After completing the steps below, set it to `1` in the applicable
-EAS environment and rebuild before offering Google sign-in to users.
+Google is configured in the dedicated personal Cloud project
+`office-gym-512401` and enabled in
+[Supabase providers](https://supabase.com/dashboard/project/asbudyijvunpnhrhsubm/auth/providers).
+The recorded configuration is:
 
-1. Configure the Google Auth Platform consent screen and audience for Office Gym.
-   Request only OpenID, email, and profile scopes. Add test users if the consent
-   screen is still in testing.
-2. Create a **Web application** OAuth client. This app uses browser OAuth for
-   Google on all platforms, so a native Google SDK client is not needed.
-   Use the dedicated personal Office Gym Cloud project once it has been created.
-3. Add the app's web origin to authorized JavaScript origins, and add this
-   authorized redirect URI:
-   `https://asbudyijvunpnhrhsubm.supabase.co/auth/v1/callback`.
-   The verified primary web origin is
-   `https://personal-trainer.sautonmateo.workers.dev`.
-4. In [Supabase providers](https://supabase.com/dashboard/project/asbudyijvunpnhrhsubm/auth/providers),
-   enable Google and enter its client ID and client secret.
+- Client type: **Web application**. The app uses browser OAuth for Google on
+  all platforms, so a native Google SDK client is not needed.
+- Public client ID:
+  `743848390951-dpqln4hqobsumqmn8qa0p7lrp68bu3ns.apps.googleusercontent.com`.
+- Authorized JavaScript origin:
+  `https://personal-trainer.sautonmateo.workers.dev`.
+- Saved app homepage:
+  `https://personal-trainer.sautonmateo.workers.dev`.
+- Authorized redirect URI:
+  `https://asbudyijvunpnhrhsubm.supabase.co/auth/v1/callback`.
+- Audience: **External**.
+- Saved scopes: `openid`, `userinfo.email`, and `userinfo.profile`, all
+  non-sensitive. Sensitive and restricted scope tables are empty.
+- Publishing status: **Testing**, with zero test users. Publication is disabled
+  because branding lacks privacy-policy and terms URLs.
+
+Google's [basic sign-in exception](https://support.google.com/cloud/answer/15549945)
+means these scopes do not require users to be in the test-user list, and their
+authorizations do not expire after seven days in Testing mode. Zero configured
+test users therefore does not block this sign-in flow. Adding other OAuth scopes
+would remove this exception.
+
+The Google flag is configured in each target environment. Cloudflare production
+build `d76ce734-ecb7-49ff-b96e-a7ab507a2a86` succeeded from pinned `master`
+commit `4189aa33f926b40359d1ff05ca9f08f94707df77`, deploying version
+`fcabc071-f9f7-4c07-b7a6-0a8178f65bcb`. Its TypeScript check, 55 test suites
+with 527 tests, web export, and deployment passed. The live sign-in screen
+shows Google and email, with Apple hidden.
+
+A live Google sign-in with an existing account requested only name, profile
+picture, and email consent, returned to Home, removed the callback code from
+the URL, and retained Home after reload. Google signup with a new account and
+physical-device native Google sign-in remain unverified; native validation
+requires a fresh binary. Branding publication remains optional unfinished work
+while privacy-policy and terms URLs are missing.
 
 The Google callback points to Supabase. Supabase then returns the user to the
 allowlisted app root. Keep the client secret in Supabase, outside Expo variables.
@@ -115,20 +144,24 @@ Web and Android use Apple's browser OAuth flow.
 
 ## Verification and release
 
-- Test Google and Apple with both a new account and an existing account. New
-  accounts must reach onboarding; onboarded accounts must reach Home.
-- Cancel each provider flow and retry. Check provider failures appear in the
+- Test Google with a new account and confirm it reaches onboarding. Existing
+  account sign-in to Home and session restoration after reload passed on the
+  deployed web app.
+- Cancel Google sign-in and retry. Check provider failures appear in the
   auth screen, and email/password sign-in still works.
-- Restart the app/browser after signing in and verify session restoration.
-- Test native Apple sign-in on a physical device using a newly built binary
-  signed for `co.officegym.trainer`.
+- Build a fresh native binary, then verify Google sign-in and session
+  restoration on a physical device.
+- If Apple is configured later, repeat provider checks and test native Apple
+  sign-in on a physical device using a newly built binary signed for
+  `co.officegym.trainer`.
 - This change adds native modules. Publish a new native build before shipping
   an EAS Update containing it. `runtimeVersion.policy` is `fingerprint`, so an
   update requiring the new native modules cannot target older `1.0.0` binaries.
 
-Local validation uses mock auth responses and SDK module mocks. It does not
-prove Google consent, Apple provisioning, hosted redirect allowlists, or real
-provider-token exchange.
+Local validation uses mock auth responses and SDK module mocks. The live web
+check above additionally verified Google consent, callback exchange, and session
+restoration for an existing account. New-account onboarding and physical native
+Google authentication still need live checks. Apple setup remains skipped.
 
 References: [Supabase Google](https://supabase.com/docs/guides/auth/social-login/auth-google),
 [Supabase Apple](https://supabase.com/docs/guides/auth/social-login/auth-apple),

@@ -4,6 +4,8 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Muted, Overline, Title } from '@/components/ui';
 import { colors, radius, space, type } from '@/lib/theme';
+import { useAuth } from '@/lib/auth';
+import { useAvatar } from '@/lib/useAvatar';
 
 /** "MS" from "Mateo Sauton"; a single letter is fine, an empty string is not. */
 function initials(name: string | null): string {
@@ -27,6 +29,8 @@ export function Header({
   subtitle?: string;
 }) {
   const router = useRouter();
+  const { session } = useAuth();
+  const signedAvatar = useAvatar(avatarUrl, session?.user.id ?? null);
 
   return (
     <View style={styles.row}>
@@ -36,8 +40,8 @@ export function Header({
         accessibilityLabel="Open your profile"
         style={({ pressed }) => [styles.avatar, pressed && { opacity: 0.75 }]}
       >
-        {avatarUrl ? (
-          <Image source={{ uri: avatarUrl }} style={styles.avatarImage} contentFit="cover" />
+        {signedAvatar ? (
+          <Image source={{ uri: signedAvatar }} style={styles.avatarImage} contentFit="cover" />
         ) : (
           <Overline style={styles.initials}>{initials(name)}</Overline>
         )}

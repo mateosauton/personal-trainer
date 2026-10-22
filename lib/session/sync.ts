@@ -22,6 +22,8 @@ import { buildQueue } from './queue';
 import { draftMeasurement } from './set-values';
 import { kgToDisplay, displayToKg } from '@/lib/units';
 import { validateWorkout, type SavedWorkout, type WorkoutPatch } from './workout-store';
+import { QueueDataRecovery, readRecoveryData, type QueueRepairReview } from './recovery-data';
+import { deliverExport } from '@/lib/export-file';
 
 let activeAccount: string | null = null;
 let accountGeneration = 0;
@@ -321,6 +323,31 @@ export const failedSyncCount = async (sessionId?: string) =>
 export const flushOutbox = () =>
   activeAccount ? flushAccount(activeAccount) : Promise.resolve();
 export const getSyncStatus = (userId: string) => readStatus(userId);
+export async function exportWorkoutRecovery(userId: string) {
+  requireAccount(userId);
+  const generation = accountGeneration;
+  const guard = () => {
+    requireAccount(userId);
+    if (generation !== accountGeneration) throw new Error('The workout account changed.');
+  };
+  const snapshot = await readRecoveryData(AsyncStorage, userId, storageLock);
+  guard();
+  await deliverExport(JSON.stringify(snapshot, null, 2), 'office-gym-workout-recovery.json', async () => { guard(); });
+}
+export async function inspectQueueRecovery(userId: string) {
+  requireAccount(userId);
+  const reviews = await new QueueDataRecovery(AsyncStorage, userId, storageLock).inspect();
+  requireAccount(userId);
+  return reviews;
+}
+export async function repairQueueRecovery(userId: string, review: QueueRepairReview, replacement: string) {
+  requireAccount(userId);
+  const generation = accountGeneration;
+  await new QueueDataRecovery(AsyncStorage, userId, storageLock).repair(review, replacement, () => {
+    requireAccount(userId);
+    if (generation !== accountGeneration) throw new Error('The workout account changed.');
+  });
+}
 export async function retrySync(userId: string) {
   requireAccount(userId);
   const queue = queueFor(userId);

@@ -20,7 +20,7 @@ export function MarkerStroke({ style, testID }: { style?: ViewStyle; testID?: st
   return <Animated.View testID={testID} style={[styles.stroke, style, animatedStyle]} />;
 }
 
-export function DoodlePop({ children, active = true }: { children: React.ReactNode; active?: boolean }) {
+export function DoodlePop({ children, active = true, scale: popScale = 1.12 }: { children: React.ReactNode; active?: boolean; scale?: number }) {
   const reduceMotion = useReducedMotion();
   const scale = useSharedValue(1);
 
@@ -30,10 +30,10 @@ export function DoodlePop({ children, active = true }: { children: React.ReactNo
       return;
     }
     scale.value = withSequence(
-      withTiming(1.12, { duration: motion.fast, reduceMotion: ReduceMotion.System }),
+      withTiming(popScale, { duration: motion.fast, reduceMotion: ReduceMotion.System }),
       withSpring(1, { ...motion.pop, reduceMotion: ReduceMotion.System }),
     );
-  }, [active, reduceMotion, scale]);
+  }, [active, popScale, reduceMotion, scale]);
 
   const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 

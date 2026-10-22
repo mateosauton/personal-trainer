@@ -1,4 +1,5 @@
-import { differenceInCalendarDays, format } from 'date-fns';
+import { format } from 'date-fns';
+import { calendarDayDifference, calendarDayKey, shiftDayKey } from './calendar-days';
 
 import { effectiveLoadKg } from './units';
 import { getExercise } from './catalog';
@@ -26,11 +27,11 @@ export interface Totals {
 }
 
 /** Local calendar day, the unit the calendar and the streak both count in. */
-export const dayKey = (date: Date | string): string =>
-  format(typeof date === 'string' ? new Date(date) : date, 'yyyy-MM-dd');
+export const dayKey = (date: Date | string, timeZone?: string): string =>
+  timeZone ? calendarDayKey(date, timeZone) : format(typeof date === 'string' ? new Date(date) : date, 'yyyy-MM-dd');
 
-export function trainedDayKeys(sessions: { started_at: string }[]): Set<string> {
-  return new Set(sessions.map((s) => dayKey(s.started_at)));
+export function trainedDayKeys(sessions: { started_at: string }[], timeZone: string): Set<string> {
+  return new Set(sessions.map((s) => calendarDayKey(s.started_at, timeZone)));
 }
 
 /**
@@ -40,30 +41,26 @@ export function trainedDayKeys(sessions: { started_at: string }[]): Set<string> 
  * running, and a streak that resets at midnight would punish a morning check
  * of the app. It breaks once a whole day has passed with nothing logged.
  */
-export function streakDays(days: Set<string>, today: Date = new Date()): number {
+export function streakDays(days: Set<string>, today: Date | string): number {
   if (days.size === 0) return 0;
-
-  const cursor = new Date(today);
-  // Start on today if it was trained, otherwise on yesterday; anything older
-  // than that means the chain is already broken.
-  if (!days.has(dayKey(cursor))) {
-    cursor.setDate(cursor.getDate() - 1);
-    if (!days.has(dayKey(cursor))) return 0;
+  let cursor = typeof today === 'string' ? today : dayKey(today);
+  if (!days.has(cursor)) {
+    cursor = shiftDayKey(cursor, -1);
+    if (!days.has(cursor)) return 0;
   }
-
   let streak = 0;
-  while (days.has(dayKey(cursor))) {
+  while (days.has(cursor)) {
     streak += 1;
-    cursor.setDate(cursor.getDate() - 1);
+    cursor = shiftDayKey(cursor, -1);
   }
   return streak;
 }
 
-/** Days since the last session, or null if there has never been one. */
-export function daysSinceLast(days: Set<string>, today: Date = new Date()): number | null {
+/** Future dates never become negative inactivity counts. */
+export function daysSinceLast(days: Set<string>, today: Date | string): number | null {
   if (days.size === 0) return null;
   const latest = [...days].sort().at(-1)!;
-  return differenceInCalendarDays(today, new Date(`${latest}T00:00:00`));
+  return Math.max(0, calendarDayDifference(typeof today === 'string' ? today : dayKey(today), latest));
 }
 
 /**
@@ -86,12 +83,7 @@ export function sessionTotals(logs: LoggedSet[], bodyweightKg: number | null): T
 }
 
 /** The last `count` calendar days, oldest first — the dot strip on Home. */
-export function recentDays(count: number, today: Date = new Date()): string[] {
-  const out: string[] = [];
-  for (let i = count - 1; i >= 0; i -= 1) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    out.push(dayKey(d));
-  }
-  return out;
+export function recentDays(count: number, today: Date | string): string[] {
+  const key = typeof today === 'string' ? today : dayKey(today);
+  return Array.from({ length: count }, (_, index) => shiftDayKey(key, index - count + 1));
 }
