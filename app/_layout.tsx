@@ -1,5 +1,6 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { ObserveRoot, useObserve } from '@/lib/observe';
 import { useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -16,6 +17,16 @@ const Splash = () => (
     <ActivityIndicator color={colors.accent} />
   </View>
 );
+
+function InteractiveMarker({ loading }: { loading: boolean }) {
+  const { markInteractive } = useObserve();
+
+  useEffect(() => {
+    if (!loading) markInteractive();
+  }, [loading, markInteractive]);
+
+  return null;
+}
 
 /**
  * Routing gate. Three states matter: signed out, signed in but not onboarded,
@@ -63,7 +74,7 @@ function Routes() {
         <Stack.Screen name="onboarding" />
       </Stack.Protected>
 
-      <Stack.Protected guard={onboarded}>
+      <Stack.Protected guard={signedIn && onboarded}>
         <Stack.Screen name="(tabs)" />
         {/* Profile is a modal over the tabs, opened by the avatar on Home. */}
         <Stack.Screen name="profile" options={{ presentation: 'modal' }} />
@@ -82,16 +93,30 @@ function Routes() {
   );
 }
 
-export default function RootLayout() {
+function AppContent() {
+  const { session, profileState, loading } = useAuth();
+  const profileLoading = session != null && profileGate(true, profileState) === 'loading';
+
+  return (
+    <>
+      <StatusBar style="light" />
+      <InteractiveMarker loading={loading || profileLoading} />
+      <Routes />
+    </>
+  );
+}
+
+function RootLayout() {
   useEffect(() => startOutboxSync(), []);
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <AuthProvider>
-          <StatusBar style="light" />
-          <Routes />
+          <AppContent />
         </AuthProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }
+
+export default ObserveRoot.wrap(RootLayout);

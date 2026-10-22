@@ -1,4 +1,7 @@
 import { dayKey, daysSinceLast, recentDays, sessionTotals, streakDays, trainedDayKeys } from '@/lib/stats';
+import { gymExerciseId } from '@/lib/data/gym-routine-exercises';
+import { generateGymRoutine } from '@/lib/plan/gym-routine';
+import { estimateDay } from '@/lib/plan/estimate';
 
 const day = (offset: number) => {
   const d = new Date('2026-08-27T10:00:00');
@@ -39,6 +42,43 @@ describe('streakDays', () => {
 });
 
 describe('sessionTotals', () => {
+  it('matches the planned rep totals when every prescribed gym set is completed', () => {
+    for (const [dayIndex, day] of generateGymRoutine().days.entries()) {
+      const persisted = {
+        ...day, id: `day-${dayIndex}`, day_index: dayIndex,
+        blocks: day.blocks.map((block, index) => ({
+          ...block, id: `block-${index}`, block_index: index,
+          items: block.items.map((item, itemIndex) => ({ ...item, id: `item-${index}-${itemIndex}`, item_index: itemIndex })),
+        })),
+      };
+      const logs = day.blocks.filter((block) => block.kind !== 'warmup').flatMap((block) => block.items.flatMap((item) =>
+        Array.from({ length: block.kind === 'straight' ? item.sets : block.rounds }, () => ({
+          exercise_id: item.exercise_id,
+          reps: item.seconds != null ? null : Math.round((item.reps_low + item.reps_high) / 2),
+          weight_kg: 10, is_bodyweight: false, added_load_kg: 0,
+        })),
+      ));
+      expect(sessionTotals(logs, 80).reps).toBe(estimateDay(persisted).reps);
+    }
+  });
+
+  it('counts both sides in display totals while preserving logged per-side reps', () => {
+    const logs = [
+      { exercise_id: gymExerciseId('Bulgarian split squat'), reps: 4, weight_kg: 10, is_bodyweight: false, added_load_kg: 0 },
+      { exercise_id: gymExerciseId('Bulgarian split squat'), reps: 4, weight_kg: 10, is_bodyweight: false, added_load_kg: 0 },
+    ];
+    expect(sessionTotals(logs, 80)).toEqual({ sets: 2, reps: 16, volumeKg: 160 });
+    expect(logs.map((log) => log.reps)).toEqual([4, 4]);
+  });
+
+  it('keeps alternating total-rep prescriptions and unknown legacy exercises at one count', () => {
+    const logs = [
+      { exercise_id: gymExerciseId('Dumbbell squat to alternating overhead press'), reps: 6, weight_kg: 10, is_bodyweight: false, added_load_kg: 0 },
+      { exercise_id: 'unknown-legacy-id', reps: 4, weight_kg: 10, is_bodyweight: false, added_load_kg: 0 },
+    ];
+    expect(sessionTotals(logs, 80)).toEqual({ sets: 2, reps: 10, volumeKg: 100 });
+  });
+
   it('adds reps and tonnage', () => {
     const totals = sessionTotals(
       [

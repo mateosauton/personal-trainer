@@ -13,6 +13,7 @@ import {
   getActivePlan, getProgress, getSetLogs, type ProgressRow,
 } from '@/lib/db/queries';
 import { queueProgress } from '@/lib/session/sync';
+import { sessionTotals } from '@/lib/stats';
 import { nextLoad } from '@/lib/progression';
 import { colors, space, type } from '@/lib/theme';
 import { motion } from '@/lib/motion';
@@ -73,7 +74,7 @@ export default function SessionSummary() {
       for (const [exerciseId, sets] of grouped) {
         const exercise = getExercise(exerciseId);
         const loads = sets.map((s) => effectiveLoadKg(s, profile?.bodyweight_kg ?? null));
-        const volumeKg = sets.reduce((sum, s, i) => sum + (loads[i] ?? 0) * (s.reps ?? 0), 0);
+        const { volumeKg } = sessionTotals(sets, profile?.bodyweight_kg ?? null);
         const topLoadKg = loads.reduce<number | null>(
           (best, l) => (l != null && (best == null || l > best) ? l : best),
           null,
@@ -97,6 +98,7 @@ export default function SessionSummary() {
               exercise.pattern,
               workingLoad,
               { last_weight_kg: known?.last_weight_kg ?? null, miss_streak: known?.miss_streak ?? 0 },
+              units,
             )
           : null;
 
@@ -141,7 +143,7 @@ export default function SessionSummary() {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, userId, dayId, profile?.bodyweight_kg]);
+  }, [sessionId, userId, dayId, profile?.bodyweight_kg, units]);
 
   const save = async () => {
     setSaving(true);

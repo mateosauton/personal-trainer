@@ -1,9 +1,12 @@
 import * as Haptics from 'expo-haptics';
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ExerciseMedia } from '@/components/ExerciseMedia';
 import { Body, Button, Chip, Heading, Muted, Overline, ProgressBar } from '@/components/ui';
+import { formatClock } from '@/lib/plan/timing';
+import { pauseDeadline, remainingSeconds, resumeDeadline, startDeadline } from '@/lib/session/timing';
 import { colors, radius, space, type } from '@/lib/theme';
 import { displayToKg, formatWeight, step } from '@/lib/units';
 import type { Exercise, Units } from '@/lib/types';
@@ -36,6 +39,11 @@ interface Props {
   next: UpNext | null;
   onAdvance: () => void;
   advancing?: boolean;
+  paused?: boolean;
+  restLabel?: string;
+  readyLabel?: string;
+  timedSeconds?: number | null;
+  feedback?: ReactNode;
 }
 
 /**
@@ -58,19 +66,36 @@ export function RestPage({
   next,
   onAdvance,
   advancing,
+  paused = false,
+  restLabel,
+  readyLabel,
+  timedSeconds,
+  feedback,
 }: Props) {
-  const [remaining, setRemaining] = useState(restSeconds);
+  const [clock, setClock] = useState(() => startDeadline(restSeconds, Date.now()));
+  const [now, setNow] = useState(Date.now());
   const firedRef = useRef(false);
 
   useEffect(() => {
-    setRemaining(restSeconds);
+    const timestamp = Date.now();
+    const next = startDeadline(restSeconds, timestamp);
+    setClock(paused ? pauseDeadline(next, timestamp) : next);
+    setNow(timestamp);
     firedRef.current = false;
-    if (restSeconds <= 0) return;
-    const id = setInterval(() => {
-      setRemaining((value) => (value <= 0 ? 0 : value - 1));
-    }, 1000);
-    return () => clearInterval(id);
   }, [restSeconds]);
+
+  useEffect(() => {
+    const timestamp = Date.now();
+    setClock((current) => paused
+      ? pauseDeadline(current, timestamp)
+      : resumeDeadline(current, timestamp));
+    setNow(timestamp);
+    if (paused) return;
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [paused]);
+
+  const remaining = remainingSeconds(clock, now);
 
   // Buzz once at zero and then wait: auto-advancing would yank the screen away
   // from someone still walking back to the rack.
@@ -80,8 +105,6 @@ export function RestPage({
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }, [remaining]);
 
-  const minutes = Math.floor(remaining / 60);
-  const secs = remaining % 60;
   const done = remaining <= 0;
 
   const nudgeWeight = (delta: number) => {
@@ -100,7 +123,9 @@ export function RestPage({
       : null
     : displayToKg(draft.weight, units);
 
-  const advanceLabel = next ? (done ? 'Next set' : 'Skip rest') : 'Finish session';
+  const advanceLabel = readyLabel
+    ? (done ? readyLabel : 'Skip rest')
+    : next ? (done ? 'Next set' : 'Skip rest') : 'Finish session';
 
   return (
     <ScrollView
@@ -109,10 +134,8 @@ export function RestPage({
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.clockBlock}>
-        <Overline>{done ? 'Rest complete' : 'Resting'}</Overline>
-        <Text style={styles.clock}>
-          {minutes}:{String(secs).padStart(2, '0')}
-        </Text>
+        <Overline>{paused ? 'Timers paused' : restLabel ?? (done ? 'Rest complete' : 'Resting')}</Overline>
+        <Text style={styles.clock}>{formatClock(remaining)}</Text>
         <ProgressBar value={restSeconds <= 0 ? 1 : 1 - remaining / restSeconds} />
       </View>
 
@@ -123,14 +146,14 @@ export function RestPage({
         </Heading>
         <Muted style={{ marginTop: space.xs }}>Target {targetReps}</Muted>
 
-        <View style={styles.field}>
+        {timedSeconds == null ? <View style={styles.field}>
           <Overline>Reps</Overline>
           <View style={styles.stepperRow}>
             <Stepper label="−" onPress={() => nudgeReps(-1)} />
             <Text style={styles.numeral}>{draft.reps}</Text>
             <Stepper label="+" onPress={() => nudgeReps(1)} />
           </View>
-        </View>
+        </View> : <Muted style={{ marginTop: space.md }}>Timed set · {timedSeconds}s target</Muted>}
 
         <View style={styles.field}>
           <View style={styles.labelRow}>
@@ -164,6 +187,8 @@ export function RestPage({
         </View>
       </View>
 
+      {feedback ? <View style={{ marginTop: space.lg }}>{feedback}</View> : null}
+
       <View style={styles.upNext}>
         <Overline>Up next</Overline>
         {next ? (
@@ -194,6 +219,7 @@ export function RestPage({
         title={advanceLabel}
         variant={done || !next ? 'accent' : 'surface'}
         loading={advancing}
+        disabled={paused}
         onPress={onAdvance}
         style={{ marginTop: space.xl }}
       />

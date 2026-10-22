@@ -78,6 +78,8 @@ export interface PlanBlock {
   title: string;
   rounds: number;
   rest_seconds: number;
+  /** Planned wall-clock budget, including work, recovery and transitions. */
+  duration_seconds?: number | null;
   items: PlanItem[];
 }
 

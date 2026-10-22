@@ -30,6 +30,11 @@ jobs:
 
       - run: npm ci
 
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: 23.2.0
+          token: ${{ secrets.EXPO_TOKEN }}
+
       # Pages serves from /<repo>/, and Expo bakes that prefix into every asset
       # URL, so it is set here rather than committed — a root-hosted build of
       # the same commit (Vercel) must not carry it.
@@ -37,7 +42,7 @@ jobs:
         run: node .github/scripts/set-base-url.mjs "/${GITHUB_REPOSITORY#*/}"
 
       - name: Export the web build
-        run: npx expo export --platform web
+        run: npm run export:web
         env:
           EXPO_NO_TELEMETRY: '1'
 
@@ -69,7 +74,7 @@ jobs:
         run: |
           rm -rf dist
           node .github/scripts/set-base-url.mjs "/gh/${GITHUB_REPOSITORY}@cdn"
-          npx expo export --platform web
+          npm run export:web
         env:
           EXPO_NO_TELEMETRY: '1'
 

@@ -27,8 +27,10 @@ jobs:
 
       - uses: expo/expo-github-action@v8
         with:
-          eas-version: latest
+          eas-version: 23.2.0
           token: ${{ secrets.EXPO_TOKEN }}
 
       - name: Publish update
-        run: npx eas-cli update --branch production --message "${{ github.event.head_commit.message }}" --non-interactive
+        run: eas update --branch production --environment production --message "$UPDATE_MESSAGE" --non-interactive
+        env:
+          UPDATE_MESSAGE: ${{ github.event.head_commit.message || 'Publish production update' }}

@@ -1,6 +1,7 @@
 import { CATALOG } from '@/lib/catalog';
 import { bodyPartLabel, estimateDay, estimateVolumeKg } from '@/lib/plan/estimate';
 import type { PlanDay } from '@/lib/types';
+import { withDayTiming } from '@/lib/plan/timing';
 
 const barbell = CATALOG.find((e) => !e.is_bodyweight)!;
 const bodyweight = CATALOG.find((e) => e.is_bodyweight)!;
@@ -27,6 +28,24 @@ const day = (blocks: PlanDay['blocks']): PlanDay => ({
 });
 
 describe('estimateDay', () => {
+  it('uses timed block budgets rather than adding recovery a second time', () => {
+    const timed = withDayTiming(day([
+      ...['warmup', 'circuit', 'straight', 'circuit', 'circuit'].map((kind, index) => ({
+        id: `timed-${index}`, block_index: index, kind: kind as PlanDay['blocks'][number]['kind'],
+        title: 'Timed', rounds: 2, rest_seconds: 60, items: [item(), item(), item(), item()],
+      })),
+    ]));
+    expect(estimateDay(timed).minutes).toBe(47);
+  });
+
+  it('counts both sides when reps are prescribed per side', () => {
+    const unilateral = CATALOG.find((exercise) => exercise.is_unilateral)!;
+    const estimate = estimateDay(day([{
+      id: 'side', block_index: 0, kind: 'straight', title: 'Unilateral', rounds: 1,
+      rest_seconds: 0, items: [item({ exercise_id: unilateral.id, sets: 2, reps_low: 4, reps_high: 4 })],
+    }]));
+    expect(estimate.reps).toBe(16);
+  });
   it('counts straight sets and the middle of the rep range', () => {
     const estimate = estimateDay(
       day([

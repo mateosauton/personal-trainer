@@ -1,9 +1,11 @@
 import { differenceInCalendarDays, format } from 'date-fns';
 
 import { effectiveLoadKg } from './units';
+import { getExercise } from './catalog';
 
 /** A logged set as it comes back from `set_logs`. */
 export interface LoggedSet {
+  exercise_id?: string;
   reps: number | null;
   weight_kg: number | null;
   is_bodyweight: boolean;
@@ -66,13 +68,15 @@ export function daysSinceLast(days: Set<string>, today: Date = new Date()): numb
 /**
  * Reps and tonnage for a set of logs. Bodyweight movements count the user's
  * mass, the same way the summary screen and the progression rule do; with no
- * bodyweight on file they contribute reps but no volume.
+ * bodyweight on file they contribute reps but no volume. Unilateral logs keep
+ * reps per side for progression; display totals count both sides.
  */
 export function sessionTotals(logs: LoggedSet[], bodyweightKg: number | null): Totals {
   let reps = 0;
   let volumeKg = 0;
   for (const log of logs) {
-    const setReps = log.reps ?? 0;
+    const sides = log.exercise_id && getExercise(log.exercise_id)?.is_unilateral ? 2 : 1;
+    const setReps = (log.reps ?? 0) * sides;
     reps += setReps;
     const load = effectiveLoadKg(log, bodyweightKg);
     if (load != null) volumeKg += load * setReps;

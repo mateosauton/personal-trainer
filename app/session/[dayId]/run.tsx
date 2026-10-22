@@ -1,10 +1,11 @@
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import Animated, { ReduceMotion, SlideInRight, SlideOutLeft } from 'react-native-reanimated';
 
 import { ExerciseMedia } from '@/components/ExerciseMedia';
+import { ExerciseWeightProgressCard, WeightSuggestionCard } from '@/components/ExerciseWeight';
 import { Icon } from '@/components/Icon';
 import { RestPage, type SetDraft, type UpNext } from '@/components/RestPage';
 import {
@@ -13,19 +14,36 @@ import {
 import { confirm, notify } from '@/lib/alerts';
 import { useAuth, useUserId } from '@/lib/auth';
 import { getExercise } from '@/lib/catalog';
-import { getActivePlan, getProgress, type ProgressRow } from '@/lib/db/queries';
+import { getActivePlan, getProgress, getWeightHistory, type ProgressRow } from '@/lib/db/queries';
+import { formatClock, getBlockDurationSeconds } from '@/lib/plan/timing';
 import { flushOutbox, pendingSyncCount, queueCompletion, queueSet } from '@/lib/session/sync';
-import { buildQueue, partnerOf, type QueueEntry } from '@/lib/session/queue';
+import { buildQueue, type QueueEntry } from '@/lib/session/queue';
+import { pauseDeadline, remainingSeconds, resumeDeadline, startDeadline, type Deadline } from '@/lib/session/timing';
 import { colors, radius, space, type } from '@/lib/theme';
 import { motion } from '@/lib/motion';
-import { displayToKg, formatWeight, kgToDisplay } from '@/lib/units';
-import type { PlanDay, SetLog } from '@/lib/types';
+import { displayToKg, kgToDisplay } from '@/lib/units';
+import { exerciseWeightProgress, getWeightHistoryIds, getWeightSuggestion, type ExerciseWeightHistory } from '@/lib/weights';
+import type { PlanDay, SetLog, Units } from '@/lib/types';
 
-type Phase = 'work' | 'resting';
+type Phase = 'work' | 'resting' | 'recovering';
 
 const sameDraft = (a: SetDraft | null, b: SetDraft | null) =>
   a != null && b != null
   && a.reps === b.reps && a.weight === b.weight && a.asBodyweight === b.asBodyweight;
+
+const setLogFromDraft = (target: QueueEntry, value: SetDraft, units: Units): SetLog => {
+  const kg = displayToKg(value.weight, units);
+  return {
+    plan_item_id: target.item.id,
+    exercise_id: target.item.exercise_id,
+    set_index: target.set,
+    reps: target.item.seconds != null ? null : value.reps,
+    weight_kg: value.asBodyweight ? null : kg,
+    is_bodyweight: value.asBodyweight,
+    added_load_kg: value.asBodyweight ? kg : 0,
+    rpe: null,
+  };
+};
 
 export default function SessionRun() {
   const { dayId, sessionId } = useLocalSearchParams<{ dayId: string; sessionId: string }>();
@@ -35,36 +53,105 @@ export default function SessionRun() {
 
   const [day, setDay] = useState<PlanDay | null>(null);
   const [progress, setProgress] = useState<Map<string, ProgressRow>>(new Map());
+  const [history, setHistory] = useState<Map<string, ExerciseWeightHistory>>(new Map());
+  const [historyAvailable, setHistoryAvailable] = useState(true);
+  const [recordedSets, setRecordedSets] = useState<Map<string, SetLog>>(new Map());
+  const [workWeight, setWorkWeight] = useState<string | null>(null);
   const [cursor, setCursor] = useState(0);
   const [phase, setPhase] = useState<Phase>('work');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<SetDraft | null>(null);
   const [pendingSync, setPendingSync] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const [paused, setPaused] = useState(false);
+  const [sessionClock, setSessionClock] = useState<Deadline | null>(null);
+  const [blockClock, setBlockClock] = useState<Deadline | null>(null);
+  const [restSeconds, setRestSeconds] = useState(0);
   /** What is actually in set_logs for the set being rested on. */
   const savedRef = useRef<SetDraft | null>(null);
   const startedAt = useRef(Date.now());
   const completionStarted = useRef(false);
 
   useEffect(() => {
-    Promise.all([getActivePlan(userId), getProgress(userId)])
-      .then(([plan, rows]) => {
-        setDay(plan?.days.find((d) => d.id === dayId) ?? null);
-        setProgress(rows);
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+    setHistoryAvailable(true);
+    setDay(null);
+    setProgress(new Map());
+    setHistory(new Map());
+    setRecordedSets(new Map());
+    setWorkWeight(null);
+    setCursor(0);
+    setDraft(null);
+    setPhase('work');
+    completionStarted.current = false;
+    void (async () => {
+      const [plan, rows] = await Promise.all([getActivePlan(userId), getProgress(userId)]);
+      const selected = plan?.days.find((d) => d.id === dayId) ?? null;
+      const ids = [...new Set((selected?.blocks ?? [])
+        .filter((block) => block.kind !== 'warmup')
+        .flatMap((block) => block.items.flatMap((item) => getWeightHistoryIds(item.exercise_id))))];
+      let previous = new Map<string, ExerciseWeightHistory>();
+      let available = true;
+      try {
+        previous = await getWeightHistory(userId, ids, sessionId);
+      } catch {
+        available = false;
+      }
+      if (cancelled) return;
+      setDay(selected);
+      setProgress(rows);
+      setHistory(previous);
+      setHistoryAvailable(available);
+    })()
+      .catch((error: unknown) => {
+        if (!cancelled) setLoadError(error instanceof Error ? error.message : 'Could not load the session.');
       })
-      .finally(() => setLoading(false));
-  }, [userId, dayId]);
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [userId, dayId, sessionId]);
 
   const queue = useMemo(() => (day ? buildQueue(day) : []), [day]);
   const entry: QueueEntry | undefined = queue[cursor];
   const finished = !loading && queue.length > 0 && cursor >= queue.length;
+  const plannedSeconds = day?.blocks.reduce((sum, block) => sum + (getBlockDurationSeconds(block) ?? 0), 0) ?? 0;
+
+  useEffect(() => {
+    if (!day) return;
+    const timestamp = Date.now();
+    startedAt.current = timestamp;
+    setSessionClock(startDeadline(plannedSeconds, timestamp));
+    setNow(timestamp);
+  }, [day, plannedSeconds]);
+
+  useEffect(() => {
+    if (!entry) return;
+    const duration = getBlockDurationSeconds(entry.block);
+    const timestamp = Date.now();
+    const clock = duration == null ? null : startDeadline(duration, timestamp);
+    setBlockClock(clock && paused ? pauseDeadline(clock, timestamp) : clock);
+    setNow(timestamp);
+  }, [entry?.block.id]);
+
+  useEffect(() => {
+    if (loading || paused || finished) return;
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [loading, paused, finished]);
+
+  const activeElapsed = (timestamp: number) => sessionClock
+    ? Math.max(0, Math.floor(plannedSeconds + ((sessionClock.pausedAt ?? timestamp) - sessionClock.endAt) / 1000))
+    : Math.max(0, Math.floor((timestamp - startedAt.current) / 1000));
 
   // Running off the end means everything is logged. Navigating is a side
   // effect, so it belongs here and not in the render pass.
   useEffect(() => {
     if (!finished || completionStarted.current) return;
     completionStarted.current = true;
-    const elapsed = Math.max(1, Math.round((Date.now() - startedAt.current) / 1000));
+    const elapsed = Math.max(1, activeElapsed(Date.now()));
     void queueCompletion(sessionId, elapsed)
       .then(() => flushOutbox())
       .then(() => {
@@ -78,7 +165,25 @@ export default function SessionRun() {
 
   const units = profile?.units ?? 'kg';
   const exercise = entry ? getExercise(entry.item.exercise_id) : null;
-  const known = entry ? progress.get(entry.item.exercise_id) : undefined;
+  const suggestion = exercise ? getWeightSuggestion(exercise, progress, history) : {
+    weightKg: null, source: 'new' as const, sourceExerciseId: null, previousWeightKg: null,
+  };
+  const exerciseSets = entry ? [...recordedSets.values()]
+    .filter((set) => set.exercise_id === entry.item.exercise_id) : [];
+  const matchingSets = exerciseSets.filter((set) => set.is_bodyweight === (exercise?.is_bodyweight ?? false));
+  const latestSet = matchingSets[matchingSets.length - 1];
+  const latestWeightKg = latestSet
+    ? latestSet.is_bodyweight ? latestSet.added_load_kg : latestSet.weight_kg
+    : null;
+  const defaultWeightKg = latestWeightKg ?? suggestion.weightKg;
+  const displayedSuggestion = latestWeightKg == null ? suggestion : {
+    ...suggestion, weightKg: latestWeightKg, source: 'session' as const,
+    sourceExerciseId: entry?.item.exercise_id ?? null,
+  };
+  const weightText = workWeight ?? (defaultWeightKg == null
+    ? '' : String(Math.round(kgToDisplay(defaultWeightKg, units) * 10) / 10));
+  const enteredWeight = Number(weightText.trim().replace(',', '.'));
+  const validWeight = weightText.trim() !== '' && Number.isFinite(enteredWeight) && enteredWeight >= 0;
 
   /**
    * Writes the set. Upserting on (session, item, set index) means the first
@@ -86,18 +191,7 @@ export default function SessionRun() {
    */
   const save = useCallback(
     async (target: QueueEntry, value: SetDraft): Promise<boolean> => {
-      const kg = displayToKg(value.weight, units);
-      const set: SetLog = {
-        plan_item_id: target.item.id,
-        exercise_id: target.item.exercise_id,
-        set_index: target.set,
-        reps: value.reps,
-        weight_kg: value.asBodyweight ? null : kg,
-        is_bodyweight: value.asBodyweight,
-        added_load_kg: value.asBodyweight ? kg : 0,
-        // The effort scale is gone; progression treats a null as manageable.
-        rpe: null,
-      };
+      const set = setLogFromDraft(target, value, units);
       try {
         await queueSet(sessionId, set);
         setPendingSync(await pendingSyncCount());
@@ -105,19 +199,11 @@ export default function SessionRun() {
         notify('Could not save that set', e instanceof Error ? e.message : 'Try again.');
         return false;
       }
-      // Keep the prefill fresh so later sets of the same exercise suggest what
-      // was actually just lifted, not what the previous session did.
-      setProgress((prev) => {
+      // Corrections replace a set; historical targets and comparison baselines
+      // stay unchanged throughout this workout.
+      setRecordedSets((prev) => {
         const map = new Map(prev);
-        const existing = map.get(target.item.exercise_id);
-        map.set(target.item.exercise_id, {
-          exercise_id: target.item.exercise_id,
-          last_weight_kg: kg,
-          last_reps: value.reps,
-          best_weight_kg: existing?.best_weight_kg ?? null,
-          best_e1rm: existing?.best_e1rm ?? null,
-          miss_streak: existing?.miss_streak ?? 0,
-        });
+        map.set(target.key, set);
         return map;
       });
       return true;
@@ -137,6 +223,7 @@ export default function SessionRun() {
     return (
       <Screen>
         <Display>Session unavailable.</Display>
+        {loadError ? <Muted style={{ marginTop: space.md }}>{loadError}</Muted> : null}
         <Button title="Back" variant="surface" onPress={() => router.back()} style={{ marginTop: space.xl }} />
       </Screen>
     );
@@ -151,15 +238,19 @@ export default function SessionRun() {
     );
   }
 
-  const partner = partnerOf(entry);
-  const partnerExercise = partner ? getExercise(partner.exercise_id) : null;
   const isWarmup = entry.block.kind === 'warmup';
+  const blockDuration = getBlockDurationSeconds(entry.block);
+  const blockRemaining = blockClock ? remainingSeconds(blockClock, now) : 0;
+  const blockOvertime = blockClock
+    ? Math.max(0, Math.floor(((blockClock.pausedAt ?? now) - blockClock.endAt) / 1000))
+    : 0;
 
   const targetReps = entry.item.seconds
     ? `${entry.item.seconds}s`
-    : `${entry.item.reps_low}–${entry.item.reps_high} reps`;
+    : `${entry.item.reps_low === entry.item.reps_high ? entry.item.reps_low : `${entry.item.reps_low}–${entry.item.reps_high}`} reps`;
 
   const advance = () => {
+    setWorkWeight(null);
     setDraft(null);
     savedRef.current = null;
     setPhase('work');
@@ -167,6 +258,10 @@ export default function SessionRun() {
   };
 
   const nextEntry = queue[cursor + 1];
+  const endsBlock = !nextEntry || nextEntry.block.id !== entry.block.id;
+  const partnerExercise = !endsBlock && (entry.block.kind === 'circuit' || entry.block.kind === 'superset')
+    ? getExercise(nextEntry.item.exercise_id)
+    : null;
   const upNext: UpNext | null = nextEntry
     ? {
         exercise: getExercise(nextEntry.item.exercise_id) ?? null,
@@ -178,12 +273,11 @@ export default function SessionRun() {
 
   /** Complete set: log what we already know, then hand over to the rest page. */
   const completeSet = async () => {
+    if (!validWeight || busy) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const seed: SetDraft = {
-      reps: known?.last_reps ?? entry.item.reps_high ?? 10,
-      weight: known?.last_weight_kg != null
-        ? Math.round(kgToDisplay(known.last_weight_kg, units) * 10) / 10
-        : 0,
+      reps: entry.item.seconds != null ? 0 : latestSet?.reps ?? entry.item.reps_high ?? 10,
+      weight: enteredWeight,
       asBodyweight: exercise?.is_bodyweight ?? false,
     };
     setBusy(true);
@@ -192,7 +286,30 @@ export default function SessionRun() {
     if (!ok) return;
     setDraft(seed);
     savedRef.current = seed;
+    // The final recovery belongs to this block's time budget. Moving through
+    // the sets quickly does not silently remove its planned recovery.
+    setRestSeconds(blockClock && endsBlock
+      ? remainingSeconds(blockClock, Date.now())
+      : entry.restSeconds ?? entry.block.rest_seconds);
     setPhase('resting');
+  };
+
+  const completeWarmup = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (blockClock && endsBlock && blockRemaining > 0) {
+      setPhase('recovering');
+      return;
+    }
+    advance();
+  };
+
+  const togglePause = () => {
+    const timestamp = Date.now();
+    const update = paused ? resumeDeadline : pauseDeadline;
+    setSessionClock((clock) => clock ? update(clock, timestamp) : null);
+    setBlockClock((clock) => clock ? update(clock, timestamp) : null);
+    setNow(timestamp);
+    setPaused(!paused);
   };
 
   /** Leaving rest: flush any correction the user made before moving on. */
@@ -220,6 +337,14 @@ export default function SessionRun() {
   };
 
   const resting = phase === 'resting' && draft != null;
+  const exerciseComplete = resting && !queue.slice(cursor + 1).some((next) =>
+    next.block.kind !== 'warmup' && next.item.exercise_id === entry.item.exercise_id);
+  const feedbackSets = draft
+    ? [...exerciseSets.filter((set) => !(set.plan_item_id === entry.item.id && set.set_index === entry.set)),
+      setLogFromDraft(entry, draft, units)]
+    : exerciseSets;
+  const matchingFeedbackSets = feedbackSets.filter((set) => set.is_bodyweight === draft?.asBodyweight);
+  const comparableHistory = historyAvailable && draft?.asBodyweight === (exercise?.is_bodyweight ?? false);
 
   return (
     <Screen scroll={false} style={{ padding: space.lg }}>
@@ -234,12 +359,50 @@ export default function SessionRun() {
           </Overline>
           <ProgressBar value={(cursor + (resting ? 1 : 0)) / queue.length} />
         </View>
-        <Pressable onPress={quit} hitSlop={12} accessibilityLabel="Leave session">
+        <Pressable onPress={quit} hitSlop={12} accessibilityRole="button" accessibilityLabel="Leave session">
           <Icon name="close" size={22} color={colors.muted} />
         </Pressable>
       </View>
 
-      {resting ? (
+      <View style={styles.timers}>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Overline>{blockDuration == null ? 'Session' : `${entry.block.title} · ${formatClock(blockDuration)}`}</Overline>
+          {blockDuration != null ? (
+            <Body style={[styles.blockClock, blockOvertime > 0 && { color: colors.warn }]}>
+              {blockOvertime > 0 ? `${formatClock(blockOvertime)} overtime` : `${formatClock(blockRemaining)} remaining`}
+            </Body>
+          ) : null}
+          <Muted>{formatClock(activeElapsed(now))} elapsed</Muted>
+          {plannedSeconds > 0 ? <Muted>{formatClock(plannedSeconds)} target</Muted> : null}
+        </View>
+        <Button
+          title={paused ? 'Resume' : 'Pause'}
+          variant="surface"
+          accessibilityLabel={paused ? 'Resume timers' : 'Pause timers'}
+          onPress={togglePause}
+          disabled={busy}
+          style={styles.pause}
+        />
+      </View>
+
+      {blockOvertime > 0 && phase === 'work' ? (
+        <Muted style={{ marginTop: space.sm }}>Finish your planned sets at a controlled pace.</Muted>
+      ) : null}
+
+      {phase === 'recovering' ? (
+        <View style={styles.recovery}>
+          <Heading>Block complete · recover</Heading>
+          <Muted>Rest and prepare your equipment for {nextEntry?.block.title ?? 'the end of your session'}.</Muted>
+          {upNext ? <Body>Up next · {upNext.name}</Body> : null}
+          <Button
+            title={blockRemaining > 0 ? 'Skip rest' : nextEntry ? 'Next block' : 'Finish session'}
+            variant={blockRemaining > 0 ? 'surface' : 'accent'}
+            disabled={paused}
+            onPress={advance}
+          />
+          {blockRemaining > 0 ? <Muted>Skipping recovery shortens the session target.</Muted> : null}
+        </View>
+      ) : resting ? (
         <Animated.View
           key={`rest:${entry.key}`}
           entering={SlideInRight.duration(motion.base).springify().damping(motion.settle.damping).reduceMotion(ReduceMotion.System)}
@@ -251,42 +414,74 @@ export default function SessionRun() {
             targetReps={targetReps}
             units={units}
             bodyweightKg={profile?.bodyweight_kg ?? null}
-            restSeconds={entry.block.rest_seconds}
+            restSeconds={restSeconds}
             draft={draft}
             onChange={setDraft}
             next={upNext}
             onAdvance={leaveRest}
             advancing={busy}
+            paused={paused}
+            restLabel={blockDuration != null && endsBlock ? 'Block complete · recover' : undefined}
+            readyLabel={blockDuration != null && endsBlock ? nextEntry ? 'Next block' : 'Finish session' : undefined}
+            timedSeconds={entry.item.seconds}
+            feedback={exerciseComplete ? (
+              <ExerciseWeightProgressCard
+                progress={exerciseWeightProgress(matchingFeedbackSets, comparableHistory ? suggestion.previousWeightKg : null)}
+                units={units}
+                isBodyweight={draft.asBodyweight}
+                setsCompleted={matchingFeedbackSets.length}
+                historyAvailable={comparableHistory}
+              />
+            ) : undefined}
           />
         </Animated.View>
       ) : (
         <>
+          <ScrollView style={styles.flex} contentContainerStyle={styles.workContent} showsVerticalScrollIndicator={false}>
           <Animated.View
             key={entry.key}
             entering={SlideInRight.duration(motion.base).springify().damping(motion.settle.damping).reduceMotion(ReduceMotion.System)}
             exiting={SlideOutLeft.duration(motion.fast).reduceMotion(ReduceMotion.System)}
             style={styles.body}
           >
-            {exercise ? <ExerciseMedia exercise={exercise} style={styles.media} /> : null}
+            {exercise?.media_refs.start ? <ExerciseMedia exercise={exercise} style={styles.media} paused={paused} /> : null}
 
             <View style={{ gap: space.xs, marginTop: space.lg }}>
-              <Heading numberOfLines={2}>{exercise?.name ?? entry.item.exercise_id}</Heading>
+              <Heading>{exercise?.name ?? entry.item.exercise_id}</Heading>
               <Body style={styles.target}>{targetReps}</Body>
               {entry.item.notes ? <Muted>{entry.item.notes}</Muted> : null}
-              {known?.last_weight_kg != null ? (
-                <Muted>Last time · {formatWeight(known.last_weight_kg, units)}</Muted>
+              {entry.slotSeconds != null ? <Muted>Set window {formatClock(entry.slotSeconds)} · includes work and recovery</Muted> : null}
+              {exercise?.instructions?.length && !exercise.media_refs.start ? (
+                <Muted>{exercise.instructions.join(' ')}</Muted>
               ) : null}
             </View>
 
+            {!isWarmup ? (
+              <WeightSuggestionCard
+                suggestion={displayedSuggestion}
+                units={units}
+                value={weightText}
+                onChangeText={setWorkWeight}
+                isBodyweight={exercise?.is_bodyweight ?? false}
+                sourceName={displayedSuggestion.sourceExerciseId && displayedSuggestion.sourceExerciseId !== exercise?.id
+                  ? getExercise(displayedSuggestion.sourceExerciseId)?.name : undefined}
+                disabled={paused || busy}
+              />
+            ) : null}
+            {!historyAvailable && !isWarmup ? (
+              <Muted style={{ marginTop: space.sm }}>Earlier workout weights are unavailable. You can enter today's weight.</Muted>
+            ) : null}
+
             {partnerExercise ? (
               <View style={styles.partner}>
-                <Overline>Then straight into</Overline>
+                <Overline>{blockDuration != null ? 'Next in rotation' : 'Then straight into'}</Overline>
                 <Body style={styles.partnerName} numberOfLines={1}>
                   {partnerExercise.name}
                 </Body>
               </View>
             ) : null}
           </Animated.View>
+          </ScrollView>
 
           <View style={styles.footer}>
             <Overline style={{ textAlign: 'center' }}>
@@ -295,10 +490,10 @@ export default function SessionRun() {
             <Button
               title={isWarmup ? 'Done' : 'Complete set'}
               loading={busy}
+              disabled={paused || (!isWarmup && !validWeight)}
               onPress={() => {
                 if (isWarmup) {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  advance();
+                  completeWarmup();
                   return;
                 }
                 completeSet();
@@ -317,8 +512,17 @@ const styles = StyleSheet.create({
   center: { alignItems: 'center', justifyContent: 'center' },
   flex: { flex: 1 },
   header: { flexDirection: 'row', alignItems: 'center', gap: space.lg },
-  body: { flex: 1, justifyContent: 'center' },
-  media: { width: '100%' },
+  body: { flex: 1, justifyContent: 'center', gap: space.md },
+  workContent: { flexGrow: 1, paddingVertical: space.md },
+  media: { width: '100%', aspectRatio: 1.4 },
+  timers: {
+    flexDirection: 'row', alignItems: 'center', gap: space.md,
+    padding: space.md, marginTop: space.md, borderRadius: radius.md,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
+  },
+  blockClock: { ...type.heading, color: colors.accent, fontVariant: ['tabular-nums'] },
+  pause: { minWidth: 86, paddingHorizontal: space.md },
+  recovery: { flex: 1, justifyContent: 'center', gap: space.lg },
   target: { ...type.title, color: colors.accent },
   partner: {
     marginTop: space.lg,

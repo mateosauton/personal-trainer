@@ -9,6 +9,7 @@ import { useUserId } from '@/lib/auth';
 import { getExercise } from '@/lib/catalog';
 import { getActivePlan, startSession } from '@/lib/db/queries';
 import { prefetchUrls } from '@/lib/media/provider';
+import { formatClock, getBlockDurationSeconds } from '@/lib/plan/timing';
 import { colors, space, type } from '@/lib/theme';
 import type { PlanDay } from '@/lib/types';
 
@@ -69,39 +70,50 @@ export default function SessionOverview() {
       setStarting(false);
     }
   };
+  const targetSeconds = day.blocks.reduce((sum, block) => sum + (getBlockDurationSeconds(block) ?? 0), 0);
 
   return (
     <Screen>
       <Overline>Up next</Overline>
       <Display style={{ marginTop: space.sm }}>{day.name}</Display>
       <Muted style={{ marginTop: space.sm }}>{day.focus}</Muted>
+      {targetSeconds > 0 ? (
+        <View style={{ marginTop: space.lg, gap: space.sm }}>
+          <Body>{Math.round(targetSeconds / 60)} min target · {day.blocks.filter((block) => block.kind !== 'warmup').length} timed blocks</Body>
+          <Muted>Work, recovery and equipment changes share each block's time. Rest windows adapt to the exercises and reps. Complete every set manually.</Muted>
+        </View>
+      ) : null}
 
       <View style={{ gap: space.lg, marginTop: space.xl }}>
         {day.blocks.map((block) => (
           <Card key={block.id}>
-            <Overline>{block.title}</Overline>
+            <Overline>{block.title}{getBlockDurationSeconds(block) != null ? ` · ${formatClock(getBlockDurationSeconds(block)!)}` : ''}</Overline>
             <Muted style={{ marginTop: 2 }}>
-              {block.kind === 'warmup'
+              {getBlockDurationSeconds(block) != null
+                ? block.kind === 'warmup' ? 'Move through once · easy pace'
+                  : block.kind === 'straight' ? 'Finish each exercise’s sets, then move on · timed recovery'
+                    : `${block.rounds} round${block.rounds === 1 ? '' : 's'} · rotate exercises · timed recovery`
+                : block.kind === 'warmup'
                 ? 'Move through once'
                 : block.kind === 'straight'
                   ? `Rest ${block.rest_seconds}s between sets`
-                  : `${block.rounds} rounds · rest ${block.rest_seconds}s`}
+                  : `${block.rounds} round${block.rounds === 1 ? '' : 's'} · rest ${block.rest_seconds}s`}
             </Muted>
 
             <View style={{ gap: space.md, marginTop: space.lg }}>
               {block.items.map((item) => {
                 const exercise = getExercise(item.exercise_id);
                 if (!exercise) return null;
+                const sets = block.kind === 'straight' || block.kind === 'warmup' ? item.sets : block.rounds;
+                const reps = item.reps_low === item.reps_high ? `${item.reps_low}` : `${item.reps_low}–${item.reps_high}`;
                 const dose = item.seconds
-                  ? `${item.seconds}s`
-                  : block.kind === 'straight'
-                    ? `${item.sets} × ${item.reps_low}–${item.reps_high}`
-                    : `${item.reps_low}–${item.reps_high}`;
+                  ? `${sets} × ${item.seconds}s`
+                  : `${sets} × ${reps}`;
                 return (
                   <View key={item.id} style={styles.itemRow}>
                     <ExerciseMedia exercise={exercise} style={styles.thumb} paused />
                     <View style={{ flex: 1, gap: 2 }}>
-                      <Body style={styles.itemName} numberOfLines={2}>
+                      <Body style={styles.itemName}>
                         {exercise.name}
                       </Body>
                       <Muted>

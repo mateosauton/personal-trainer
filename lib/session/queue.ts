@@ -1,4 +1,5 @@
 import type { PlanBlock, PlanDay, PlanItem } from '@/lib/types';
+import { estimateSetWorkSeconds, getBlockDurationSeconds, proportionalSeconds } from '@/lib/plan/timing';
 
 /**
  * One thing the user does: a single set of a single exercise. Flattening the
@@ -17,6 +18,10 @@ export interface QueueEntry {
   setsTotal: number;
   blockOrdinal: number;
   blockCount: number;
+  /** Timed blocks divide their complete budget across the prescribed sets. */
+  slotSeconds?: number;
+  workSeconds?: number;
+  restSeconds?: number;
 }
 
 export function buildQueue(day: PlanDay): QueueEntry[] {
@@ -58,14 +63,35 @@ export function buildQueue(day: PlanDay): QueueEntry[] {
       }
     }
   }
+
+  for (const block of day.blocks) {
+    const duration = getBlockDurationSeconds(block);
+    if (duration == null) continue;
+    const blockEntries = entries.filter((entry) => entry.block.id === block.id);
+    const work = blockEntries.map((entry) => estimateSetWorkSeconds(entry.item));
+    const weights = blockEntries.map((entry, index) => {
+      const betweenRounds = index % block.items.length === block.items.length - 1;
+      const recovery = block.kind === 'warmup' ? 0
+        : block.kind === 'straight' || betweenRounds ? block.rest_seconds : 10;
+      return work[index] + recovery;
+    });
+    const slots = proportionalSeconds(duration, weights);
+    blockEntries.forEach((entry, index) => {
+      entry.slotSeconds = slots[index];
+      entry.workSeconds = Math.min(work[index], slots[index]);
+      entry.restSeconds = slots[index] - entry.workSeconds;
+    });
+  }
   return entries;
 }
 
-/** The other exercise in a superset, shown as a peek card. */
+/** The next movement in this round, or the first movement of the next round. */
 export function partnerOf(entry: QueueEntry): PlanItem | null {
   if (entry.block.kind !== 'superset' && entry.block.kind !== 'circuit') return null;
-  const others = entry.block.items.filter((i) => i.id !== entry.item.id);
-  return others[0] ?? null;
+  const index = entry.block.items.findIndex((item) => item.id === entry.item.id);
+  if (index < 0) return null;
+  return entry.block.items[index + 1]
+    ?? (entry.round < entry.block.rounds ? entry.block.items[0] ?? null : null);
 }
 
 export type { PlanBlock, PlanItem };
