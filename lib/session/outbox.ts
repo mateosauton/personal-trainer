@@ -222,20 +222,21 @@ export class Outbox {
     });
   }
 
-  flush(): Promise<void> {
+  flush(excludedSessions: ReadonlySet<string> = new Set()): Promise<void> {
     if (!this.flushing) {
-      this.flushing = this.drain().finally(() => {
+      this.flushing = this.drain(excludedSessions).finally(() => {
         this.flushing = null;
       });
     }
     return this.flushing;
   }
 
-  private async drain() {
+  private async drain(excludedSessions: ReadonlySet<string>) {
     while (true) {
       const operation = await this.exclusive(
         async () => {
-          const items = await this.read();
+          const items = (await this.read()).filter(item =>
+            !excludedSessions.has(String(item.payload.sessionId ?? '')));
           // Recovered journal writes may have been appended after completion.
           // Parents and all sets must reach the server before finalization.
           return items.find(item => item.kind === 'start')

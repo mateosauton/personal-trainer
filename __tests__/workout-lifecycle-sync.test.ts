@@ -4,6 +4,8 @@ import { buildQueue } from '@/lib/session/queue';
 import { planCache } from '@/lib/session/plan-cache';
 import type { PlanDay } from '@/lib/types';
 import * as sync from '@/lib/session/sync';
+import { readRecoveryData } from '@/lib/session/recovery-data';
+import { supabase } from '@/lib/db/supabase';
 
 const owner = '00000001-1111-4111-8111-000000000001';
 const day: PlanDay = { id: '00000002-1111-4111-8111-000000000002', day_index: 0, name: 'Push', focus: 'Push', blocks: [
@@ -173,4 +175,139 @@ it('captures the home timezone and original calculation context for restart repl
     context: { units: 'lb', bodyweightKg: 80 },
     expectedItems: [{ id: day.blocks[0].items[0].id, exercise_id: day.blocks[0].items[0].exercise_id }],
   }), expect.anything(), expect.any(AbortSignal));
+});
+
+it('stops replaying a rejected start until the user reviews its frozen snapshot', async () => {
+  mockStart.mockRejectedValue({ code: 'PT409', message: 'This plan changed.' });
+  await begin();
+  await sync.flushOutbox();
+  const attempts = mockStart.mock.calls.length;
+  await sync.flushOutbox();
+  expect(mockStart).toHaveBeenCalledTimes(attempts);
+});
+
+const savedSet = () => ({ plan_item_id: day.blocks[0].items[0].id,
+  exercise_id: day.blocks[0].items[0].exercise_id, set_index: 1, reps: 8,
+  weight_kg: 60, is_bodyweight: false, added_load_kg: 0, rpe: null });
+const rejectedStart = async () => {
+  mockStart.mockRejectedValue({ code: 'PT409', message: 'This plan changed.' });
+  const saved = await begin(); await sync.flushOutbox();
+  return saved;
+};
+
+it('archives the full rejected workout before freeing its slot and leaves all raw captures exportable', async () => {
+  const saved = await rejectedStart();
+  await sync.queueSet(owner, saved.sessionId, savedSet());
+  await sync.flushOutbox();
+  const withSets = await workouts.update(owner, saved.sessionId, { cursor: 0, phase: 'work' }, {
+    draft: { reps: 8, weight: 60, asBodyweight: false }, recordedSets: [['saved', savedSet()]],
+  });
+  const [review] = await sync.getRejectedStarts(owner);
+  const journalKey = `office-gym.set-journal.v1.${owner}`;
+  const queueKey = `office-gym.session-outbox.v2.${owner}`;
+  const originalJournal = values.get(journalKey), originalQueue = values.get(queueKey);
+  await sync.archiveRejectedWorkout(owner, review);
+  await sync.flushOutbox();
+  expect(await workouts.read(owner)).toBeNull();
+  const exported = await readRecoveryData(AsyncStorage, owner);
+  const records = JSON.parse(exported.records[`office-gym.archived-workouts.v1.${owner}`]!);
+  expect(records[0].workout).toEqual(withSets);
+  expect(records[0].records[`office-gym.active-workout.v1.${owner}`]).toBe(JSON.stringify(withSets));
+  expect(records[0].records[journalKey]).toBe(originalJournal);
+  expect(values.get(journalKey)).toBe(originalJournal);
+  expect(values.get(queueKey)).toBe(originalQueue);
+  expect(await sync.getSyncStatus(owner)).toMatchObject({ pending: 0, rejected: 0, archived: 1 });
+  await expect(sync.queueSet(owner, saved.sessionId, savedSet())).rejects.toThrow('archived');
+  mockStart.mockImplementation(async input => input.sessionId);
+  const next = await begin(); await sync.flushOutbox();
+  expect(next.sessionId).not.toBe(saved.sessionId);
+  expect(mockLog).not.toHaveBeenCalled();
+});
+
+it('keeps the active workout and review when its recovery archive cannot be persisted', async () => {
+  const saved = await rejectedStart();
+  const [review] = await sync.getRejectedStarts(owner);
+  jest.mocked(AsyncStorage.setItem).mockImplementation(async (key, value) => {
+    if (key === `office-gym.archived-workouts.v1.${owner}`) throw new Error('disk full');
+    values.set(key, value);
+  });
+  await expect(sync.archiveRejectedWorkout(owner, review)).rejects.toThrow('disk full');
+  expect(await workouts.read(owner)).toEqual(saved);
+  expect(await sync.getRejectedStarts(owner)).toEqual([review]);
+  expect((await begin()).sessionId).toBe(saved.sessionId);
+  await sync.flushOutbox();
+});
+
+it('keeps a failed-clear archive review available and avoids nesting prior archives on retry', async () => {
+  const saved = await rejectedStart();
+  const [review] = await sync.getRejectedStarts(owner);
+  let fail = true;
+  jest.mocked(AsyncStorage.setItem).mockImplementation(async (key, value) => {
+    if (key === `office-gym.active-workout.v1.${owner}` && value === 'null' && fail) throw new Error('clear failed');
+    values.set(key, value);
+  });
+  await expect(sync.archiveRejectedWorkout(owner, review)).rejects.toThrow('clear failed');
+  expect(await sync.getRejectedStarts(owner)).toEqual([review]);
+  expect(await sync.getSyncStatus(owner)).toMatchObject({ rejected: 1, archived: 1 });
+  expect(await sync.failedSyncCount('unrelated-session')).toBe(0);
+  expect((await begin()).sessionId).toBe(saved.sessionId);
+  await sync.flushOutbox();
+  fail = false;
+  await sync.archiveRejectedWorkout(owner, review); await sync.flushOutbox();
+  expect(await workouts.read(owner)).toBeNull();
+  const key = `office-gym.archived-workouts.v1.${owner}`;
+  const archives = JSON.parse(values.get(key)!);
+  expect(archives).toHaveLength(2);
+  expect(archives.every((row: { records: Record<string, unknown> }) => !(key in row.records))).toBe(true);
+});
+
+it('requires a new review if the local workout changes after its archive is written', async () => {
+  const saved = await rejectedStart();
+  const [review] = await sync.getRejectedStarts(owner);
+  const originalClear = workouts.clear.bind(workouts);
+  const clearing = jest.spyOn(workouts, 'clear').mockImplementationOnce(async (user, session, expected) => {
+    await workouts.update(user, session, { cursor: 0, phase: 'work' }, { draft: { reps: 9, weight: 65, asBodyweight: false } });
+    return originalClear(user, session, expected);
+  });
+  try {
+    await expect(sync.archiveRejectedWorkout(owner, review)).rejects.toThrow('changed');
+    expect((await workouts.read(owner))?.draft?.weight).toBe(65);
+    const [latest] = await sync.getRejectedStarts(owner);
+    expect(latest.workout.draft?.weight).toBe(65);
+    await expect(sync.archiveRejectedWorkout(owner, review)).rejects.toThrow('changed');
+    expect((await begin()).sessionId).toBe(saved.sessionId);
+    await sync.archiveRejectedWorkout(owner, latest); await sync.flushOutbox();
+    expect(await workouts.read(owner)).toBeNull();
+    const archives = JSON.parse(values.get(`office-gym.archived-workouts.v1.${owner}`)!);
+    expect(archives[archives.length - 1].workout.draft.weight).toBe(65);
+  } finally { clearing.mockRestore(); }
+});
+
+it('rejects an old account-generation archive choice without changing saved data', async () => {
+  const saved = await rejectedStart();
+  const [review] = await sync.getRejectedStarts(owner);
+  sync.setSyncAccount('other-account'); sync.setSyncAccount(owner);
+  await expect(sync.archiveRejectedWorkout(owner, review)).rejects.toThrow('account changed');
+  expect(await workouts.read(owner)).toEqual(saved);
+  expect(values.has(`office-gym.archived-workouts.v1.${owner}`)).toBe(false);
+});
+
+it('does not send a captured set after its parent is explicitly archived during auth lookup', async () => {
+  const saved = await rejectedStart();
+  let entered!: () => void;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  let release!: (value: Awaited<ReturnType<typeof supabase.auth.getSession>>) => void;
+  const auth = jest.spyOn(supabase.auth, 'getSession').mockImplementationOnce(() => {
+    entered(); return new Promise(resolve => { release = resolve; });
+  });
+  try {
+    await sync.queueSet(owner, saved.sessionId, savedSet());
+    await reading;
+    const [review] = await sync.getRejectedStarts(owner);
+    await sync.archiveRejectedWorkout(owner, review);
+    release({ data: { session: { user: { id: owner }, access_token: `token-${owner}` } }, error: null } as Awaited<ReturnType<typeof supabase.auth.getSession>>);
+    await sync.flushOutbox();
+    expect(mockLog).not.toHaveBeenCalled();
+    expect(await sync.getSyncStatus(owner)).toMatchObject({ pending: 0, rejected: 0, archived: 1 });
+  } finally { auth.mockRestore(); }
 });

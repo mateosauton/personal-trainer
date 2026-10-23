@@ -60,6 +60,10 @@ export default function Home() {
     error,
     reload,
   } = useDashboard(userId, bodyweightKg, profile?.home_timezone);
+  const onWorkoutArchived = useCallback(() => {
+    setResumeAttempt((attempt) => attempt + 1);
+    reload();
+  }, [reload]);
 
   useEffect(() => {
     if (loading || error) return;
@@ -150,7 +154,7 @@ export default function Home() {
   if (loading) {
     return (
       <Screen scroll={false}>
-        <SyncRecovery userId={userId} />
+        <SyncRecovery userId={userId} onArchived={onWorkoutArchived} />
         {resumeCard}
         <ActivityIndicator color={colors.accent} />
       </Screen>
@@ -165,7 +169,7 @@ export default function Home() {
           avatarUrl={profile?.avatar_url ?? null}
           subtitle={subtitle}
         />
-        <SyncRecovery userId={userId} />
+        <SyncRecovery userId={userId} onArchived={onWorkoutArchived} />
         {resumeCard}
         <Card style={{ marginTop: space.xl, gap: space.md }}>
           <Overline>No plan yet</Overline>
@@ -207,7 +211,7 @@ export default function Home() {
         subtitle={subtitle}
       />
 
-      <SyncRecovery userId={userId} />
+      <SyncRecovery userId={userId} onArchived={onWorkoutArchived} />
       {resumeCard}
       {(usingCachedPlan || error) && (
         <Card style={{ marginTop: space.lg, gap: space.sm }}>

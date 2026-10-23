@@ -32,7 +32,7 @@ import { buildQueue } from './queue';
 import { draftMeasurement } from './set-values';
 import { kgToDisplay, displayToKg } from '@/lib/units';
 import { validateWorkout, workoutDurationSeconds, type SavedWorkout, type WorkoutPatch } from './workout-store';
-import { QueueDataRecovery, readRecoveryData, type QueueRepairReview } from './recovery-data';
+import { QueueDataRecovery, RejectedWorkoutArchive, readRecoveryData, type QueueRepairReview } from './recovery-data';
 import { deliverExport } from '@/lib/export-file';
 
 let activeAccount: string | null = null;
@@ -85,6 +85,12 @@ const requireAccount = (userId: string) => {
     throw new Error('The workout account changed. Sign in again to sync.');
 };
 
+const archivedWorkouts = (userId: string) => new RejectedWorkoutArchive(AsyncStorage, userId, storageLock);
+async function requireUnarchived(userId: string, sessionId: string) {
+  if ((await archivedWorkouts(userId).ids()).has(sessionId))
+    throw new Error('This workout is archived on this device. Its saved data is available for export.');
+}
+
 function queueFor(userId: string): Outbox {
   let queue = queues.get(userId);
   if (!queue) {
@@ -106,13 +112,22 @@ function queueFor(userId: string): Outbox {
         // Capture this account's token. An in-flight A write remains an A write
         // even if the shared auth client switches to B before fetch begins.
         const client = clientForAccessToken(data.session.access_token);
+        if (typeof operation.payload.sessionId === 'string') {
+          await requireUnarchived(userId, operation.payload.sessionId);
+          guard();
+        }
         if (operation.kind === 'start') {
           const input = operation.payload as unknown as Parameters<typeof startSessionOnce>[0];
           await startSessionOnce(input, client, signal);
+          await requireUnarchived(userId, input.sessionId);
           guard();
           const saved = await workouts.read(userId);
           guard();
-          if (saved?.sessionId === input.sessionId) await lifecycle.acknowledgeStart(saved);
+          if (saved?.sessionId === input.sessionId)
+            await archivedWorkouts(userId).whileLive(input.sessionId, async () => {
+              guard();
+              await lifecycle.acknowledgeStart(saved);
+            });
           guard();
         } else if (operation.kind === 'set') {
           const { sessionId, set, write } = operation.payload as {
@@ -136,6 +151,8 @@ function queueFor(userId: string): Outbox {
                 'Saved set identity does not match its queue entry.',
               );
             try {
+              await requireUnarchived(userId, sessionId);
+              guard();
               const result = await logSetVersioned(write, client, signal);
               guard();
               await journalFor(userId).acknowledge(write, result);
@@ -152,6 +169,8 @@ function queueFor(userId: string): Outbox {
             }
           } else {
             // Never assign an artificial revision to an old queued write.
+            await requireUnarchived(userId, sessionId);
+            guard();
             const result = await checkLegacySet(sessionId, set, client, signal);
             if (signal.aborted) throw new Error('Workout sync timed out.');
             requireAccount(userId);
@@ -186,6 +205,8 @@ function queueFor(userId: string): Outbox {
           guard();
           if (saved?.sessionId === sessionId && !(await lifecycle.hasStarted(saved)))
             throw new Error('Your workout start is waiting to sync.');
+          guard();
+          await requireUnarchived(userId, sessionId);
           guard();
           await finishSession(
             sessionId,
@@ -296,6 +317,8 @@ const enqueueWrite = (userId: string, write: JournalWrite) =>
   });
 export async function queueSet(userId: string, sessionId: string, set: SetLog) {
   requireAccount(userId);
+  await requireUnarchived(userId, sessionId);
+  requireAccount(userId);
   await journalFor(userId).save(sessionId, set, (write) =>
     enqueueWrite(userId, write),
   );
@@ -371,9 +394,13 @@ async function drainAccount(userId: string) {
     requireAccount(userId);
     if (generation !== accountGeneration) throw new Error('The workout account changed.');
   };
-  const saved = await workouts.read(userId);
+  const [saved, archived, rejectedStarts] = await Promise.all([
+    workouts.read(userId), archivedWorkouts(userId).ids(), queueFor(userId).rejected(),
+  ]);
   guard();
-  if (saved?.start && !(await lifecycle.hasStarted(saved))) {
+  if (saved?.start && !archived.has(saved.sessionId)
+    && !rejectedStarts.some(entry => entry.operation.kind === 'start' && entry.operation.payload.sessionId === saved.sessionId)
+    && !(await lifecycle.hasStarted(saved))) {
     guard();
     await queueFor(userId).enqueue({ id: `start:${saved.sessionId}`, kind: 'start', payload: {
       sessionId: saved.sessionId, planDayId: saved.day.id, startedAt: new Date(saved.startedAtMs).toISOString(),
@@ -387,6 +414,7 @@ async function drainAccount(userId: string) {
   guard();
   await journalFor(userId).recover(async (write) => {
     requireAccount(userId);
+    if (archived.has(write.sessionId)) return;
     await queueFor(userId).enqueue({
       id: write.id,
       kind: 'set',
@@ -394,13 +422,13 @@ async function drainAccount(userId: string) {
     });
   });
   guard();
-  if (saved?.endedAtMs != null) {
+  if (saved?.endedAtMs != null && !archived.has(saved.sessionId)) {
     await queueFor(userId).enqueue({ id: `finalize:${saved.sessionId}`, kind: 'finalize', payload: {
       sessionId: saved.sessionId, durationS: workoutDurationSeconds(saved),
     } });
   }
   guard();
-  await queueFor(userId).flush();
+  await queueFor(userId).flush(archived);
 }
 function flushAccount(userId: string): Promise<void> {
   const existing = flushes.get(userId);
@@ -454,29 +482,35 @@ const belongsToSession = (operation: OutboxOperation, sessionId?: string) =>
 
 async function readStatus(userId: string, sessionId?: string) {
   requireAccount(userId);
-  const [pending, rejected, unfinished, blocked] = await Promise.all([
+  const [pending, rejected, unfinished, blocked, archived, workout] = await Promise.all([
     queueFor(userId).pending(),
     queueFor(userId).rejected(),
     journalFor(userId).pending(),
     journalFor(userId).blocked(),
+    archivedWorkouts(userId).ids(), workouts.read(userId),
   ]);
   requireAccount(userId);
+  const archivedLive = workout?.start && archived.has(workout.sessionId)
+    && (!sessionId || sessionId === workout.sessionId);
+  const live = (op: OutboxOperation) => !archived.has(String(op.payload.sessionId ?? ''));
   return {
     ownerId: userId,
+    ...(archived.size ? { archived: archived.size } : {}),
     pending: new Set([
       ...pending
-        .filter((op) => belongsToSession(op, sessionId))
+        .filter((op) => live(op) && belongsToSession(op, sessionId))
         .map((op) => op.id),
       ...unfinished
-        .filter((w) => !sessionId || w.sessionId === sessionId)
+        .filter((w) => !archived.has(w.sessionId) && (!sessionId || w.sessionId === sessionId))
         .map((w) => w.id),
     ]).size,
     rejected: new Set([
+      ...(archivedLive ? [`archive:${workout.sessionId}`] : []),
       ...rejected
-        .filter((e) => belongsToSession(e.operation, sessionId))
+        .filter((e) => live(e.operation) && belongsToSession(e.operation, sessionId))
         .map((e) => e.operation.id),
       ...blocked
-        .filter((e) => !sessionId || e.write.sessionId === sessionId)
+        .filter((e) => !archived.has(e.write.sessionId) && (!sessionId || e.write.sessionId === sessionId))
         .map((e) => e.write.id),
     ]).size,
   };
@@ -513,10 +547,64 @@ export async function repairQueueRecovery(userId: string, review: QueueRepairRev
     if (generation !== accountGeneration) throw new Error('The workout account changed.');
   });
 }
+export interface RejectedStartReview {
+  ownerId: string;
+  accountGeneration: number;
+  workout: SavedWorkout;
+  rejection: RejectedOperation;
+}
+
+/** A rejected frozen start needs an explicit archive choice before freeing its slot. */
+export async function getRejectedStarts(userId: string): Promise<RejectedStartReview[]> {
+  requireAccount(userId);
+  const generation = accountGeneration;
+  const [workout, rejected, pending, archived] = await Promise.all([
+    workouts.read(userId), queueFor(userId).rejected(), queueFor(userId).pending(), archivedWorkouts(userId).ids(),
+  ]);
+  requireAccount(userId);
+  if (generation !== accountGeneration) throw new Error('The workout account changed.');
+  if (!workout?.start || (!archived.has(workout.sessionId) && pending.some(operation => operation.kind === 'start'
+    && operation.payload.sessionId === workout.sessionId)) || await lifecycle.hasStarted(workout)) return [];
+  requireAccount(userId);
+  if (generation !== accountGeneration) throw new Error('The workout account changed.');
+  const rejection = [...rejected].reverse().find(entry => entry.operation.kind === 'start'
+    && entry.operation.payload.sessionId === workout.sessionId);
+  return rejection ? [{ ownerId: userId, accountGeneration: generation, workout, rejection }] : [];
+}
+
+export async function archiveRejectedWorkout(userId: string, review: RejectedStartReview) {
+  requireAccount(userId);
+  const generation = accountGeneration;
+  const guard = () => {
+    requireAccount(userId);
+    if (generation !== accountGeneration || review.accountGeneration !== generation)
+      throw new Error('The workout account changed. Review the workout again.');
+  };
+  guard();
+  if (review.ownerId !== userId || review.workout.ownerId !== userId)
+    throw new Error('This saved workout belongs to another account.');
+  const current = (await getRejectedStarts(userId)).find(entry => JSON.stringify(entry) === JSON.stringify(review));
+  guard();
+  if (!current) throw new Error('Your saved workout changed. Review its latest copy before archiving.');
+  const capture = await readRecoveryData(AsyncStorage, userId, storageLock);
+  guard();
+  await workouts.withSnapshot(userId, review.workout, async () => {
+    guard();
+    await archivedWorkouts(userId).save(review.workout, review.rejection, capture.records, guard);
+  }, undefined, guard);
+  guard();
+  // The archive is durable first. A failed or stale clear leaves the review available.
+  await workouts.clear(userId, review.workout.sessionId, review.workout);
+  guard();
+  requestFlush(userId);
+}
+
 export async function retrySync(userId: string) {
   requireAccount(userId);
   const queue = queueFor(userId);
-  await queue.retryRejected((entry) => !needsReview(entry.code));
+  const archived = await archivedWorkouts(userId).ids();
+  requireAccount(userId);
+  await queue.retryRejected((entry) => !archived.has(String(entry.operation.payload.sessionId ?? '')) && !needsReview(entry.code));
   requireAccount(userId);
   await flushAccount(userId);
   requireAccount(userId);
@@ -534,7 +622,9 @@ export async function getSetConflicts(userId: string): Promise<BlockedWrite[]> {
   const entries = await journalFor(userId).blocked();
   requireAccount(userId);
   if (generation !== accountGeneration) throw new Error('The workout account changed.');
-  return entries.filter(entry => needsReview(entry.code));
+  const archived = await archivedWorkouts(userId).ids();
+  requireAccount(userId);
+  return entries.filter(entry => !archived.has(entry.write.sessionId) && needsReview(entry.code));
 }
 const exactWrite = (a: JournalWrite, b: JournalWrite) => JSON.stringify(a) === JSON.stringify(b);
 async function currentConflict(userId: string, write: JournalWrite) {
@@ -680,7 +770,9 @@ export async function getLegacySetConflicts(userId: string): Promise<RejectedOpe
   const latest = new Map<string, RejectedOperation>();
   for (const entry of archive) latest.set(entry.operation.id, entry);
   const newer = new Set([...pending.map(operation => operation.id), ...writes.map(write => write.id)]);
-  return [...latest.values()].filter(entry => needsReview(entry.code)
+  const archived = await archivedWorkouts(userId).ids();
+  requireAccount(userId);
+  return [...latest.values()].filter(entry => !archived.has(String(entry.operation.payload.sessionId ?? '')) && needsReview(entry.code)
     && legacyCapture(entry.operation) !== null && !newer.has(entry.operation.id));
 }
 async function currentLegacyConflict(userId: string, captured: RejectedOperation) {
