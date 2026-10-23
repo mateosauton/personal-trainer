@@ -20,4 +20,6 @@ Recovery tests cover offline starts, parent-before-set replay, missing queue rec
 
 `npm run test:recovery-db` uses disposable PGlite databases by default. Set `PT_LIFECYCLE_DB_URL` and `PT_ORDERING_DB_URL` to local PostgreSQL to run separate-connection start and set-ordering races. CI supplies a disposable PostgreSQL service. These checks do not verify hosted Auth, production schema or installed native behavior.
 
-Deploy the additive migration before releasing this client. This PR does not apply production SQL or publish an app update. Existing saved workouts and old completion queue entries remain readable. Invalid saved data is preserved for recovery.
+Existing saved workouts and old completion queue entries remain readable. Invalid saved data is preserved for recovery.
+
+Production migration `20261022224931` was applied to `office-gym-trainer` (`asbudyijvunpnhrhsubm`) on 2026-10-22 through the SQL Editor. The function and migration-history entry were committed together. The recorded SQL matches the repository file (MD5 `9c3fe81642c36f311a051e1ce5cc8028`). Verification confirmed security invoker, an empty search path, authenticated-only execution and unauthenticated denial. The six existing sessions were unchanged. No app update was published manually.

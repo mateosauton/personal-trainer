@@ -16,14 +16,14 @@ export interface CachedPlan {
   nextDayId?: string;
 }
 const keyFor = (owner: string) => `office-gym.plan-cache.v1.${owner}`;
-const record = (value: unknown): value is Record<string, any> =>
+const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === 'string';
 const id = (value: unknown): value is string => text(value) && value.length > 0;
 const number = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
-const integer = (value: unknown, minimum = 0, maximum = 1000000) =>
+const integer = (value: unknown, minimum = 0, maximum = 1000000): value is number =>
   number(value) && Number.isInteger(value) && value >= minimum && value <= maximum;
-const list = (value: unknown): value is any[] => Array.isArray(value) && value.length <= 100;
+const list = (value: unknown): value is unknown[] => Array.isArray(value) && value.length <= 100;
 const nullableText = (value: unknown) => value === null || text(value);
 
 function validPlan(value: unknown): value is Plan {
@@ -32,7 +32,7 @@ function validPlan(value: unknown): value is Plan {
       record(day) && id(day.id) && integer(day.day_index) && text(day.name) && text(day.focus)
       && list(day.blocks) && day.blocks.every((block) =>
         record(block) && id(block.id) && integer(block.block_index) && text(block.title)
-        && ['warmup', 'straight', 'superset', 'circuit'].includes(block.kind)
+        && text(block.kind) && ['warmup', 'straight', 'superset', 'circuit'].includes(block.kind)
         && integer(block.rounds, 1, 100) && number(block.rest_seconds)
         && (block.duration_seconds == null || number(block.duration_seconds))
         && list(block.items) && block.items.every((item) =>
@@ -85,21 +85,24 @@ export class PlanCache {
       return true;
     });
   }
-  /** Advance only the rotation that still points at this confirmed session's day. */
-  advanceAfterSession(owner: string, dayId: string, progress?: ProgressRow[]) {
+  /** Advance the matching rotation; publish progress only over its pre-request snapshot. */
+  advanceAfterSession(owner: string, dayId: string, progress?: ProgressRow[], expected?: CachedPlan | null) {
     return this.lock(keyFor(owner), async () => {
       if (progress !== undefined && !validProgress(progress))
         throw new Error('The saved plan could not be read.');
       const current = await this.load(owner);
       if (!current) return;
+      const confirmedProgress = expected === undefined || (expected !== null
+        && JSON.stringify(current.progress) === JSON.stringify(expected.progress))
+        ? progress : undefined;
       let nextDayId = current.nextDayId;
       if (nextDayId === dayId) {
         const index = current.plan.days.findIndex((day) => day.id === dayId);
         if (index >= 0) nextDayId = current.plan.days[(index + 1) % current.plan.days.length].id;
       }
-      if (nextDayId === current.nextDayId && progress === undefined) return;
+      if (nextDayId === current.nextDayId && confirmedProgress === undefined) return;
       await this.storage.setItem(keyFor(owner), JSON.stringify({
-        version: 1, ownerId: owner, ...current, nextDayId, progress: progress ?? current.progress,
+        version: 1, ownerId: owner, ...current, nextDayId, progress: confirmedProgress ?? current.progress,
       }));
     });
   }

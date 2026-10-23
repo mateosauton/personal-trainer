@@ -208,9 +208,12 @@ function queueFor(userId: string): Outbox {
             guard();
             // A receipt can also represent an older/historical session. Cache
             // authoritative current progression, never the proposed client patch.
+            const cachedBeforeProgress = await planCache.read(userId);
+            guard();
             const confirmedProgress = await getProgress(userId, client, signal);
             guard();
-            await planCache.advanceAfterSession(userId, saved.day.id, [...confirmedProgress.values()]);
+            await planCache.advanceAfterSession(userId, saved.day.id,
+              [...confirmedProgress.values()], cachedBeforeProgress);
             guard();
             await workouts.clear(userId, sessionId, saved);
             guard();
