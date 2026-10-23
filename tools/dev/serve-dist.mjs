@@ -1,6 +1,6 @@
 /**
- * Serves ./dist the way vercel.json says the hosted build is served: static
- * files where they exist, index.html for every app route.
+ * Serves ./dist with the Cloudflare SPA fallback configured in wrangler.jsonc:
+ * static files where they exist, index.html for every app route.
  */
 import { createServer } from 'node:http';
 import { readFile, realpath, stat } from 'node:fs/promises';

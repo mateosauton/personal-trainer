@@ -110,13 +110,12 @@ See [Supabase's architecture](https://supabase.com/docs/guides/getting-started/a
 | --- | --- | --- |
 | Native application | [app.json](../app.json), [package.json](../package.json) | Expo SDK 57, React Native, portrait dark UI; scheme `officegym`; iOS/Android identifier `co.officegym.trainer`. |
 | Expo delivery | [app.json](../app.json), [eas.json](../eas.json) | EAS project `aa04a2aa-93a1-4e8f-ad57-84ed3e8c2bf5`; fingerprint runtime compatibility; separate build profiles and update channels. |
-| Web hosting | [wrangler.jsonc](../wrangler.jsonc) | Worker `personal-trainer`, static `dist/`, single-page fallback. Build runs checks before export. Hosted triggers remain external configuration. |
+| Web hosting | [wrangler.jsonc](../wrangler.jsonc) | Cloudflare is the only web host. Worker `personal-trainer` serves static `dist/` with a single-page fallback. Build runs checks before export. Hosted triggers remain external configuration. |
 | Web testing address | [Cloudflare runbook](CLOUDFLARE_RELEASE.md) | `https://personal-trainer.sautonmateo.workers.dev`; the runbook contains prior deployment evidence, not a live version check for this document. |
 | Database/Auth/Storage | [Supabase client](../lib/db/supabase.ts), [migrations](../supabase/migrations/), [baseline manifest](../supabase/migration-baseline.json) | URL/key come from build configuration. The manifest records a historical production reference; its history mappings remain unverified. Region, backups, live project identity and applied state need separate evidence. |
 | Account-deletion backend | [function adapter](../supabase/functions/delete-account/index.js), [function config](../supabase/config.toml) | An authenticated Edge Function performs server-only Auth/Storage admin operations. Source presence is not a deployment or hosted verification result. |
 | Exercise assets | [catalog builder](../scripts/build-catalog.mjs), [media provider](../lib/media/provider.ts) | Bundled metadata references remote images. Current source image URLs use upstream `@main`, so remote content is mutable. |
 | CI | [candidate workflow](../.github/workflows/checks.yml) | GitHub checks and a gated native publish job in this checkout. Its presence does not prove the remote default branch has adopted it. |
-| Legacy web mirror | [vercel.json](../vercel.json) | A Vercel static export configuration remains. It is not proof of an active release target or isolation. |
 
 The deletion Edge Function is a privileged account-lifecycle boundary. The
 workout flow otherwise calls the managed Data API and RPCs directly; it does
