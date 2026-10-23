@@ -1,5 +1,6 @@
 import { nativeJournalLock, type JournalLock } from './set-journal';
-import { validOperation, type OutboxStorage } from './outbox';
+import { validOperation, type OutboxStorage, type RejectedOperation } from './outbox';
+import { validateWorkout, type SavedWorkout } from './workout-store';
 
 const account = (owner: string) => {
   if (!/^[a-zA-Z0-9-]+$/.test(owner)) throw new Error('Invalid workout account.');
@@ -16,6 +17,9 @@ export function recoveryKeys(ownerId: string): string[] {
     `office-gym.active-workout.v1.${owner}`,
     `office-gym.legacy-progress.v1.${owner}`,
     `office-gym.recovery-backups.v1.${owner}`,
+    `office-gym.archived-workouts.v1.${owner}`,
+    `office-gym.workout-lifecycle.v1.${owner}`,
+    `office-gym.plan-cache.v1.${owner}`,
   ];
 }
 const lockKey = (key: string) => key.endsWith('.rejected') ? key.slice(0, -'.rejected'.length) : key;
@@ -94,6 +98,71 @@ export class QueueDataRecovery {
       });
       guard();
       await this.storage.setItem(source.key, JSON.stringify(candidate));
+    });
+  }
+}
+
+interface ArchivedWorkout {
+  ownerId: string;
+  sessionId: string;
+  archivedAt: string;
+  workout: SavedWorkout;
+  rejection: RejectedOperation;
+  records: Record<string, string | null>;
+}
+
+/** Explicit local archive. Original queue and journal bytes remain in their own keys. */
+export class RejectedWorkoutArchive {
+  private readonly key: string;
+  constructor(private readonly storage: OutboxStorage, private readonly owner: string,
+    private readonly lock: JournalLock = nativeJournalLock) {
+    this.key = `office-gym.archived-workouts.v1.${account(owner)}`;
+  }
+  private async read(): Promise<ArchivedWorkout[]> {
+    const raw = await this.storage.getItem(this.key);
+    if (raw === null) return [];
+    const rows = parse(raw);
+    if (!Array.isArray(rows)) throw new Error('The workout archive is unreadable. Its data is preserved.');
+    for (const row of rows) {
+      if (!row || row.ownerId !== this.owner || row.sessionId !== row.workout?.sessionId
+        || !rejected(row.rejection) || row.rejection.operation.kind !== 'start'
+        || row.rejection.operation.payload.sessionId !== row.sessionId
+        || typeof row.archivedAt !== 'string' || !Number.isFinite(Date.parse(row.archivedAt))
+        || !row.records || typeof row.records !== 'object' || Array.isArray(row.records)
+        || Object.entries(row.records).some(([key, value]) => !recoveryKeys(this.owner).includes(key)
+          || key === this.key || (value !== null && typeof value !== 'string')))
+        throw new Error('The workout archive is invalid. Its data is preserved.');
+      validateWorkout(row.workout, this.owner);
+    }
+    return rows;
+  }
+  ids(): Promise<Set<string>> {
+    return this.lock(this.key, async () => new Set((await this.read()).map(row => row.sessionId)));
+  }
+  whileLive<T>(sessionId: string, action: () => Promise<T>): Promise<T> {
+    return this.lock(this.key, async () => {
+      if ((await this.read()).some(row => row.sessionId === sessionId))
+        throw new Error('This workout is archived on this device. Its saved data is available for export.');
+      return action();
+    });
+  }
+  save(workout: SavedWorkout, rejection: RejectedOperation, records: Record<string, string | null>,
+    guard: () => void = () => {}) {
+    validateWorkout(workout, this.owner);
+    if (!rejected(rejection) || rejection.resolved || rejection.operation.kind !== 'start'
+      || rejection.operation.payload.sessionId !== workout.sessionId)
+      throw new Error('Review the rejected workout again before archiving it.');
+    const captured = JSON.parse(JSON.stringify({ workout, rejection, records })) as {
+      workout: SavedWorkout; rejection: RejectedOperation; records: Record<string, string | null>;
+    };
+    // Never nest earlier archives inside each new recovery capture.
+    delete captured.records[this.key];
+    return this.lock(this.key, async () => {
+      const previous = await this.read();
+      guard();
+      await this.storage.setItem(this.key, JSON.stringify([...previous, {
+        ownerId: this.owner, sessionId: workout.sessionId, archivedAt: new Date().toISOString(), ...captured,
+      }]));
     });
   }
 }
