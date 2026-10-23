@@ -91,10 +91,21 @@ or deploy Edge Functions.
 
 ## Web publishing
 
-Cloudflare hosting is configured separately from GitHub checks. Its Wrangler
-build runs `check:web` followed by the guarded `build:web` export using the
-hosting environment's real public configuration. The synthetic CI bundle is
-never its deployment input.
+Cloudflare hosting is configured separately from GitHub checks. Production keeps
+`npx wrangler deploy`. The preview trigger uses `npm run cloudflare:preview`
+with an empty Cloudflare Build command, so its gate runs before Wrangler. When
+the registry explicitly sets the preview backend to null, the gate logs
+`SKIP_PREVIEW` and returns success without a build, upload or preview URL.
+
+A green Cloudflare check on that path means the optional deployment was skipped.
+It is not hosted application or phone verification. The GitHub checks above
+still run their source and synthetic bundle verification independently. Direct
+`build:web` continues to reject an unprovisioned or production-routed preview.
+
+With a valid isolated preview configured, the gate validates its environment and
+invokes `wrangler versions upload`. Wrangler's strict build runs `check:web`
+followed by guarded `build:web` using the real target configuration. Build and
+upload errors still fail. The synthetic CI bundle is never deployment input.
 
 See [Cloudflare releases](CLOUDFLARE_RELEASE.md) for branch triggers, environment
 settings and deployment verification. Merging does not publish a native update;

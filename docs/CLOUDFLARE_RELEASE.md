@@ -10,16 +10,35 @@ Supabase remains the backend. Native releases use Expo/EAS.
 - Repository: `mateosauton/personal-trainer`, production branch `master`.
 - Root directory: `/`.
 - Node: 22, selected by `.nvmrc`.
-- Deploy command: `npx wrangler deploy`.
-- Preview command: `npx wrangler versions upload`.
+- Production deploy command: `npx wrangler deploy`.
+- Preview deploy command: `npm run cloudflare:preview`.
+- Cloudflare Build command: empty. The preview gate must run before Wrangler.
 - Exclude `master`, `gh-pages`, and `cdn` from non-production builds.
 
-Wrangler runs `npm run check:web && npm run build:web`, so failed TypeScript,
-unit, database or migration checks prevent deployment and preview upload. The export writes
+When Wrangler runs, its custom build executes `npm run check:web && npm run build:web`.
+Failed TypeScript, unit, database or migration checks prevent deployment and
+preview upload. The export writes
 `dist/`. Keep `expo.web.output` as `single` and the SPA fallback enabled in
 `wrangler.jsonc`. Do not run the GitHub Pages base-path script for Cloudflare.
 
-Set these build-time variables separately on the production and preview triggers:
+Configure the commands above separately on their triggers; keep the production
+command and branch filters unchanged. The preview command is a repository-owned
+gate in `scripts/deploy-preview.cjs`:
+
+- If `config/environments.json` explicitly sets `preview.projectRef` to `null`,
+  it logs `SKIP_PREVIEW` and exits successfully before invoking Wrangler or its
+  build. It exports no app assets, uploads no version and creates no preview URL.
+- With a registered preview backend, it validates the preview environment and
+  invokes `wrangler versions upload`. Invalid configuration and failed builds or
+  uploads remain errors. Production backend values never substitute for preview.
+
+A successful check with `SKIP_PREVIEW` means publishing was intentionally skipped.
+It provides no hosted app, callback, mobile-browser or phone verification.
+GitHub's core checks and synthetic bundle check still verify the source separately.
+The wrapper's provider status must be confirmed on the actual Cloudflare build;
+local gate tests alone do not establish that hosted result.
+
+Set these build-time variables separately on production and on a provisioned preview:
 
 | Variable | Production (`master`) | Every other branch |
 | --- | --- | --- |
@@ -44,11 +63,15 @@ enabling its button. Omit `EXPO_PUBLIC_APPLE_SIGN_IN_ENABLED`; Apple setup is sk
 **Migration prerequisite:** read-only inspection on 2026-10-22 found both
 Cloudflare triggers pointed at the production project and had no environment
 markers. Production markers have since been configured and verified for the
-existing `asbudyijvunpnhrhsubm` project. New preview builds remain blocked until
+existing `asbudyijvunpnhrhsubm` project. Preview publication remains blocked until
 an isolated preview backend (a branch or project) is verified, registered in
 `config/environments.json`, and configured on the preview trigger. Production
 builds use the explicit markers above. Existing deployed versions keep their
 old configuration until replaced. Follow [ENVIRONMENTS.md](ENVIRONMENTS.md).
+
+The explicit-null preview state takes the skip path above. Direct
+`npm run build:web` still rejects an unprovisioned or production-routed preview;
+the gate does not weaken the distribution environment guard.
 
 `npm run build:web:check` uses synthetic public values only to validate Metro
 in CI; its `.expo/web-check` output must never be deployed. Hosted builds use
@@ -90,9 +113,11 @@ releasing dependent UI. Account deletion also requires its Edge Function; see
 [privacy controls](PRIVACY_CONTROLS.md). Never use an actual account deletion as
 a deployment smoke test.
 
-1. Push a source branch and open a PR. Confirm its Cloudflare preview build and
-   the GitHub checks pass for the exact commit.
-2. Open the preview and test sign-in, onboarding, plan creation, workout logging,
+1. Push a source branch and open a PR. Inspect Cloudflare's result and logs for
+   the exact commit alongside GitHub checks. `SKIP_PREVIEW` leaves the hosted
+   checks below pending; it is not a deployment to open or test.
+2. Once an isolated preview is configured and actually uploaded, open its URL
+   and test sign-in, onboarding, plan creation, workout logging,
    timed exercises, refresh/resume, and JSON data export with a test account.
 3. Check direct navigation to `/sign-in` and `/reset-password`. Exercise email
    confirmation and recovery callbacks; inspect browser console errors.

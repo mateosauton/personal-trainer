@@ -17,8 +17,11 @@ credentials, so it can satisfy this boundary without another standalone project.
 | `preview` | Its own registered hosted branch or project | Synthetic accounts | PR web preview and internal preview binaries |
 | `production` | `asbudyijvunpnhrhsubm` | Real user accounts and workouts | Production web, release-test and store builds |
 
-The development and preview project references start as `null`. Their builds
-fail until isolated backends are provisioned and registered. The guard also
+The development and preview project references start as `null`. Direct
+distribution builds fail until isolated backends are provisioned and registered.
+Cloudflare's preview publishing wrapper treats an explicit null preview as
+`SKIP_PREVIEW`: a successful no-upload decision, with no app assets or URL.
+It runs before Wrangler and does not relax the build guard. The guard also
 rejects a shared project reference, an incorrect URL, a mismatched legacy anon
 JWT, an administrative key, a missing marker, or public developer credentials
 in distribution. Opaque publishable keys are checked for public-key format;
@@ -37,7 +40,7 @@ Read-only checks found all three EAS environments pointing to
 `https://asbudyijvunpnhrhsubm.supabase.co`. The Cloudflare Worker
 `personal-trainer` also uses this backend in both build triggers:
 
-| Trigger | Branches | Publish command | Backend reference |
+| Trigger at initial inspection | Branches | Publish command then | Backend reference then |
 | --- | --- | --- | --- |
 | Production `c2a31eac-fa7f-49e8-a448-93c21a1b5c35` | `master` | `npx wrangler deploy` | `asbudyijvunpnhrhsubm` |
 | Preview `4c87308a-5735-4284-84fb-36932dd05cd2` | Every branch except `master` | `npx wrangler versions upload` | `asbudyijvunpnhrhsubm` |
@@ -72,6 +75,14 @@ with HTTP 200. No update or web deployment was published by these checks.
 Preview configuration remains blocked until an isolated backend is registered.
 Production migration history,
 hosted Auth settings and PostgreSQL major version remain unverified.
+
+For the unprovisioned preview, configure its trigger's deploy command as
+`npm run cloudflare:preview` and leave the Cloudflare Build command empty. The
+repository gate logs `SKIP_PREVIEW` and returns success before building or
+uploading. This intended check result means the optional preview is unavailable,
+not that its application or mobile experience was tested. Keep production's
+`npx wrangler deploy` command unchanged. See [Cloudflare releases](CLOUDFLARE_RELEASE.md)
+for the configured-backend path and verification requirements.
 
 ## Start a separate local backend
 
