@@ -29,6 +29,8 @@ export interface Filter {
   equipment: Equipment[];
   level: Exercise['level'];
   patterns: Pattern[];
+  /** An exact inventory also covers benches, racks and specific machines. */
+  exerciseIds?: ReadonlySet<string>;
   /** Restrict to these categories; defaults to everything non-specialist. */
   categories?: Category[];
   /** Joint or area keys from onboarding, e.g. 'knee'. */
@@ -53,7 +55,7 @@ const LEVEL_RANK: Record<Exercise['level'], number> = {
 const LIMITATIONS: Record<string, { muscles: string[]; patterns: Pattern[] }> = {
   shoulders: {
     muscles: ['shoulders', 'chest'],
-    patterns: ['v_push', 'delts'],
+    patterns: ['h_push', 'v_push', 'delts'],
   },
   'lower back': {
     muscles: ['lower back'],
@@ -79,7 +81,7 @@ function blockedBy(exercise: Exercise, limitations: string[]): boolean {
     const rule = LIMITATIONS[key];
     if (rule) {
       if (rule.patterns.includes(exercise.pattern)) return true;
-      const muscles = [...exercise.primary_muscles, exercise.body_part].map((m) => m.toLowerCase());
+      const muscles = [...exercise.primary_muscles, ...exercise.secondary_muscles, exercise.body_part].map((m) => m.toLowerCase());
       if (rule.muscles.some((m) => muscles.includes(m))) return true;
     }
     // Free-text limitations still fall back to a name match.
@@ -92,9 +94,11 @@ export function candidates(filter: Filter): Exercise[] {
   const max = LEVEL_RANK[filter.level];
   const banned = filter.limitations?.filter(Boolean) ?? [];
   return CATALOG.filter((e) => {
-    // Explicit routine variations are selectable by ID; the questionnaire
-    // generator keeps its established exercise pool and equipment assumptions.
-    if (GYM_ROUTINE_EXERCISE_IDS.has(e.id)) return false;
+    // Explicit inventories may opt into authored gym movements. The generic
+    // questionnaire pool otherwise keeps its original source exercises.
+    if (filter.exerciseIds) {
+      if (!filter.exerciseIds.has(e.id)) return false;
+    } else if (GYM_ROUTINE_EXERCISE_IDS.has(e.id)) return false;
     if (!filter.patterns.includes(e.pattern)) return false;
     if (!filter.equipment.includes(e.equipment)) return false;
     if (LEVEL_RANK[e.level] > max) return false;

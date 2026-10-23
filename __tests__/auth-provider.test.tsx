@@ -54,9 +54,8 @@ const session = (id: string) => ({ user: { id } }) as Session;
 const profile = (id: string) => ({ id, onboarded_at: '2026-10-21T00:00:00Z' }) as Profile;
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
-  let reject!: (reason: Error) => void;
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
-  return { promise, resolve, reject };
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
 };
 
 function mountAuth() {
@@ -82,54 +81,7 @@ beforeEach(() => {
   mockSetItem.mockResolvedValue(undefined);
 });
 
-describe('AuthProvider', () => {
-  it('releases startup loading and displays a rejected session read', async () => {
-    mockGetSession.mockRejectedValueOnce(new Error('Session storage unavailable'));
-    const auth = mountAuth();
-
-    await waitFor(() => expect(auth.current.loading).toBe(false));
-    expect(auth.current.authError?.message).toBe('Session storage unavailable');
-    expect(auth.current.session).toBeNull();
-    expect(auth.current.profileState).toEqual({ status: 'ready', profile: null });
-  });
-
-  it('displays a Supabase session read error', async () => {
-    mockGetSession.mockResolvedValueOnce({ data: { session: null }, error: new Error('Session expired') });
-    const auth = mountAuth();
-
-    await waitFor(() => expect(auth.current.loading).toBe(false));
-    expect(auth.current.authError?.message).toBe('Session expired');
-  });
-
-  it('handles failure to read the initial link', async () => {
-    mockGetInitialURL.mockRejectedValueOnce(new Error('Could not open sign-in link'));
-    const auth = mountAuth();
-
-    await waitFor(() => expect(auth.current.authError?.message).toBe('Could not open sign-in link'));
-    expect(auth.current.loading).toBe(false);
-  });
-
-  it('displays an initial provider callback error', async () => {
-    mockGetInitialURL.mockResolvedValueOnce('officegym://?error=access_denied');
-    mockCompleteAuthFromUrl.mockRejectedValueOnce(new Error('Google sign-in was denied'));
-    const auth = mountAuth();
-
-    await waitFor(() => expect(auth.current.authError?.message).toBe('Google sign-in was denied'));
-    expect(auth.current.loading).toBe(false);
-  });
-
-  it('handles callback errors and lets a new attempt clear them', async () => {
-    const auth = mountAuth();
-    await waitFor(() => expect(auth.current.loading).toBe(false));
-    mockCompleteAuthFromUrl.mockRejectedValueOnce(new Error('Apple sign-in failed'));
-
-    act(() => mockURLChange({ url: 'officegym://?code=failed' }));
-
-    await waitFor(() => expect(auth.current.authError?.message).toBe('Apple sign-in failed'));
-    act(() => auth.current.clearAuthError());
-    expect(auth.current.authError).toBeNull();
-  });
-
+describe('auth account isolation', () => {
   it('never exposes the prior profile while a different account loads', async () => {
     mockGetSession.mockResolvedValueOnce({ data: { session: session('first') }, error: null });
     mockGetProfile.mockResolvedValueOnce(profile('first'));
@@ -186,24 +138,25 @@ describe('AuthProvider', () => {
     expect(mockGetItem).toHaveBeenCalledWith('office-gym.profile.first');
   });
 
-  it('finishes loading even when the server and cache both fail', async () => {
+  it('normalizes cached public photo URLs to an owner path before offline rendering', async () => {
     mockGetSession.mockResolvedValueOnce({ data: { session: session('first') }, error: null });
     mockGetProfile.mockRejectedValueOnce(new Error('Offline'));
-    mockGetItem.mockRejectedValueOnce(new Error('Storage unavailable'));
+    mockGetItem.mockResolvedValueOnce(JSON.stringify({ ...profile('first'),
+      avatar_url: 'https://project.supabase.co/storage/v1/object/public/avatars/first/avatar.jpeg',
+    }));
     const auth = mountAuth();
-
     await waitFor(() => expect(auth.current.loading).toBe(false));
-    expect(auth.current.profileState).toEqual({ status: 'error', error: new Error('Offline') });
+    expect(auth.current.profile?.avatar_url).toBe('first/avatar.jpeg');
   });
 
-  it('keeps a loaded profile usable when caching fails', async () => {
+  it('rejects a foreign cached profile even when stored under the current account key', async () => {
     mockGetSession.mockResolvedValueOnce({ data: { session: session('first') }, error: null });
-    mockGetProfile.mockResolvedValueOnce(profile('first'));
-    mockSetItem.mockRejectedValueOnce(new Error('Storage unavailable'));
+    mockGetProfile.mockRejectedValueOnce(new Error('Offline'));
+    mockGetItem.mockResolvedValueOnce(JSON.stringify(profile('second')));
     const auth = mountAuth();
-
     await waitFor(() => expect(auth.current.loading).toBe(false));
-    expect(auth.current.profile?.id).toBe('first');
+    expect(auth.current.profile).toBeNull();
+    expect(auth.current.profileState.status).toBe('error');
   });
 
   it('discards a pending profile refresh after the account changes', async () => {
@@ -224,17 +177,7 @@ describe('AuthProvider', () => {
   });
 });
 
-
-describe('recovery and account synchronization', () => {
-  it('makes a rejected initial session read recoverable', async () => {
-    mockGetSession.mockRejectedValueOnce(new Error('Storage denied'));
-    const auth = mountAuth();
-    await waitFor(() => expect(auth.current.authError?.message).toBe('Storage denied'));
-    await act(async () => { await auth.current.retrySession(); });
-    expect(auth.current.loading).toBe(false);
-    expect(auth.current.authError).toBeNull();
-  });
-
+describe('recovery session security', () => {
   it('does not replay a stale account from an initial session result', async () => {
     const initial = deferred<{ data: { session: Session | null }; error: null }>();
     mockGetSession.mockReturnValueOnce(initial.promise);

@@ -6,6 +6,8 @@ import {
 } from './db/queries';
 import { dayKey, sessionTotals, streakDays, type Totals } from './stats';
 import type { Plan, PlanDay } from './types';
+import { validTimeZone } from './calendar-days';
+import { useCalendarToday } from './useCalendarToday';
 
 export interface HistorySession {
   id: string;
@@ -13,6 +15,7 @@ export interface HistorySession {
   duration_s: number | null;
   rpe: number | null;
   local_day: string;
+  tz: string | null;
   plan_days: { name: string; focus: string } | null;
 }
 
@@ -25,6 +28,8 @@ interface DashboardState {
   /** yyyy-MM-dd for every day with a finished session. */
   trainedDays: Set<string>;
   streak: number;
+  today: string;
+  homeTimezone: string;
   /** Sessions finished today, and what they added up to. */
   todaySessions: HistorySession[];
   todayTotals: Totals | null;
@@ -44,7 +49,9 @@ interface DashboardState {
  * have been finished, so a missed Tuesday leaves no hole to feel guilty about.
  * The calendar is a record of what happened, not a schedule to fall behind.
  */
-export function useDashboard(userId: string, bodyweightKg: number | null): DashboardState {
+export function useDashboard(userId: string, bodyweightKg: number | null, homeTimezone?: string): DashboardState {
+  const timeZone = validTimeZone(homeTimezone);
+  const today = useCalendarToday(timeZone);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [sessions, setSessions] = useState<HistorySession[]>([]);
   const [todayTotals, setTodayTotals] = useState<Totals | null>(null);
@@ -64,21 +71,22 @@ export function useDashboard(userId: string, bodyweightKg: number | null): Dashb
         getActivePlan(userId),
         getRecentSessions(userId, 200),
         getProgress(userId),
-        getTrainedDayKeys(userId),
+        getTrainedDayKeys(userId, timeZone),
       ]);
       const lastIndex = activePlan
         ? await getLastCompletedPlanDayIndex(userId, activePlan.id)
         : null;
       if (cancelled) return;
 
-      const history = rows as unknown as HistorySession[];
+      const history = (rows as unknown as HistorySession[]).map((row) => ({
+        ...row, local_day: dayKey(row.started_at, timeZone),
+      }));
       setPlan(activePlan);
       setSessions(history);
       setLastLoadKg(new Map([...progress].map(([id, row]) => [id, row.last_weight_kg])));
       setLastCompletedDayIndex(lastIndex);
       setStoredTrainedDays(new Set(dayKeys));
 
-      const today = dayKey(new Date());
       const todayIds = history.filter((s) => s.local_day === today).map((s) => s.id);
       const logs = await getSetLogsForSessions(todayIds);
       if (cancelled) return;
@@ -95,7 +103,7 @@ export function useDashboard(userId: string, bodyweightKg: number | null): Dashb
     return () => {
       cancelled = true;
     };
-  }, [userId, bodyweightKg, nonce]);
+  }, [userId, bodyweightKg, nonce, today, timeZone]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
@@ -105,7 +113,6 @@ export function useDashboard(userId: string, bodyweightKg: number | null): Dashb
       ? plan.days[((lastCompletedDayIndex ?? -1) + 1) % plan.days.length]
       : null;
   const trainedDays = storedTrainedDays;
-  const today = dayKey(new Date());
 
   return {
     plan,
@@ -113,7 +120,9 @@ export function useDashboard(userId: string, bodyweightKg: number | null): Dashb
     completedCount,
     sessions,
     trainedDays,
-    streak: streakDays(trainedDays),
+    streak: streakDays(trainedDays, today),
+    today,
+    homeTimezone: timeZone,
     todaySessions: sessions.filter((s) => s.local_day === today),
     todayTotals,
     lastLoadKg,

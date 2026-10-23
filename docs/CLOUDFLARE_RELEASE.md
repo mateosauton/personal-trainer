@@ -23,9 +23,13 @@ Set these build-time variables for production and preview builds:
 
 - `EXPO_PUBLIC_SUPABASE_URL`: the intended Supabase project URL.
 - `EXPO_PUBLIC_SUPABASE_KEY`: that project's publishable key.
+- `EXPO_PUBLIC_GOOGLE_SIGN_IN_ENABLED=1`.
 - `EXPO_NO_DOTENV=1`: use configured build variables rather than local files.
 - `EXPO_NO_TELEMETRY=1`.
 - `NODE_VERSION=22`.
+
+The Google flag is set and read back on both production and non-production
+build triggers. Omit `EXPO_PUBLIC_APPLE_SIGN_IN_ENABLED`; Apple setup is skipped.
 
 Only enable `EXPO_NO_DOTENV` after both public Supabase variables are configured.
 The two public values are mirrored from the EAS production environment into
@@ -47,6 +51,19 @@ Keep the native `officegym` scheme and authorized Expo Go callbacks. The app
 passes its platform's redirect explicitly, so the native Site URL can remain
 `officegym://`. Add exact callbacks for a preview before testing email links
 there. Do not allow every `workers.dev` domain.
+
+Google production build `d76ce734-ecb7-49ff-b96e-a7ab507a2a86` succeeded from
+pinned `master` commit `4189aa33f926b40359d1ff05ca9f08f94707df77`, deploying
+version `fcabc071-f9f7-4c07-b7a6-0a8178f65bcb`. TypeScript, 55 test suites with
+527 tests, web export, and deployment passed.
+
+The live `/sign-in` screen shows Google and email, with Apple hidden. Google
+sign-in with an existing account requested only name, profile picture, and email,
+returned to Home, removed the callback code from the URL, and preserved Home
+after reload. Google onboarding with a new account and physical native Google
+authentication remain unverified. Native validation requires a fresh binary.
+Apple remains skipped; optional Google branding publication still needs
+privacy-policy and terms URLs.
 
 ## Verify and promote
 

@@ -36,7 +36,7 @@ describe('streakDays', () => {
     const days = trainedDayKeys([
       { started_at: '2026-08-27T08:00:00' },
       { started_at: '2026-08-27T19:00:00' },
-    ]);
+    ], Intl.DateTimeFormat().resolvedOptions().timeZone);
     expect(streakDays(days, TODAY)).toBe(1);
   });
 });

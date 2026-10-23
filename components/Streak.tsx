@@ -23,14 +23,16 @@ export function Streak({
   streak,
   total,
   trainedDays,
+  today,
   completion,
 }: {
   streak: number;
   total: number;
   trainedDays: Set<string>;
+  today: string;
   completion?: StreakCompletion | null;
 }) {
-  const days = recentDays(14);
+  const days = recentDays(14, today);
 
   return (
     <Card style={styles.card}>

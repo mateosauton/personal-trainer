@@ -24,6 +24,8 @@ export interface SavedWorkout {
   units: Units;
   /** Absent only in older saved workouts; null means unknown at capture time. */
   bodyweightKg?: number | null;
+  /** False for server-recovered historical workouts whose original units are unknown. */
+  calculationContextKnown?: boolean;
   progress: ProgressRow[];
   cursor: number;
   phase: 'work' | 'resting';
@@ -88,6 +90,7 @@ export function validateWorkout(
     !Array.isArray(value.day.blocks) ||
     value.day.blocks.length > 100 ||
     !['kg', 'lb'].includes(value.units) ||
+    (value.calculationContextKnown !== undefined && typeof value.calculationContextKnown !== 'boolean') ||
     (value.bodyweightKg !== undefined &&
       value.bodyweightKg !== null &&
       (!finite(value.bodyweightKg) || value.bodyweightKg < 0)) ||

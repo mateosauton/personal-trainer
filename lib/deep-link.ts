@@ -41,7 +41,7 @@ export function isRecoveryLink(value: string): boolean {
  *
  * Returns true when a session was established.
  */
-export async function completeAuthFromUrl(value: string): Promise<boolean> {
+async function exchangeAuthFromUrl(value: string): Promise<boolean> {
   const url = callbackUrl(value);
   const params = new URLSearchParams(url.hash.slice(1));
   const query = url.searchParams;
@@ -69,4 +69,45 @@ export async function completeAuthFromUrl(value: string): Promise<boolean> {
   const { error } = await supabase.auth.exchangeCodeForSession(code);
   if (error) throw error;
   return true;
+}
+
+const callbackKeys = ['code', 'access_token', 'refresh_token', 'provider_token', 'provider_refresh_token',
+  'expires_in', 'expires_at', 'token_type', 'error', 'error_code', 'error_description'];
+
+/** Remove only auth fields. Ordinary fragments and route state survive reload. */
+export function cleanAuthCallbackUrl(url: string): string {
+  const clean = new URL(url);
+  const fragment = new URLSearchParams(clean.hash.slice(1));
+  if (!callbackKeys.some(key => clean.searchParams.has(key) || fragment.has(key))) return url;
+  const keys = [...callbackKeys, 'type'];
+  for (const key of keys) clean.searchParams.delete(key);
+  // A plain #help anchor is not a URLSearchParams object to serialize.
+  if (keys.some(key => fragment.has(key))) {
+    for (const key of keys) fragment.delete(key);
+    clean.hash = fragment.toString();
+  }
+  return clean.toString();
+}
+
+function clearBrowserCallback(url: string) {
+  if (typeof window === 'undefined' || window.location?.href !== url) return;
+  const clean = cleanAuthCallbackUrl(url);
+  if (clean !== url) window.history.replaceState(window.history.state, '', clean);
+}
+
+
+const pending = new Map<string, Promise<boolean>>();
+
+/** Coalesce concurrent browser/Linking delivery without bypassing account checks. */
+export async function completeAuthFromUrl(value: string): Promise<boolean> {
+  const existing = pending.get(value);
+  if (existing) return existing;
+  const operation = exchangeAuthFromUrl(value);
+  pending.set(value, operation);
+  try {
+    return await operation;
+  } finally {
+    pending.delete(value);
+    clearBrowserCallback(value);
+  }
 }

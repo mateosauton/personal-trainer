@@ -1,0 +1,54 @@
+{
+  "format": 1,
+  "projectRef": "asbudyijvunpnhrhsubm",
+  "sourceCommit": "4561c538ca2bf8d6be36098faadfed2daabae494",
+  "deploymentEvidence": "https://github.com/mateosauton/personal-trainer/issues/8#issuecomment-6054840371",
+  "productionHistoryVerifiedAt": null,
+  "migrations": [
+    {
+      "file": "0001_init.sql",
+      "sha256": "218eaef958b2f2d998560620ec0b1e225c2d6da639604678b1a6f53556c42597",
+      "productionVersion": null
+    },
+    {
+      "file": "0002_profile_identity.sql",
+      "sha256": "e6f9316e3cee507f416f999f03c02126ff9bcf11bc7691dca90d85c235b01511",
+      "productionVersion": null
+    },
+    {
+      "file": "0003_correctness_foundation.sql",
+      "sha256": "b911687ff17bf618d56266dcbbe23c70f0a06598285a7e263414cceec5ef8710",
+      "productionVersion": null
+    },
+    {
+      "file": "0004_save_plan_rpc.sql",
+      "sha256": "3698479b08f419e19b29d9336d1e1880bd519f0a184e9f423d541c9bb79decf3",
+      "productionVersion": null
+    },
+    {
+      "file": "0005_session_progress_rpc.sql",
+      "sha256": "9d1de1aa2b63d2de12ccf134e3c03b5e8212ad91d737da7419f6f8bdca0b4efe",
+      "productionVersion": null
+    },
+    {
+      "file": "0006_workout_reference_ownership.sql",
+      "sha256": "ef6eceb493d2770d13852748ec77a3baaae509daf381611e263677a4b2e77c69",
+      "productionVersion": null
+    },
+    {
+      "file": "0007_ordered_set_writes.sql",
+      "sha256": "856160b7b5a50447840dd2e10ac2811a600eb9b752ac172f24d7d4edf6558ba7",
+      "productionVersion": null
+    },
+    {
+      "file": "20261007173759_timed_set_writes.sql",
+      "sha256": "b438b14fa6b4da11f13e0dcc95b1bb5a73b2eacf957440a7c0fe806a6c3d3ba3",
+      "productionVersion": null
+    },
+    {
+      "file": "20261007181857_account_data_export.sql",
+      "sha256": "a8eaf817274de04ddab36836a0613549cd1c449addc25396f5e639ca4a97329a",
+      "productionVersion": null
+    }
+  ]
+}

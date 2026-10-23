@@ -5,6 +5,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { ExerciseStrip } from '@/components/ExerciseStrip';
 import { Header } from '@/components/Header';
 import { SyncRecovery } from '@/components/SyncRecovery';
+import { QueueDataRecovery } from '@/components/QueueDataRecovery';
 import { Streak, type StreakCompletion } from '@/components/Streak';
 import {
   Body,
@@ -26,7 +27,6 @@ import { colors, space, type } from '@/lib/theme';
 import { formatHeight, formatWeight } from '@/lib/units';
 import { workouts } from '@/lib/session/workout';
 import { takeTrainedDayMotion } from '@/lib/session/completion-motion';
-import { dayKey } from '@/lib/stats';
 import type { SavedWorkout } from '@/lib/session/workout-store';
 import { useDashboard } from '@/lib/useDashboard';
 
@@ -43,7 +43,6 @@ export default function Home() {
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [resumeAttempt, setResumeAttempt] = useState(0);
   const [streakCompletion, setStreakCompletion] = useState<StreakCompletion | null>(null);
-  const today = dayKey(new Date());
   const bodyweightKg = profile?.bodyweight_kg ?? null;
   const {
     plan,
@@ -52,13 +51,14 @@ export default function Home() {
     sessions,
     trainedDays,
     streak,
+    today,
     todaySessions,
     todayTotals,
     lastLoadKg,
     loading,
     error,
     reload,
-  } = useDashboard(userId, bodyweightKg);
+  } = useDashboard(userId, bodyweightKg, profile?.home_timezone);
 
   useEffect(() => {
     if (loading || error) return;
@@ -98,7 +98,7 @@ export default function Home() {
       cancelled = true;
     };
   }, [userId, resumeAttempt]);
-  const ownWorkout = savedWorkout?.ownerId === userId ? savedWorkout : null;
+  const ownWorkout = !resumeError && savedWorkout?.ownerId === userId ? savedWorkout : null;
   const resumeCard = ownWorkout ? (
     <Card style={{ marginTop: space.lg, gap: space.md }}>
       <Overline>Saved workout</Overline>
@@ -127,6 +127,7 @@ export default function Home() {
         title="Retry saved workout"
         onPress={() => setResumeAttempt((n) => n + 1)}
       />
+      <QueueDataRecovery userId={userId} onRepaired={async () => { setResumeAttempt((n) => n + 1); }} />
     </Card>
   ) : null;
 
@@ -209,6 +210,7 @@ export default function Home() {
       <View style={{ marginTop: space.xl }}>
         <Streak
           streak={streak}
+          today={today}
           total={completedCount}
           trainedDays={trainedDays}
           completion={streakCompletion?.ownerId === userId ? streakCompletion : null}

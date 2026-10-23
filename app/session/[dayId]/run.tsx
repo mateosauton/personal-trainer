@@ -23,6 +23,7 @@ import { useAuth, useUserId } from '@/lib/auth';
 import { getExercise } from '@/lib/catalog';
 import {
   getSessionResumeDetails,
+  sessionCalculationContext,
   getSessionPlanDay,
   getProgress,
   getWeightHistory,
@@ -188,13 +189,15 @@ export default function SessionRun() {
         if (!originalDay || originalDay.id !== dayId)
           throw new Error('Could not load the original workout day.');
         if (cancelled) return;
+        const calculation = sessionCalculationContext(details);
         saved = await workouts.create({
           version: 1,
           ownerId: userId,
           sessionId,
           day: originalDay,
-          units: profile?.units ?? 'kg',
-          bodyweightKg: profile?.bodyweight_kg ?? null,
+          units: calculation?.units ?? profile?.units ?? 'kg',
+          bodyweightKg: calculation?.bodyweightKg ?? null,
+          calculationContextKnown: calculation !== null,
           progress: [...rows.values()],
           cursor: 0,
           phase: 'work',

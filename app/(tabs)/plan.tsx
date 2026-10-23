@@ -28,9 +28,10 @@ export default function PlanTab() {
   const { profile } = useAuth();
   const router = useRouter();
   const bodyweightKg = profile?.bodyweight_kg ?? null;
-  const { plan, nextDay, sessions, trainedDays, loading, reload } = useDashboard(
+  const { plan, nextDay, sessions, trainedDays, today, homeTimezone, loading, reload } = useDashboard(
     userId,
     bodyweightKg,
+    profile?.home_timezone,
   );
 
   const [selected, setSelected] = useState<string | null>(null);
@@ -113,7 +114,7 @@ export default function PlanTab() {
           calendarY.current = e.nativeEvent.layout.y;
         }}
       >
-        <Calendar trainedDays={trainedDays} selected={selected} onSelect={setSelected} />
+        <Calendar today={today} trainedDays={trainedDays} selected={selected} onSelect={setSelected} />
       </View>
 
       {selected && daySessions.length > 0 ? (
@@ -142,6 +143,7 @@ export default function PlanTab() {
         </Card>
       ) : null}
 
+      <Muted style={{ marginTop: space.sm }}>Calendar and history use {homeTimezone}, including while travelling.</Muted>
       <Overline style={{ marginTop: space.xxl }}>Sessions in this plan</Overline>
 
       <View style={{ gap: space.lg, marginTop: space.lg }}>
@@ -235,13 +237,13 @@ export default function PlanTab() {
                 key={session.id}
                 onPress={() => openDay(session.local_day)}
                 accessibilityRole="button"
-                accessibilityLabel={`${session.plan_days?.name ?? 'Session'} on ${format(new Date(session.started_at), 'd MMMM')}`}
+                accessibilityLabel={`${session.plan_days?.name ?? 'Session'} on ${format(new Date(`${session.local_day}T12:00:00`), 'd MMMM')}`}
               >
                 <Card style={styles.recentRow}>
                   <View style={{ flex: 1, gap: 2 }}>
                     <Body style={styles.strong}>{session.plan_days?.name ?? 'Session'}</Body>
                     <Muted>
-                      {format(new Date(session.started_at), 'EEE d MMM')}
+                      {format(new Date(`${session.local_day}T12:00:00`), 'EEE d MMM')}
                       {session.duration_s ? ` · ${Math.round(session.duration_s / 60)} min` : ''}
                       {session.rpe ? ` · RPE ${session.rpe}` : ''}
                     </Muted>
