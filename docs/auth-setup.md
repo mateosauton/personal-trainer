@@ -66,8 +66,13 @@ Legacy email confirmation links with session tokens in their URL fragment no
 longer sign in automatically. Users can finish at the existing email/password
 form after confirming. New confirmation links use PKCE codes.
 
-Use a development build for mobile OAuth. Expo Go's `exp://` callback is not a
-stable provider redirect and does not verify the production Apple entitlement.
+Use an installed development or release build for mobile Google OAuth. Expo Go
+cannot register the app's `officegym` callback scheme, so the app disables
+browser-based social sign-in there and explains how to use email and password.
+The sign-in function also rejects unsupported browser flows before starting
+OAuth. Web and installed builds keep the existing PKCE flow. Native Apple
+sign-in on iOS is unchanged; Expo Go does not verify the production Apple
+entitlement. See [Expo's OAuth guidance](https://docs.expo.dev/guides/authentication/).
 
 ## Google
 

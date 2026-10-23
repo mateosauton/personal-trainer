@@ -7,6 +7,12 @@ const mockComplete = jest.fn();
 const mockBrowser = jest.fn();
 const mockApple = jest.fn();
 const mockDigest = jest.fn();
+let mockExecutionEnvironment = 'standalone';
+jest.mock('expo-constants', () => ({
+  __esModule: true,
+  default: { get executionEnvironment() { return mockExecutionEnvironment; } },
+  ExecutionEnvironment: { StoreClient: 'storeClient' },
+}));
 jest.mock('@/lib/db/supabase', () => ({ supabase: { auth: {
   signInWithOAuth: (...args: unknown[]) => mockOAuth(...args),
   signInWithIdToken: (...args: unknown[]) => mockIdToken(...args),
@@ -29,6 +35,7 @@ jest.mock('expo-apple-authentication', () => ({
 beforeEach(() => {
   jest.clearAllMocks();
   Platform.OS = 'android';
+  mockExecutionEnvironment = 'standalone';
   mockOAuth.mockResolvedValue({ data: { url: 'https://project.supabase.co/auth/v1/authorize' }, error: null });
   mockBrowser.mockResolvedValue({ type: 'success', url: 'officegym:///?code=callback' });
   mockComplete.mockResolvedValue(true);
@@ -89,4 +96,43 @@ it('rejects a missing Apple identity token', async () => {
   mockApple.mockResolvedValue({ identityToken: null });
   await expect(signInWithSocialProvider('apple')).rejects.toThrow(/identity token/i);
   expect(mockIdToken).not.toHaveBeenCalled();
+});
+
+it.each(['ios', 'android'] as const)('blocks Google browser sign-in in Expo Go on %s before starting OAuth', async (platform) => {
+  Platform.OS = platform;
+  mockExecutionEnvironment = 'storeClient';
+  await expect(signInWithSocialProvider('google')).rejects.toThrow(/installed app.*Expo Go.*email and password/i);
+  expect(mockOAuth).not.toHaveBeenCalled();
+  expect(mockBrowser).not.toHaveBeenCalled();
+  expect(mockComplete).not.toHaveBeenCalled();
+});
+
+it('blocks browser-based Apple sign-in in Expo Go on Android', async () => {
+  mockExecutionEnvironment = 'storeClient';
+  await expect(signInWithSocialProvider('apple')).rejects.toThrow(/Apple.*installed app.*email and password/i);
+  expect(mockOAuth).not.toHaveBeenCalled();
+  expect(mockBrowser).not.toHaveBeenCalled();
+});
+
+it('keeps native Apple sign-in available in Expo Go on iOS', async () => {
+  Platform.OS = 'ios';
+  mockExecutionEnvironment = 'storeClient';
+  await expect(signInWithSocialProvider('apple')).resolves.toBe(true);
+  expect(mockIdToken).toHaveBeenCalledWith({ provider: 'apple', token: 'apple-id-token', nonce: 'secure-random-nonce' });
+  expect(mockOAuth).not.toHaveBeenCalled();
+  expect(mockBrowser).not.toHaveBeenCalled();
+});
+
+it('does not apply native Expo Go restrictions to the web runtime', async () => {
+  Platform.OS = 'web';
+  mockExecutionEnvironment = 'storeClient';
+  await expect(signInWithSocialProvider('google')).resolves.toBe(false);
+  expect(mockOAuth).toHaveBeenCalledWith({ provider: 'google', options: { redirectTo: 'officegym:///', skipBrowserRedirect: false } });
+  expect(mockBrowser).not.toHaveBeenCalled();
+});
+
+it('keeps Google browser sign-in available in an installed development build', async () => {
+  mockExecutionEnvironment = 'bare';
+  await expect(signInWithSocialProvider('google')).resolves.toBe(true);
+  expect(mockBrowser).toHaveBeenCalledWith('https://project.supabase.co/auth/v1/authorize', 'officegym:///');
 });
