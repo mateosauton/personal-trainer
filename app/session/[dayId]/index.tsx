@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { ExerciseMedia } from '@/components/ExerciseMedia';
+import { ExerciseSwap } from '@/components/ExerciseSwap';
 import {
   Body,
   Button,
@@ -33,6 +34,7 @@ export default function SessionOverview() {
   const currentIdentity = useRef(identity);
   currentIdentity.current = identity;
   const mounted = useRef(true);
+  const planReadVersion = useRef(0);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -45,21 +47,25 @@ export default function SessionOverview() {
   const [usingCachedPlan, setUsingCachedPlan] = useState(false);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [swapping, setSwapping] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    const version = ++planReadVersion.current;
+    const isCurrentRead = () => !cancelled && version === planReadVersion.current;
     setLoading(true);
     setError(null);
     setStartError(null);
     setStarting(false);
+    setSwapping(false);
     setDay(null);
     setProgress([]);
     setUsingCachedPlan(false);
     (async () => {
       const cached = await planCache.read(userId).catch(() => null);
-      if (cancelled) return;
+      if (!isCurrentRead()) return;
       const cachedDay = cached?.plan.days.find((candidate) => candidate.id === dayId);
       if (cached && cachedDay) {
         setDay(cachedDay);
@@ -71,7 +77,7 @@ export default function SessionOverview() {
       const [planResult, progressResult] = await Promise.allSettled([
         getActivePlan(userId), getProgress(userId),
       ]);
-      if (cancelled) return;
+      if (!isCurrentRead()) return;
       let plan = planResult.status === 'fulfilled' ? planResult.value : cached?.plan;
       if (planResult.status === 'rejected' && !plan) throw planResult.reason;
       let progressRows = progressResult.status === 'fulfilled'
@@ -83,10 +89,10 @@ export default function SessionOverview() {
         else if (progressResult.status === 'fulfilled')
           accepted = await planCache.write(userId, plan, progressRows, undefined, cached).catch(() => null);
       }
-      if (cancelled) return;
+      if (!isCurrentRead()) return;
       if (accepted === false) {
         const winner = await planCache.read(userId);
-        if (cancelled) return;
+        if (!isCurrentRead()) return;
         plan = winner?.plan ?? null;
         progressRows = winner?.progress ?? [];
         showCachedPlan = winner !== null;
@@ -103,11 +109,11 @@ export default function SessionOverview() {
       }
     })()
       .catch((e) => {
-        if (!cancelled)
+        if (isCurrentRead())
           setError(e instanceof Error ? e.message : 'Could not load the session');
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (isCurrentRead()) setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -140,6 +146,7 @@ export default function SessionOverview() {
   }
 
   const begin = async () => {
+    if (starting || swapping) return;
     const isCurrent = () =>
       mounted.current && currentIdentity.current === identity;
     setStarting(true);
@@ -148,6 +155,7 @@ export default function SessionOverview() {
       const saved = await startWorkout(userId, day, {
         units: profile?.units ?? 'kg',
         bodyweightKg: profile?.bodyweight_kg ?? null,
+        homeTimezone: profile?.home_timezone,
         progress,
       });
       if (!isCurrent()) return;
@@ -163,6 +171,31 @@ export default function SessionOverview() {
       setStarting(false);
     }
   };
+  const reloadDay = async () => {
+    // A successful template swap supersedes the overview's earlier background read.
+    const version = ++planReadVersion.current;
+    const isCurrentRead = () => mounted.current && currentIdentity.current === identity
+      && version === planReadVersion.current;
+    let activePlan = await getActivePlan(userId);
+    if (!isCurrentRead()) return;
+    const cached = await planCache.read(userId).catch(() => null);
+    if (!isCurrentRead()) return;
+    let rows = cached?.progress ?? progress;
+    const accepted = activePlan
+      ? await planCache.write(userId, activePlan, rows, undefined, cached).catch(() => null)
+      : await planCache.clear(userId, cached).catch(() => null);
+    if (!isCurrentRead()) return;
+    if (accepted === false) {
+      const winner = await planCache.read(userId);
+      if (!isCurrentRead()) return;
+      activePlan = winner?.plan ?? null;
+      rows = winner?.progress ?? [];
+    }
+    setDay(activePlan?.days.find((candidate) => candidate.id === dayId) ?? null);
+    setProgress(rows);
+    setUsingCachedPlan(accepted === false);
+  };
+  const taken = new Set(day.blocks.flatMap((block) => block.items.map((item) => item.exercise_id)));
   const targetSeconds = day.blocks.reduce((sum, block) => sum + (getBlockDurationSeconds(block) ?? 0), 0);
 
   return (
@@ -217,6 +250,8 @@ export default function SessionOverview() {
                         {dose}
                         {item.notes ? ` · ${item.notes}` : ''}
                       </Muted>
+                      {block.kind !== 'warmup' ? <ExerciseSwap item={item} excluded={taken}
+                        disabled={starting || swapping} onBusy={setSwapping} onSwapped={reloadDay} /> : null}
                     </View>
                   </View>
                 );
@@ -233,6 +268,7 @@ export default function SessionOverview() {
         title={startError ? 'Retry start' : 'Begin'}
         onPress={begin}
         loading={starting}
+        disabled={swapping}
         style={{ marginTop: space.xl }}
       />
       <Button variant="ghost" title="Not now" onPress={() => router.back()} />

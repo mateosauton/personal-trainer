@@ -92,8 +92,9 @@ it('preserves A pending writes across sign-out and never replays them as B', asy
     '00000008-1111-4111-8111-000000000008',
     set,
   );
+  await queueCompletion('00000001-1111-4111-8111-000000000001', '00000008-1111-4111-8111-000000000008', 90);
   await flushOutbox();
-  expect(await pendingSyncCount()).toBe(1);
+  expect(await pendingSyncCount()).toBe(2);
   setSyncAccount(null);
   signedIn('00000002-1111-4111-8111-000000000002');
   setSyncAccount('00000002-1111-4111-8111-000000000002');
@@ -130,6 +131,8 @@ it('preserves A pending writes across sign-out and never replays them as B', asy
     { token: 'token-00000001-1111-4111-8111-000000000001' },
     expect.any(AbortSignal),
   );
+  expect(mockFinishSession).toHaveBeenLastCalledWith('00000008-1111-4111-8111-000000000008',
+    { duration_s: 90, rpe: null }, { token: 'token-00000001-1111-4111-8111-000000000001' }, expect.any(AbortSignal));
 });
 
 it('rejects a stale A screen enqueue after account B takes over', async () => {

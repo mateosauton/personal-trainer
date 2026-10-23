@@ -55,10 +55,12 @@ async function database() {
       null, 'start_session RPC must exist before a persisted start can replay');
     await db.exec('grant usage on schema public,auth to anon,authenticated; grant select,insert,update,delete on public.profiles,public.plans,public.plan_days,public.plan_blocks,public.plan_items,public.sessions to anon,authenticated');
     const fixture = async () => {
-      const f = Object.fromEntries(['owner','plan','day','otherDay'].map(key => [key, randomUUID()]));
+      const f = Object.fromEntries(['owner','plan','day','otherDay','block','item'].map(key => [key, randomUUID()]));
       await db.query('insert into auth.users values($1)', [f.owner]);
       await db.query("insert into plans(id,user_id,name,split) values($1,$2,'Fixture','Full')", [f.plan, f.owner]);
       await db.query("insert into plan_days(id,plan_id,day_index,name,focus) values($1,$2,0,'Day','Strength'),($3,$2,1,'Other','Strength')", [f.day, f.plan, f.otherDay]);
+      await db.query("insert into plan_blocks(id,plan_day_id,block_index,kind,title,rounds,rest_seconds) values($1,$2,0,'straight','Work',1,60)", [f.block,f.day]);
+      await db.query("insert into plan_items(id,block_id,item_index,exercise_id,sets,reps_low,reps_high) values($1,$2,0,'press',1,6,8)", [f.item,f.block]);
       return f;
     };
     const a = await fixture(), b = await fixture();
@@ -116,6 +118,47 @@ async function database() {
     assert.equal(await call(db, delayed), delayed.id, 'a cached owned day remains valid after its plan is retired');
     assert.equal((await db.query('select count(*)::int as n from sessions')).rows[0].n, 2, 'invalid calls must not insert rows');
 
+    const contextual = { ...captured, id: randomUUID(), expected: [{ id: a.item, exercise_id: 'press' }],
+      context: { units: 'lb', bodyweightKg: 80 } };
+    const callContext = async (start = contextual, client = db) => (await client.query(
+      'select public.start_session_with_context($1,$2,$3,$4,$5,$6,$7) as id',
+      [start.id,start.day,start.at,start.localDay,start.tz,JSON.stringify(start.expected),JSON.stringify(start.context)])).rows[0].id;
+    assert.equal(await callContext(), contextual.id, 'contextual start must accept retired owned days');
+    const contextualRow = await snapshot(contextual.id);
+    assert.equal(contextualRow.calculation_units, 'lb');
+    assert.equal(contextualRow.bodyweight_kg, 80);
+    assert.equal(contextualRow.calculation_context_captured, true);
+    assert.deepEqual(contextualRow.start_template_items, contextual.expected);
+    assert.equal(await callContext(), contextual.id);
+    assert.equal(await callContext({ ...contextual, expected:[{ id:a.item.toUpperCase(),exercise_id:'press' }] }), contextual.id,
+      'UUID spelling must not change template identity');
+    const unknownWeight = { ...contextual,id:randomUUID(),context:{ units:'kg',bodyweightKg:null } };
+    assert.equal(await callContext(unknownWeight), unknownWeight.id);
+    assert.equal((await snapshot(unknownWeight.id)).bodyweight_kg, null);
+    assert.deepEqual(await snapshot(contextual.id), contextualRow, 'context replay must not rewrite any session data');
+    for (const context of [{ units:'kg',bodyweightKg:80 },{ units:'lb',bodyweightKg:81 }])
+      await assert.rejects(callContext({ ...contextual, context }), { code:'PT409' });
+    await assert.rejects(callContext({ ...contextual, expected:[{ id:a.item,exercise_id:'squat' }] }), { code:'PT409' });
+    for (const context of [null,{}, { units:'kg' }, { units:'kg',bodyweightKg:-1 }, { units:'kg',bodyweightKg:100001 }])
+      await assert.rejects(callContext({ ...contextual, id:randomUUID(), context }), { code:'22023' });
+    await assert.rejects(db.query('update sessions set start_template_items=$2 where id=$1',
+      [contextual.id,JSON.stringify([])]), { code:'22023' });
+    // A late acknowledgement still uses its original template after the workout completes.
+    await db.query("update sessions set completed_at='2026-10-22T11:00:00Z' where id=$1",[contextual.id]);
+    await db.exec('reset role');
+    await db.query("update plan_items set exercise_id='squat' where id=$1",[a.item]);
+    await as(db);
+    assert.equal(await callContext(), contextual.id, 'completed start replay must not require the current template');
+    await assert.rejects(callContext({ ...contextual,id:randomUUID() }), { code:'PT409' });
+    await as(db,b.owner);
+    await assert.rejects(callContext(), { code:'42501' });
+    await assert.rejects(callContext({ ...contextual,day:b.day,
+      expected:[{ id:b.item,exercise_id:'press' }] }), { code:'42501' });
+    await as(db,'','anon');
+    await assert.rejects(callContext(), { code:'42501' });
+    await as(db);
+    console.log('PASS contextual start preserves units/bodyweight/template, rejects stale swaps, and keeps legacy start RPC compatible.');
+
     if (env.connect) {
       const first = await env.connect(), second = await env.connect();
       await as(first); await as(second);
@@ -127,6 +170,15 @@ async function database() {
       assert.equal(await replay, simultaneous.id);
       assert.equal((await db.query('select count(*)::int as n from sessions where id=$1', [simultaneous.id])).rows[0].n, 1);
       console.log('PASS concurrent duplicate starts against local PostgreSQL.');
+      const contextualRace = { ...contextual,id:randomUUID(),expected:[{ id:a.item,exercise_id:'squat' }] };
+      await first.exec('begin');
+      assert.equal(await callContext(contextualRace,first), contextualRace.id);
+      const contextualReplay = callContext(contextualRace,second);
+      await first.exec('commit');
+      assert.equal(await contextualReplay, contextualRace.id);
+      assert.equal((await db.query('select count(*)::int as n from sessions where id=$1', [contextualRace.id])).rows[0].n,1);
+      assert.equal((await snapshot(contextualRace.id)).calculation_context_captured,true);
+      console.log('PASS concurrent duplicate contextual starts against local PostgreSQL.');
     }
     console.log('PASS session start ownership, anonymous denial, captured context, lost-response replay, mismatched retries, completed sessions and retired plans.');
     if (!env.connect) console.log('PGlite mode. Multi-connection verification is available with PT_LIFECYCLE_DB_URL pointing to local PostgreSQL.');

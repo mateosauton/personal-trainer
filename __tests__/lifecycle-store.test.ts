@@ -166,3 +166,11 @@ it('keeps confirmed state after receipt or acknowledgement persistence fails', a
   expect(await restarted.hasStarted(saved)).toBe(true);
   expect(await restarted.getReceipt(saved.ownerId, saved.sessionId)).toEqual(receipt());
 });
+
+it('retains explicitly unknown calculation context in a receipt after restart', async () => {
+  const disk = memory();
+  const saved = workout();
+  const confirmed = { ...receipt(), calculationContextKnown: false };
+  await new LifecycleStore(disk).saveReceipt(saved, confirmed);
+  expect(await new LifecycleStore(disk).getReceipt(saved.ownerId, saved.sessionId)).toEqual(confirmed);
+});

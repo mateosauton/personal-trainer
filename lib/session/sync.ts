@@ -32,6 +32,8 @@ import { buildQueue } from './queue';
 import { draftMeasurement } from './set-values';
 import { kgToDisplay, displayToKg } from '@/lib/units';
 import { validateWorkout, workoutDurationSeconds, type SavedWorkout, type WorkoutPatch } from './workout-store';
+import { QueueDataRecovery, readRecoveryData, type QueueRepairReview } from './recovery-data';
+import { deliverExport } from '@/lib/export-file';
 
 let activeAccount: string | null = null;
 let accountGeneration = 0;
@@ -204,7 +206,8 @@ function queueFor(userId: string): Outbox {
             }, signal);
             guard();
             // Save the display receipt before releasing the only local recovery copy.
-            await lifecycle.saveReceipt(saved, { lines, units: saved.units, durationS });
+            await lifecycle.saveReceipt(saved, { lines, units: saved.units, durationS,
+              calculationContextKnown: saved.calculationContextKnown !== false });
             guard();
             // A receipt can also represent an older/historical session. Cache
             // authoritative current progression, never the proposed client patch.
@@ -253,7 +256,7 @@ function requestFlush(userId: string) {
 
 /** The local snapshot is the durable start intent; no network prerequisite. */
 export function startWorkout(userId: string, day: PlanDay,
-  context: { units: Units; bodyweightKg: number | null; progress: ProgressRow[] }): Promise<SavedWorkout> {
+  context: { units: Units; bodyweightKg: number | null; progress: ProgressRow[]; homeTimezone?: string }): Promise<SavedWorkout> {
   requireAccount(userId);
   const generation = accountGeneration;
   const guard = () => {
@@ -265,11 +268,13 @@ export function startWorkout(userId: string, day: PlanDay,
     guard();
     if (existing) { requestFlush(userId); return existing; }
     const now = new Date();
+    const tz = context.homeTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
     const saved = await workouts.create({
       version: 1, ownerId: userId, sessionId: Crypto.randomUUID(), day,
-      ...context, cursor: 0, phase: 'work', draft: null, savedDraft: null,
+      units: context.units, bodyweightKg: context.bodyweightKg, progress: context.progress,
+      calculationContextKnown: true, cursor: 0, phase: 'work', draft: null, savedDraft: null,
       restUntilMs: null, startedAtMs: now.getTime(), endedAtMs: null,
-      start: { localDay: dayKey(now), tz: Intl.DateTimeFormat().resolvedOptions().timeZone },
+      start: { localDay: dayKey(now, tz), tz },
     });
     guard();
     requestFlush(userId);
@@ -373,6 +378,10 @@ async function drainAccount(userId: string) {
     await queueFor(userId).enqueue({ id: `start:${saved.sessionId}`, kind: 'start', payload: {
       sessionId: saved.sessionId, planDayId: saved.day.id, startedAt: new Date(saved.startedAtMs).toISOString(),
       localDay: saved.start.localDay, tz: saved.start.tz,
+      ...(saved.calculationContextKnown === true ? {
+        context: { units: saved.units, bodyweightKg: saved.bodyweightKg ?? null },
+        expectedItems: saved.day.blocks.flatMap(block => block.items.map(item => ({ id: item.id, exercise_id: item.exercise_id }))),
+      } : {}),
     } });
   }
   guard();
@@ -479,6 +488,31 @@ export const failedSyncCount = async (sessionId?: string) =>
 export const flushOutbox = () =>
   activeAccount ? flushAccount(activeAccount) : Promise.resolve();
 export const getSyncStatus = (userId: string) => readStatus(userId);
+export async function exportWorkoutRecovery(userId: string) {
+  requireAccount(userId);
+  const generation = accountGeneration;
+  const guard = () => {
+    requireAccount(userId);
+    if (generation !== accountGeneration) throw new Error('The workout account changed.');
+  };
+  const snapshot = await readRecoveryData(AsyncStorage, userId, storageLock);
+  guard();
+  await deliverExport(JSON.stringify(snapshot, null, 2), 'office-gym-workout-recovery.json', async () => { guard(); });
+}
+export async function inspectQueueRecovery(userId: string) {
+  requireAccount(userId);
+  const reviews = await new QueueDataRecovery(AsyncStorage, userId, storageLock).inspect();
+  requireAccount(userId);
+  return reviews;
+}
+export async function repairQueueRecovery(userId: string, review: QueueRepairReview, replacement: string) {
+  requireAccount(userId);
+  const generation = accountGeneration;
+  await new QueueDataRecovery(AsyncStorage, userId, storageLock).repair(review, replacement, () => {
+    requireAccount(userId);
+    if (generation !== accountGeneration) throw new Error('The workout account changed.');
+  });
+}
 export async function retrySync(userId: string) {
   requireAccount(userId);
   const queue = queueFor(userId);

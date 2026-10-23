@@ -1,5 +1,9 @@
 # Office Gym — Improvement Proposals
 
+> Historical proposals. The current [review and priorities](ENGINEERING_REVIEW.md)
+> distinguish local fixes from remaining work. Reproduce an old issue against
+> current code before treating it as open.
+
 **Companion to [ENGINEERING_HANDOFF.md](./ENGINEERING_HANDOFF.md).** That document describes the system as it is.
 This one describes what to do about it: make it **work**, then **safe**, then **fast**, **easier to use** and
 **more scalable**.
@@ -880,6 +884,11 @@ re-size upward) or state that offline *start* is out of scope.
 
 ### R13 · Stop parsing 1 MB of JSON at startup
 
+> 2026-10-22 update: current `lib/catalog.ts` uses `secondary_muscles` to filter
+> declared limitations. The historical size table below is not an applicable
+> removal plan for that field. Preserve its selection behavior when optimizing
+> payloads; the current architecture proposal links the active consumers.
+
 **Depends on:** [R24](#r24--pin-and-version-the-catalog) for step 2.
 
 **Problem.** `lib/catalog.ts` does this at module scope:
@@ -894,7 +903,7 @@ const BY_ID = new Map(CATALOG.map((e) => [e.id, e]));
 renders; on native it is evaluated on first import. `catalog.ts` is imported by `plan/generate`, Today, Plan, the
 session overview, the player and the summary — i.e. immediately.
 
-`secondary_muscles` and `force_type` have no runtime consumers. In addition to the type and build script,
+In the historical snapshot, `secondary_muscles` and `force_type` had no runtime consumers. In addition to the type and build script,
 `lib/data/gym-routine-exercises.ts` writes these fields for authored movements. It also writes `instructions`,
 which the player now reads as a fallback when demonstration images are absent. Instructions must remain
 available when reducing the startup payload.
@@ -910,7 +919,7 @@ available when reducing the startup payload.
 `<prefix>/<id>/1.jpg`, with zero exceptions. Move the prefix into `lib/media/provider.ts` and build the URL there.
 
 **Fix.**
-1. Stop copying `secondary_muscles` and `force_type` in `build-catalog.mjs`, and remove their declarations and authored-preset writes. This saves about **54 KB**. Split source instructions into lazily fetched data while retaining the player's fallback and authored movement instructions to save another **581 KB** from startup data.
+1. Re-measure optional fields against current consumers. Preserve `secondary_muscles` for limitation filtering and retain the player's fallback/authored instructions if moving source instructions into lazy data. The historical **54 KB** removal estimate assumed no secondary-muscle consumer and no longer defines an implementable change.
 2. Derive `media_refs`. **A further −192 KB** — but only after [R24](#r24--pin-and-version-the-catalog), because deriving hard-codes the two-image assumption and moves the CDN ref from generated data into runtime code. The build script's `images[1] ?? images[0]` fallback exists because upstream *can* ship one image.
 
 > **Do not add a pattern index.** It is tempting ("`candidates()` scans all 873 rows on every `pick`"), but

@@ -1,4 +1,5 @@
-// Local PostgreSQL role/policy checks. Uses only disposable fixture data.
+// Historical pre-ordered-write role/policy checks with disposable fixture data.
+// Current migrations, including private avatars, run in test-database.cjs.
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { randomUUID } = require('node:crypto');
@@ -88,7 +89,7 @@ const { PGlite } = require(require.resolve('@electric-sql/pglite', {
     // Existing avatar policy intentionally permits public reads; this does not
     // establish private image delivery or cover actual Storage upload behavior.
     assert.equal((await db.query('select count(*)::int as n from storage.objects')).rows[0].n,2);
-    console.log('PASS account-scoped reads, foreign parent writes, exercise/day consistency, legitimate set corrections, anonymous denial and avatar write ownership.');
-    console.log('Avatar reads remain public. Production/API and native isolation verification remain release checks.');
+    console.log('PASS historical baseline: account-scoped reads, foreign parent writes, exercise/day consistency, legitimate set corrections, anonymous denial and avatar write ownership.');
+    console.log('Historical baseline avatars are public; current private-avatar policies run in test-database.cjs. Production/API and native isolation remain release checks.');
   } finally { await db.close(); }
 })().catch(error=>{console.error(error.message);process.exitCode=1;});

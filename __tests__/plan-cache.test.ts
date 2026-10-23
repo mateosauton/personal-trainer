@@ -140,3 +140,16 @@ it('rejects refresh writes and clears when their original cache snapshot has cha
   expect(await cache.clear('A', await cache.read('A'))).toBe(true);
   expect(await cache.read('A')).toBeNull();
 });
+
+it('restores a swapped template after restart and refuses an older pre-swap refresh', async () => {
+  const disk = memory();
+  const cache = new PlanCache(disk);
+  await cache.write('A', plan, progress, 'day');
+  const beforeSwap = await cache.read('A');
+  const swapped = JSON.parse(JSON.stringify(plan)) as Plan;
+  swapped.days[0].blocks[0].items[0].exercise_id = 'compatible-press';
+  expect(await cache.write('A', swapped, progress, 'day', beforeSwap)).toBe(true);
+  expect(await cache.write('A', plan, progress, 'day', beforeSwap)).toBe(false);
+  expect((await new PlanCache(disk).read('A'))?.plan.days[0].blocks[0].items[0].exercise_id)
+    .toBe('compatible-press');
+});

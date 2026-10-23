@@ -1,11 +1,13 @@
 import { validSet } from '@/lib/session/set-journal';
+import { avatarPath, storeAvatar } from '@/lib/avatar';
 import type { JournalWrite } from '@/lib/session/set-journal';
 import { supabase } from './supabase';
 import type { GeneratedPlan } from '@/lib/plan/generate';
 import { GYM_ROUTINE_BLOCK_TITLES, isGymRoutine } from '@/lib/plan/gym-routine';
 import { withDayTiming } from '@/lib/plan/timing';
 import { dayKey } from '@/lib/stats';
-import type { Plan, PlanDay, Profile, SetLog } from '@/lib/types';
+import { planWriteClient } from './plan-preferences';
+import type { Plan, PlanDay, Profile, SetLog, Units } from '@/lib/types';
 import type { ExerciseWeightHistory } from '@/lib/weights';
 
 export async function getProfile(userId: string): Promise<Profile | null> {
@@ -15,7 +17,9 @@ export async function getProfile(userId: string): Promise<Profile | null> {
     .eq('id', userId)
     .maybeSingle();
   if (error) throw error;
-  return data as Profile | null;
+  if (!data) return null;
+  const profile = data as Profile;
+  return { ...profile, avatar_url: avatarPath(profile.avatar_url, userId) };
 }
 
 export async function updateProfile(userId: string, patch: Partial<Profile>) {
@@ -23,28 +27,9 @@ export async function updateProfile(userId: string, patch: Partial<Profile>) {
   if (error) throw error;
 }
 
-/**
- * Puts a picked photo in the public `avatars` bucket and hands back its URL.
- * Objects are pathed under the user's id because that is what the storage
- * policy checks; the bucket itself is public so the app can render a plain URL.
- */
+/** Persist an owner-scoped object path; profile reads resolve private access. */
 export async function uploadAvatar(userId: string, uri: string): Promise<string> {
-  const response = await fetch(uri);
-  const contentType = response.headers.get('content-type') || 'image/jpeg';
-  const body = await response.arrayBuffer();
-  const extension = contentType.split('/')[1]?.split('+')[0] || 'jpg';
-  // One object per user: re-picking replaces the old photo rather than
-  // orphaning it, and the URL stays stable.
-  const path = `${userId}/avatar.${extension}`;
-
-  const { error } = await supabase.storage
-    .from('avatars')
-    .upload(path, body, { contentType, upsert: true });
-  if (error) throw error;
-
-  const { data } = supabase.storage.from('avatars').getPublicUrl(path);
-  // A cache-buster, since the path never changes but the photo can.
-  return `${data.publicUrl}?v=${Date.now()}`;
+  return storeAvatar(userId, uri);
 }
 
 /**
@@ -53,8 +38,8 @@ export async function uploadAvatar(userId: string, uri: string): Promise<string>
  * just produced.
  */
 export async function savePlan(userId: string, generated: GeneratedPlan): Promise<string> {
-  void userId; // The RPC derives ownership from auth.uid(), never caller input.
-  const { data, error } = await supabase.rpc('save_plan', { plan: generated });
+  const client = await planWriteClient(userId);
+  const { data, error } = await client.rpc('save_plan', { plan: generated });
   if (error) throw error;
   return data as string;
 }
@@ -128,20 +113,20 @@ export async function getActivePlan(userId: string): Promise<Plan | null> {
   };
 }
 
-export async function startSession(userId: string, planDayId: string): Promise<string> {
-  const now = new Date();
-  const { data, error } = await supabase
-    .from('sessions')
-    .insert({
-      user_id: userId,
-      plan_day_id: planDayId,
-      local_day: dayKey(now),
-      tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    })
-    .select('id')
-    .single();
+export interface SessionCalculationContext { units: Units; bodyweightKg: number | null }
+export async function startSession(
+  userId: string, planDayId: string, context: SessionCalculationContext | undefined, expectedDay: PlanDay,
+): Promise<string> {
+  if (context) sessionCalculationContext({ calculation_context_captured: true, calculation_units: context.units, bodyweight_kg: context.bodyweightKg });
+  if (!expectedDay || expectedDay.id !== planDayId) throw new Error('Reopen the session before starting.');
+  const client = await planWriteClient(userId);
+  const { data, error } = await client.rpc('start_workout', {
+    p_day_id: planDayId,
+    p_expected_items: expectedDay.blocks.flatMap((block) => block.items.map((item) => ({ id: item.id, exercise_id: item.exercise_id }))),
+    p_context: context ?? null,
+  });
   if (error) throw error;
-  return data.id as string;
+  return data as string;
 }
 
 /** The rotation is derived from the last completed day in this exact plan. */
@@ -161,14 +146,16 @@ export async function getLastCompletedPlanDayIndex(userId: string, planId: strin
 }
 
 /** Unlimited, small rows: calendar history must not inherit the recent-list cap. */
-export async function getTrainedDayKeys(userId: string): Promise<string[]> {
-  const { data, error } = await supabase
-    .from('sessions')
-    .select('local_day')
-    .eq('user_id', userId)
-    .not('completed_at', 'is', null);
-  if (error) throw error;
-  return (data ?? []).flatMap((row) => typeof row.local_day === 'string' ? [row.local_day] : []);
+export async function getTrainedDayKeys(userId: string, timeZone = 'UTC'): Promise<string[]> {
+  const keys = new Set<string>();
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await supabase.from('sessions')
+      .select('id, started_at, local_day, tz').eq('user_id', userId)
+      .not('completed_at', 'is', null).order('id').range(offset, offset + 999);
+    if (error) throw error;
+    for (const row of data ?? []) keys.add(dayKey(row.started_at, timeZone));
+    if (!data || data.length < 1000) return [...keys];
+  }
 }
 
 export interface SetWriteResult {
@@ -393,7 +380,7 @@ export async function getWeightHistory(
 export async function getRecentSessions(userId: string, limit = 30) {
   const { data, error } = await supabase
     .from('sessions')
-    .select('id, plan_day_id, started_at, local_day, completed_at, duration_s, rpe, plan_days ( name, focus )')
+    .select('id, plan_day_id, started_at, local_day, tz, completed_at, duration_s, rpe, plan_days ( name, focus )')
     .eq('user_id', userId)
     .not('completed_at', 'is', null)
     .order('started_at', { ascending: false })
@@ -481,9 +468,27 @@ export async function applySessionProgress(
 
 
 export async function getSessionResumeDetails(sessionId: string, userId: string) {
-  const { data, error } = await supabase.from('sessions').select('started_at, completed_at, duration_s')
+  const { data, error } = await supabase.from('sessions').select('started_at, completed_at, duration_s, calculation_units, bodyweight_kg, calculation_context_captured')
     .eq('id', sessionId).eq('user_id', userId).maybeSingle();
   if (error) throw error;
   if (!data) throw new Error('Workout not found.');
-  return data as { started_at: string; completed_at: string | null; duration_s: number | null };
+  return data as { started_at: string; completed_at: string | null; duration_s: number | null;
+    calculation_units: Units | null; bodyweight_kg: number | null; calculation_context_captured: boolean };
+}
+
+export function sessionCalculationContext(row: { calculation_context_captured: boolean; calculation_units: unknown; bodyweight_kg: unknown }): SessionCalculationContext | null {
+  if (!row.calculation_context_captured) return null;
+  if (!['kg','lb'].includes(row.calculation_units as string)
+    || (row.bodyweight_kg !== null && (typeof row.bodyweight_kg !== 'number' || !Number.isFinite(row.bodyweight_kg) || row.bodyweight_kg < 0 || row.bodyweight_kg > 100000)))
+    throw new Error('Could not read the original workout calculation details.');
+  return { units: row.calculation_units as Units, bodyweightKg: row.bodyweight_kg as number | null };
+}
+export async function getSessionCalculationContext(sessionId: string, userId: string, client = supabase,
+  signal?: AbortSignal): Promise<SessionCalculationContext | null> {
+  const request = client.from('sessions').select('calculation_units, bodyweight_kg, calculation_context_captured')
+    .eq('id', sessionId).eq('user_id', userId);
+  const { data, error } = await (signal ? request.abortSignal(signal) : request).maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error('Workout not found.');
+  return sessionCalculationContext(data);
 }

@@ -6,6 +6,8 @@ Begin saves a workout snapshot and client-assigned UUID before any server reques
 
 The outbox replays `start_session` before sets. The additive `20261022224931_idempotent_session_start.sql` migration makes repeated starts acknowledge the same UUID and captured context. It derives ownership from authentication and rejects changed or foreign starts. Retired owned plan days remain valid for a workout begun from an offline cache.
 
+New starts use `start_session_with_context` from `20261023011509_recovery_start_context.sql`, capturing original units, bodyweight and exercise-template identity in the same insert. Exercise swaps and starts share the profile lock. A changed template blocks a new start for review; an acknowledged start can replay after a later swap. Older queued starts keep the five-argument RPC. Training dates use the captured home timezone. Historical unknown calculation context stays unknown in saved receipts.
+
 Cursor changes, drafts, recorded sets and timer deadlines remain durable. Restart restores the original snapshot without reloading the plan. Paused timers retain their offsets, and a completed workout keeps its frozen active duration.
 
 Ending a workout leaves a durable finalization intent in that snapshot. Account sync reconstructs missing start, set and finalization operations after restart. Finalization waits for acknowledged sets, checks the server's complete version snapshot, and saves progression plus its existing idempotent receipt. It runs independently of the summary screen. Conflicting sets block finalization and stay available for explicit review.
@@ -23,3 +25,17 @@ Recovery tests cover offline starts, parent-before-set replay, missing queue rec
 Existing saved workouts and old completion queue entries remain readable. Invalid saved data is preserved for recovery.
 
 Production migration `20261022224931` was applied to `office-gym-trainer` (`asbudyijvunpnhrhsubm`) on 2026-10-22 through the SQL Editor. The function and migration-history entry were committed together. The recorded SQL matches the repository file (MD5 `9c3fe81642c36f311a051e1ce5cc8028`). Verification confirmed security invoker, an empty search path, authenticated-only execution and unauthenticated denial. The six existing sessions were unchanged. No app update was published manually.
+
+The integrated upgrade also applied the four pending migrations from master and the contextual-start migration, with exact SQL and history entries in one transaction:
+
+| Version | Migration | Recorded SQL MD5 |
+| --- | --- | --- |
+| 20261022211107 | private_avatars | 6f26b69a1004a73d34e35791fff4915e |
+| 20261022211126 | session_calculation_context | e2410e40e4d28387c0a5271a64706626 |
+| 20261022211340 | training_preferences | ef953e16c2dd997a96c67a2542f3d6c5 |
+| 20261022211407 | home_timezone | 40ba64e44d879c21edc4a9f9dd33cdb5 |
+| 20261023011509 | recovery_start_context | 53b2983c5921f6bd16c9ed1468bb18a8 |
+
+A physical backup dated 2026-10-22 08:28:54 UTC was visible before this upgrade. A production transaction rehearsal ran the exact migrations and rolled back, leaving zero new history rows. Both rehearsal and commit acquired table locks with bounded timeouts, compared original-column digests for every public table and Storage objects, and exercised owner replay, foreign/anonymous denial, stale templates and immutable calculation context inside rolled-back savepoints. Original data, including all six sessions, was preserved. New historical context remains unknown, profile home timezones are valid, and the avatar bucket is private. Older cached clients using public avatar URLs need a refresh.
+
+This scoped SQL upgrade does not reconcile the older initialization history. Ordinary `supabase db push` remains blocked by the separate [migration baseline](MIGRATION_BASELINE.md) work. No restored-backup rehearsal or linked CLI dry run is claimed.

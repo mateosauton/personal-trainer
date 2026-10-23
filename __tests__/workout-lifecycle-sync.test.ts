@@ -160,3 +160,17 @@ it('uses newly confirmed progression for the next offline workout', async () => 
   expect(next.progress[0].last_weight_kg).toBe(62.5);
   await sync.flushOutbox();
 });
+
+it('captures the home timezone and original calculation context for restart replay', async () => {
+  const saved = await sync.startWorkout(owner, day, {
+    units: 'lb', bodyweightKg: 80, progress: [], homeTimezone: 'Pacific/Kiritimati',
+  });
+  await sync.flushOutbox();
+  expect(saved.start?.tz).toBe('Pacific/Kiritimati');
+  expect(saved.calculationContextKnown).toBe(true);
+  expect(mockStart).toHaveBeenCalledWith(expect.objectContaining({
+    tz: saved.start?.tz, localDay: saved.start?.localDay,
+    context: { units: 'lb', bodyweightKg: 80 },
+    expectedItems: [{ id: day.blocks[0].items[0].id, exercise_id: day.blocks[0].items[0].exercise_id }],
+  }), expect.anything(), expect.any(AbortSignal));
+});

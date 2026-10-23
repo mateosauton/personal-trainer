@@ -7,7 +7,12 @@ interface Storage {
   getItem(key: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<void>;
 }
-export interface LocalSessionReceipt { lines: SessionSummaryLine[]; units: Units; durationS: number }
+export interface LocalSessionReceipt {
+  lines: SessionSummaryLine[];
+  units: Units;
+  durationS: number;
+  calculationContextKnown?: boolean;
+}
 interface StoredReceipt extends LocalSessionReceipt { sessionId: string }
 interface State {
   ownerId: string;
@@ -32,7 +37,8 @@ const validLine = (value: unknown): value is SessionSummaryLine => object(value)
   && typeof value.isPr === 'boolean';
 const validReceipt = (value: unknown): value is LocalSessionReceipt => object(value)
   && Array.isArray(value.lines) && value.lines.every(validLine)
-  && ['kg', 'lb'].includes(value.units as string) && finite(value.durationS, 1);
+  && ['kg', 'lb'].includes(value.units as string) && finite(value.durationS, 1)
+  && (value.calculationContextKnown === undefined || typeof value.calculationContextKnown === 'boolean');
 const invalid = (): never => {
   throw new Error('Workout recovery data is invalid. Its data is preserved.');
 };
@@ -91,6 +97,7 @@ export class LifecycleStore {
     const state = await this.read(owner);
     const receipt = state?.receipt;
     return receipt?.sessionId === session
-      ? { lines: receipt.lines, units: receipt.units, durationS: receipt.durationS } : null;
+      ? { lines: receipt.lines, units: receipt.units, durationS: receipt.durationS,
+        ...(receipt.calculationContextKnown === undefined ? {} : { calculationContextKnown: receipt.calculationContextKnown }) } : null;
   }
 }

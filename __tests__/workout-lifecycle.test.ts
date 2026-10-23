@@ -49,3 +49,14 @@ it('accepts the same UUID regardless of letter case', async () => {
   respond(sessionId.toUpperCase());
   await expect(startSessionOnce({ ...start, sessionId })).resolves.toBe(sessionId);
 });
+
+it('sends immutable calculation and template context through the new RPC', async () => {
+  respond(id);
+  const context = { units: 'lb' as const, bodyweightKg: 80 };
+  const expectedItems = [{ id: '33333333-3333-4333-8333-333333333333', exercise_id: 'press' }];
+  await expect(startSessionOnce({ ...start, context, expectedItems })).resolves.toBe(id);
+  expect(supabase.rpc).toHaveBeenCalledWith('start_session_with_context', {
+    p_session_id: id, p_plan_day_id: start.planDayId, p_started_at: start.startedAt,
+    p_local_day: start.localDay, p_tz: start.tz, p_context: context, p_expected_items: expectedItems,
+  });
+});

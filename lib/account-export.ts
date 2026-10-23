@@ -1,5 +1,8 @@
 import { supabase } from '@/lib/db/supabase';
 import { deliverExport } from '@/lib/export-file';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { readRecoveryData } from './session/recovery-data';
+import { storageLock } from './session/storage-lock';
 
 async function checkAccount(ownerId: string): Promise<void> {
   const { data, error } = await supabase.auth.getSession();
@@ -7,7 +10,7 @@ async function checkAccount(ownerId: string): Promise<void> {
   if (data.session?.user.id !== ownerId) throw new Error('Account changed. Please retry from your profile.');
 }
 
-export async function exportAccountData(ownerId: string): Promise<void> {
+export async function exportAccountData(ownerId: string, includeLocal = false): Promise<void> {
   await checkAccount(ownerId);
   const { data, error } = await supabase.rpc('export_account_data');
   if (error) throw error;
@@ -19,5 +22,9 @@ export async function exportAccountData(ownerId: string): Promise<void> {
       arrays.some(key => !Array.isArray(snapshot[key]))) {
     throw new Error('Invalid account export. Please retry.');
   }
-  await deliverExport(JSON.stringify(snapshot, null, 2), 'office-gym-data.json', () => checkAccount(ownerId));
+  const result = includeLocal ? { ...snapshot,
+    local_recovery: await readRecoveryData(AsyncStorage, ownerId, storageLock),
+  } : snapshot;
+  await checkAccount(ownerId);
+  await deliverExport(JSON.stringify(result, null, 2), 'office-gym-data.json', () => checkAccount(ownerId));
 }

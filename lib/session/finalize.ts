@@ -17,13 +17,14 @@ export interface FinalizationDependencies {
   guard?(): void;
 }
 
-export type FinalizationWorkout = Pick<SavedWorkout, 'ownerId' | 'sessionId' | 'day' | 'units' | 'bodyweightKg'>;
+export type FinalizationWorkout = Pick<SavedWorkout, 'ownerId' | 'sessionId' | 'day' | 'units' | 'bodyweightKg' | 'calculationContextKnown'>;
 
 export type SummarySet = Omit<SetLog, 'plan_item_id'> & { plan_item_id: string | null };
 
 /** Calculation only. Local observations must never be persisted as a server receipt. */
 export function calculateSessionSummary(day: PlanDay, logs: SummarySet[],
   progress: ReadonlyMap<string, ProgressRow>, units: Units, bodyweightKg: number | null,
+  calculationContextKnown = true,
 ): { lines: SessionSummaryLine[]; updates: ProgressRow[] } {
   const itemById = new Map(day.blocks.flatMap(block =>
     block.items.map(item => [item.id, { item, block }] as const)));
@@ -54,7 +55,7 @@ export function calculateSessionSummary(day: PlanDay, logs: SummarySet[],
     const first = sets[0];
     const context = itemById.get(first?.plan_item_id ?? '');
     const workingLoad = first?.is_bodyweight ? first.added_load_kg : first?.weight_kg ?? null;
-    const verdict = context && exercise ? nextLoad(
+    const verdict = context && exercise && calculationContextKnown ? nextLoad(
       sets.map(set => ({ reps: set.reps, rpe: set.rpe })),
       context.item.reps_high, context.item.reps_low, exercise.pattern, workingLoad,
       { last_weight_kg: known?.last_weight_kg ?? null, miss_streak: known?.miss_streak ?? 0 }, units,
@@ -64,7 +65,7 @@ export function calculateSessionSummary(day: PlanDay, logs: SummarySet[],
       ...(hasTimed ? { seconds } : {}), volumeKg, topLoadKg,
       verdict: verdict?.verdict ?? null, isPr });
     // Timed-only work has no rep/load outcome. Warmups never advance a working weight.
-    if (sets.length && context && context.block.kind !== 'warmup') {
+    if (sets.length && context && context.block.kind !== 'warmup' && calculationContextKnown) {
       updates.push({ exercise_id: exerciseId, last_weight_kg: verdict?.last_weight_kg ?? workingLoad,
         last_reps: sets[sets.length - 1].reps,
         best_weight_kg: isPr ? topLoadKg : known?.best_weight_kg ?? null,
@@ -97,7 +98,8 @@ export async function finalizeWorkout(workout: FinalizationWorkout, dependencies
     ]);
     guard();
     const { lines, updates } = calculateSessionSummary(captured.day, snapshot.logs,
-      progress, captured.units, captured.bodyweightKg ?? null);
+      progress, captured.units, captured.calculationContextKnown === false ? null : captured.bodyweightKg ?? null,
+      captured.calculationContextKnown !== false);
     try {
       guard();
       const saved = await dependencies.applyProgress(captured.sessionId,

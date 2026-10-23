@@ -7,6 +7,8 @@ import {
 import { dayKey, sessionTotals, streakDays, type Totals } from './stats';
 import { planCache } from './session/plan-cache';
 import type { Plan, PlanDay } from './types';
+import { validTimeZone } from './calendar-days';
+import { useCalendarToday } from './useCalendarToday';
 
 export interface HistorySession {
   id: string;
@@ -14,6 +16,7 @@ export interface HistorySession {
   duration_s: number | null;
   rpe: number | null;
   local_day: string;
+  tz: string | null;
   plan_days: { name: string; focus: string } | null;
 }
 
@@ -26,6 +29,8 @@ interface DashboardState {
   /** yyyy-MM-dd for every day with a finished session. */
   trainedDays: Set<string>;
   streak: number;
+  today: string;
+  homeTimezone: string;
   /** Sessions finished today, and what they added up to. */
   todaySessions: HistorySession[];
   todayTotals: Totals | null;
@@ -46,7 +51,9 @@ interface DashboardState {
  * have been finished, so a missed Tuesday leaves no hole to feel guilty about.
  * The calendar is a record of what happened, not a schedule to fall behind.
  */
-export function useDashboard(userId: string, bodyweightKg: number | null): DashboardState {
+export function useDashboard(userId: string, bodyweightKg: number | null, homeTimezone?: string): DashboardState {
+  const timeZone = validTimeZone(homeTimezone);
+  const today = useCalendarToday(timeZone);
   const [stateOwner, setStateOwner] = useState(userId);
   const [usingCachedPlan, setUsingCachedPlan] = useState(false);
   const [cachedNextDayId, setCachedNextDayId] = useState<string | undefined>();
@@ -86,7 +93,7 @@ export function useDashboard(userId: string, bodyweightKg: number | null): Dashb
       }
       // Read disk first so a stalled refresh cannot hide a usable offline plan.
       const [planResult, progressResult, historyResult, daysResult] = await Promise.allSettled([
-        getActivePlan(userId), getProgress(userId), getRecentSessions(userId, 200), getTrainedDayKeys(userId),
+        getActivePlan(userId), getProgress(userId), getRecentSessions(userId, 200), getTrainedDayKeys(userId, timeZone),
       ]);
       if (cancelled) return;
       let activePlan = planResult.status === 'fulfilled' ? planResult.value : cached?.plan ?? null;
@@ -135,10 +142,11 @@ export function useDashboard(userId: string, bodyweightKg: number | null): Dashb
         throw readError ?? (historyResult.status === 'rejected' ? historyResult.reason
           : daysResult.status === 'rejected' ? daysResult.reason : null);
       }
-      const history = historyResult.value as unknown as HistorySession[];
+      const history = (historyResult.value as unknown as HistorySession[]).map((row) => ({
+        ...row, local_day: dayKey(row.started_at, timeZone),
+      }));
       setSessions(history);
       setStoredTrainedDays(new Set(daysResult.value));
-      const today = dayKey(new Date());
       const todayIds = history.filter((session) => session.local_day === today).map((session) => session.id);
       const logs = await getSetLogsForSessions(todayIds);
       if (cancelled) return;
@@ -155,7 +163,7 @@ export function useDashboard(userId: string, bodyweightKg: number | null): Dashb
     return () => {
       cancelled = true;
     };
-  }, [userId, bodyweightKg, nonce]);
+  }, [userId, bodyweightKg, nonce, today, timeZone]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
@@ -167,7 +175,6 @@ export function useDashboard(userId: string, bodyweightKg: number | null): Dashb
         ?? plan.days[((lastCompletedDayIndex ?? -1) + 1) % plan.days.length]
       : null;
   const trainedDays = ownState ? storedTrainedDays : new Set<string>();
-  const today = dayKey(new Date());
 
   return {
     plan: ownState ? plan : null,
@@ -175,7 +182,9 @@ export function useDashboard(userId: string, bodyweightKg: number | null): Dashb
     completedCount,
     sessions: ownState ? sessions : [],
     trainedDays,
-    streak: streakDays(trainedDays),
+    streak: streakDays(trainedDays, today),
+    today,
+    homeTimezone: timeZone,
     todaySessions: ownState ? sessions.filter((s) => s.local_day === today) : [],
     todayTotals: ownState ? todayTotals : null,
     lastLoadKg: ownState ? lastLoadKg : new Map(),

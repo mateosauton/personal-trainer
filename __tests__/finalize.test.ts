@@ -186,3 +186,12 @@ it('keeps empty local observations empty', () => {
   expect(calculateSessionSummary(saved.day, [], new Map(), saved.units, null))
     .toEqual({ lines: [], updates: [] });
 });
+
+it('keeps historical calculation context unknown and never updates working loads', async () => {
+  const saved = { ...workout(), calculationContextKnown: false };
+  const deps = dependencies();
+  const result = await finalizeWorkout(saved, deps);
+  expect(result[0].verdict).toBeNull();
+  expect(deps.applyProgress.mock.calls[0][1]).toEqual([]);
+  expect(deps.applyProgress.mock.calls[0][2]).toEqual([]);
+});
