@@ -49,12 +49,20 @@ routing, this working tree, a current native binary or store availability.
 | Store metadata | Record actual support/privacy URLs, contact owner, app metadata, screenshots, account/data disclosures and submission IDs. Verify URLs are public. Publishing source pages alone does not establish store approval. |
 | Recovery | Save previous compatible per-platform update IDs, runtime fingerprints, Worker version, database backup ID and restore evidence before publication. Rehearse recovery against those exact artifacts. |
 
-The existing checks workflow requires manual native publication, a matching
-full master SHA, an installed build UUID and the verified platform. Core
-checks now include fresh-schema and baseline-upgrade rehearsals. Those inputs
-are an operator attestation; CI does not inspect the installed build or
-confirm device behavior. Keep the separately disabled hourly verification
-workflow disabled until a separate decision.
+Automatic [CI checks](CI.md) include fresh-schema and baseline-upgrade
+rehearsals; they do not publish native updates. The separate **Promote tested
+native update** workflow requires the current full `master` SHA, one platform,
+the exact tested candidate group, release-test build, intended installed
+production build, phone-test attestation and evidence link. It fetches actual
+EAS build/group metadata, checks environment/backend and fingerprint
+compatibility, and promotes that existing group without regenerating its bundle.
+
+The operator still supplies the phone-test results and identifies the actual
+installed production cohort. CI does not observe the phone or close the device,
+signing, migration, dependency, store or recovery gates above. Follow
+[release safety](RELEASE_SAFETY.md) for the supported candidate/promotion path,
+receipts and recovery. The legacy hourly URL probe and alternate automatic
+publishers have been removed.
 
 ## Candidate record to complete
 

@@ -5,22 +5,6 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
-    inputs:
-      publish_native:
-        description: Publish after completing the native verification checklist
-        type: boolean
-        default: false
-      tested_sha:
-        description: Full master commit SHA verified on the selected platform
-        type: string
-      native_build_id:
-        description: EAS build UUID installed for that verification
-        type: string
-      release_platform:
-        description: Platform verified with that build
-        type: choice
-        options: [android, ios]
-        default: android
 
 permissions:
   contents: read
@@ -48,9 +32,12 @@ jobs:
     env:
       EXPO_NO_DOTENV: '1'
       EXPO_NO_TELEMETRY: '1'
-      # Bundle checks use fixture settings. PR jobs never receive release secrets.
+      # Only the exact offline fixture is available to tests. Bundling uses its
+      # own synthetic config and writes outside deployable dist.
+      APP_ENV: mock
+      EXPO_PUBLIC_APP_ENV: mock
       EXPO_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
-      EXPO_PUBLIC_SUPABASE_KEY: mock
+      EXPO_PUBLIC_SUPABASE_KEY: sb_publishable_LOCAL_TEST_FIXTURE_ONLY
       PT_LIFECYCLE_DB_URL: postgresql://postgres:recovery-test@127.0.0.1:5432/postgres
       PT_ORDERING_DB_URL: postgresql://postgres:recovery-test@127.0.0.1:5432/postgres
     steps:
@@ -62,84 +49,7 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - name: Check types, behavior, fresh schema, and baseline upgrade
+      - name: Check types, behavior, safety, fresh schema, and baseline upgrade
         run: npm run check:web
-      - name: Build web bundle
-        run: npm run build:web
-
-  update:
-    name: Publish native update
-    needs: check
-    if: github.ref == 'refs/heads/master' && github.event_name == 'workflow_dispatch' && inputs.publish_native == true
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    concurrency:
-      group: eas-production
-      cancel-in-progress: false
-    env:
-      EXPO_NO_DOTENV: '1'
-      EXPO_NO_TELEMETRY: '1'
-      TESTED_SHA: ${{ inputs.tested_sha }}
-      NATIVE_BUILD_ID: ${{ inputs.native_build_id }}
-      RELEASE_PLATFORM: ${{ inputs.release_platform }}
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - name: Validate native verification record
-        run: |
-          if [[ ! "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]] || [ "$TESTED_SHA" != "$GITHUB_SHA" ]; then
-            echo '::error::Provide the full tested SHA matching this master run.'
-            exit 1
-          fi
-          if [[ ! "$NATIVE_BUILD_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
-            echo '::error::Provide the EAS build UUID installed for native verification.'
-            exit 1
-          fi
-          if [ "$RELEASE_PLATFORM" != android ] && [ "$RELEASE_PLATFORM" != ios ]; then
-            echo '::error::Publish only the platform verified with this build.'
-            exit 1
-          fi
-          {
-            echo '## Native verification record'
-            echo "Operator: $GITHUB_ACTOR"
-            echo "Tested commit: $TESTED_SHA"
-            echo "EAS build: $NATIVE_BUILD_ID"
-            echo "Platform: $RELEASE_PLATFORM"
-            echo 'The operator attests to the device checklist. CI does not verify these device results or the build contents.'
-          } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
-      - name: Check this is still the current release
-        id: release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          latest=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/master" --jq '.object.sha')
-          if [ "$latest" = "$GITHUB_SHA" ]; then
-            echo 'current=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'Skipping a release superseded by a newer master commit.'
-            echo 'Publication skipped because a newer master commit exists.' >> "$GITHUB_STEP_SUMMARY"
-            echo 'current=false' >> "$GITHUB_OUTPUT"
-          fi
-      - name: Require Expo release credentials
-        if: steps.release.outputs.current == 'true'
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          if [ -z "$EXPO_TOKEN" ]; then
-            echo '::error::Set the EXPO_TOKEN repository secret to publish native updates.'
-            exit 1
-          fi
-      - uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
-        if: steps.release.outputs.current == 'true'
-        with:
-          eas-version: 23.2.0
-          token: ${{ secrets.EXPO_TOKEN }}
-      - name: Publish to compatible verified-platform builds
-        if: steps.release.outputs.current == 'true'
-        run: eas update --platform "$RELEASE_PLATFORM" --channel production --environment production --message "Release $GITHUB_SHA" --non-interactive
+      - name: Check web bundling without producing a release artifact
+        run: npm run build:web:check
