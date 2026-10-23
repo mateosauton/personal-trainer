@@ -55,7 +55,8 @@ management requests; browser access is available. Do not use `tfh` for this app.
 
 The current setup keeps this existing project for production and uses the local
 stack for development. Hosted development and preview references remain `null`;
-no additional paid projects or branches have been created. A future hosted
+the maintainer declined the paid branch option, so no additional paid projects
+or branches have been created. A future hosted
 preview can use an isolated branch of this same parent after its costs and
 configuration are reviewed. Its child URL must differ from the production URL;
 renaming the production environment is insufficient.
@@ -158,12 +159,13 @@ run. Existing tests roll back their fixtures.
 
 ## Migrations and hosted setup
 
-The repository now contains 13 migrations. The original nine deployed-source
-files remain pinned byte for byte by `supabase/migration-baseline.json`. Four
+The repository now contains 15 migrations. The original nine deployed-source
+files remain pinned byte for byte by `supabase/migration-baseline.json`. Six
 later migrations make avatars private, preserve workout calculation context,
-add atomic training-preference/exercise-swap RPCs, and capture a stable home
-timezone. A fresh local database applies all 13 in filename order. An existing
-database needs its actual history reconciled before any upgrade.
+add atomic training-preference/exercise-swap RPCs, capture a stable home timezone,
+and add idempotent session starts with immutable recovery context. A fresh local
+database applies all 15 in filename order. An existing database needs its actual
+history reconciled before any upgrade.
 
 Run the existing baseline and database checks without modifying their manifest
 to manufacture a match:
@@ -176,7 +178,10 @@ npm run test:db
 
 The database suite compares fresh creation with an upgrade from the pinned
 nine-file baseline, checks data preservation and schema equivalence, and runs
-the SQL regressions. It uses PGlite with test Auth/Storage definitions. It does
+the SQL regressions across all 15 migrations. It uses PGlite with test
+Auth/Storage definitions. Lifecycle and set-ordering checks also use a disposable
+PostgreSQL 17 service in CI to verify concurrent requests. See [CI.md](CI.md)
+for the loopback-only connection variables and local fallback. These checks do
 not establish hosted GoTrue, Storage or Edge Function behavior. Use
 `npm run db:local:test` for SQL regressions inside real local Supabase and verify
 Auth/Storage through their service APIs separately.
@@ -257,13 +262,13 @@ The first local integration check on 22 October 2026 covered the original nine
 migrations and two SQL regressions. That evidence describes the earlier baseline.
 
 After incorporating `master` commit `5f349d2`, a new disposable Supabase stack
-using CLI `2.120.0` and PostgreSQL 17 applied all 13 current migrations. Every
+using CLI `2.120.0` and PostgreSQL 17 applied the 13 migrations present then. Every
 copied migration matched the repository's SHA-256 hash. All five SQL regressions
 passed: account export, home timezone, private avatars, timed set writes and
 training preferences. The nine deployed-source checksum checks and migration
 planner tests also passed without changing the baseline manifest.
 
-The same current stack passed two synthetic Auth password sign-ins, owner-only
+That 13-migration stack passed two synthetic Auth password sign-ins, owner-only
 profile reads through PostgREST/RLS, and the new UTC timezone default. Storage
 verification confirmed a private avatar bucket, owner upload and authenticated
 read, owner signing and successful signed-image delivery. Another user's read
@@ -271,8 +276,16 @@ and upload, and an anonymous public-image request, were denied. The
 `delete-account` function configuration was retained, but its complete adapter
 and account-deletion flow were not exercised by these service checks.
 
-An existing unrelated local stack occupied the committed `5432x` ports. That
-startup failed safely. The integration check ran under its own temporary stack
+The later `20261022224931_idempotent_session_start.sql` and
+`20261023011509_recovery_start_context.sql` bring the current source to 15
+migrations. After incorporating `master` commit `fa5c8b3`, the automated
+fresh-schema and baseline-upgrade PGlite checks passed across all 15. Recovery
+checks include both new migrations. The full Supabase Auth/Storage verification above
+has not been repeated for these two migrations and does not establish a hosted
+preview or the current 15-migration service deployment.
+
+During the earlier 13-migration integration check, an unrelated local stack
+occupied the committed `5432x` ports. Startup failed safely. That check ran under its own temporary stack
 identity on `55320` through `55324`; it did not stop or modify the existing stack.
 The temporary verification stack and its synthetic data were removed afterward.
 The alternate-port check verifies the service configuration and migration replay,

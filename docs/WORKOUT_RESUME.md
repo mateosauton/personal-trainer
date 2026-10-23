@@ -1,17 +1,43 @@
 # Workout recovery
 
-An active workout is saved on the device under its account ID. Home offers Resume workout even when the dashboard cannot load. Beginning another workout returns to the saved workout until its summary has been saved.
+The account's last usable plan and progression are cached on the device. Home and Plan can open the last confirmed next workout while offline. Recent changes from another device appear after reconnecting. A first plan still requires online setup.
 
-Before opening the player, the overview saves the new session snapshot. A failed local save offers Retry start using the same session ID.
+Begin saves a workout snapshot and client-assigned UUID before any server request. The snapshot includes the original day, units, bodyweight, progression, local training date and timezone. Retrying Begin resumes the same saved workout. Failed local storage prevents a network start.
 
-The snapshot contains the original training day, units, exercise progression, current set, drafts, rest deadline, and start/end times. Cursor changes are persisted before the player advances. Restarting the app restores that snapshot without fetching the plan. Rest timers use the original deadline; workout duration includes time spent paused and stops when the last set is completed.
+The outbox replays `start_session` before sets. The additive `20261022224931_idempotent_session_start.sql` migration makes repeated starts acknowledge the same UUID and captured context. It derives ownership from authentication and rejects changed or foreign starts. Retired owned plan days remain valid for a workout begun from an offline cache.
 
-A successful server progression receipt clears the matching snapshot. Failed summary synchronization keeps it for retry. A completed session opened without a snapshot goes directly to its summary. Account changes cancel pending navigation and hide the previous account's workout.
+New starts use `start_session_with_context` from `20261023011509_recovery_start_context.sql`, capturing original units, bodyweight and exercise-template identity in the same insert. Exercise swaps and starts share the profile lock. A changed template blocks a new start for review; an acknowledged start can replay after a later swap. Older queued starts keep the five-argument RPC. Training dates use the captured home timezone. Historical unknown calculation context stays unknown in saved receipts.
 
-Storage errors keep the current step visible. Invalid snapshots are preserved rather than silently deleted, and the UI offers retry. Explicit recovery/export for damaged snapshots remains follow-up work.
+A rejected start stays available for explicit review instead of retrying the same frozen request. The user can archive that workout before beginning another. The full workout, rejection and raw recovery records are saved in an account-scoped archive before the matching active snapshot is cleared. Its queued sets remain available in recovery exports and are excluded from replay. A failed archive write preserves the active workout; a failed clear keeps the recovery action available. Archived copies can still be exported after a new workout starts.
 
-## Verification and remaining work
+Cursor changes, drafts, recorded sets and timer deadlines remain durable. Restart restores the original snapshot without reloading the plan. Paused timers retain their offsets, and a completed workout keeps its frozen active duration.
 
-Automated checks cover restarting storage, offline restoration, corrected sets, saved units, elapsed rest deadlines, stable completion duration, failed persistence, and account-switch navigation. These component checks do not establish a full flow on an installed native build.
+Ending a workout leaves a durable finalization intent in that snapshot. Account sync reconstructs missing start, set and finalization operations after restart. Finalization waits for acknowledged sets, checks the server's complete version snapshot, and saves progression plus its existing idempotent receipt. It runs independently of the summary screen. Conflicting sets block finalization and stay available for explicit review.
 
-Starting a new workout and calculating a new summary still require the backend. This change does not resolve delayed server writes overwriting newer set corrections. Production schema changes, native authentication redirects, and a fresh native release verification remain launch gates.
+The summary immediately displays recorded local sets while offline. Pending results do not claim a personal record or a next-load change. Confirmed progression receipts are saved locally before clearing the matching workout snapshot. A concurrent local change or failed storage write preserves the draft. Beginning another workout returns to the saved workout until finalization succeeds.
+
+Transient sync failures retry up to six times with exponential backoff and jitter, capped at 30 seconds between attempts. Enqueue, connectivity and foreground events can start a new retry cycle. Backgrounding, sign-out and account changes stop scheduled retries. Delivery resumes when the app becomes active.
+
+## Verification and deployment
+
+Recovery tests cover offline starts, parent-before-set replay, missing queue reconstruction, lost responses, local storage failures, screen-independent finalization, receipt reuse, pause duration and account isolation. Component checks cover cached-plan entry and pending summaries. Database checks cover ownership, invalid context, replay and immutable start identity.
+
+`npm run test:recovery-db` uses disposable PGlite databases by default. Set `PT_LIFECYCLE_DB_URL` and `PT_ORDERING_DB_URL` to local PostgreSQL to run separate-connection start and set-ordering races. CI supplies a disposable PostgreSQL service. These checks do not verify hosted Auth, production schema or installed native behavior.
+
+Existing saved workouts and old completion queue entries remain readable. Invalid saved data is preserved for recovery.
+
+Production migration `20261022224931` was applied to `office-gym-trainer` (`asbudyijvunpnhrhsubm`) on 2026-10-22 through the SQL Editor. The function and migration-history entry were committed together. The recorded SQL matches the repository file (MD5 `9c3fe81642c36f311a051e1ce5cc8028`). Verification confirmed security invoker, an empty search path, authenticated-only execution and unauthenticated denial. The six existing sessions were unchanged. No app update was published manually.
+
+The integrated upgrade also applied the four pending migrations from master and the contextual-start migration, with exact SQL and history entries in one transaction:
+
+| Version | Migration | Recorded SQL MD5 |
+| --- | --- | --- |
+| 20261022211107 | private_avatars | 6f26b69a1004a73d34e35791fff4915e |
+| 20261022211126 | session_calculation_context | e2410e40e4d28387c0a5271a64706626 |
+| 20261022211340 | training_preferences | ef953e16c2dd997a96c67a2542f3d6c5 |
+| 20261022211407 | home_timezone | 40ba64e44d879c21edc4a9f9dd33cdb5 |
+| 20261023011509 | recovery_start_context | 53b2983c5921f6bd16c9ed1468bb18a8 |
+
+A physical backup dated 2026-10-22 08:28:54 UTC was visible before this upgrade. A production transaction rehearsal ran the exact migrations and rolled back, leaving zero new history rows. Both rehearsal and commit acquired table locks with bounded timeouts, compared original-column digests for every public table and Storage objects, and exercised owner replay, foreign/anonymous denial, stale templates and immutable calculation context inside rolled-back savepoints. Original data, including all six sessions, was preserved. New historical context remains unknown, profile home timezones are valid, and the avatar bucket is private. Older cached clients using public avatar URLs need a refresh.
+
+This scoped SQL upgrade does not reconcile the older initialization history. Ordinary `supabase db push` remains blocked by the separate [migration baseline](MIGRATION_BASELINE.md) work. No restored-backup rehearsal or linked CLI dry run is claimed.

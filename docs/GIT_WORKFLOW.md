@@ -39,28 +39,29 @@ a phone without unnecessary decisions or lost progress?
 
 ## 1. What exists, and what is proposed
 
-Verified on 2026-10-22 against the checkout and connected GitHub API:
+Historical audit on 2026-10-22 against the checkout and connected GitHub API,
+before the environment-safety and recovery work below was incorporated:
 
 | Area | Observed state | Recommended policy |
 | --- | --- | --- |
-| Integration branch | Current remote `master` is `bf5e9898b87d3786515d6bcce3ce72ba329bc789`. | Keep `master` releasable. Use short `codex/...` branches and PRs. |
-| Work in progress | Local branch `codex/trim-tests-ci` is the head of open PR #49. This checkout also contains uncommitted changes. | Preserve those changes; do not treat them as deployed. |
-| Merge enforcement | GitHub reports `protected: false`, required checks off, and no rulesets. The detailed protection endpoint returns 403 for this connector. | Configure and verify an enforced PR/check rule after the replacement workflow lands. |
-| Native publication | Remote `master` contains `eas-update.yml`, which publishes on pushes to `master`. | The local replacement makes publication a separate manual operation with a tested SHA, build ID, and platform. It takes effect after merge. |
+| Integration branch | Current remote `master` is `5f349d2e7cc71d153df591d15b087ed99d82a7c2`. | Keep `master` releasable. Use short `codex/<issue-number>-<slug>` branches and PRs. |
+| Work in progress | PR #49 is merged. Open PRs #60 and #61 prepare environment safety and recovery changes. | Check those candidates before starting overlapping work. Prepared issue branches alone do not mean implementation has started. |
+| Merge enforcement | GitHub reports `protected: false`, required checks off, and no rulesets. The detailed protection endpoint returns 403 for this connector. | Configure and verify an enforced PR/check rule. |
+| Native publication | Remote `master` contains `checks.yml`, with manual publication after checks and a tested SHA, build ID, and platform. | Follow the device checklist and publish only the verified platform. A source merge is separate from native publication. |
 | Hosted web | Repository configuration builds Cloudflare assets; the release notes describe `master` as its production trigger. | Recheck hosted trigger settings before changing release behavior. Git cannot prove those settings. |
 
-The [remote native workflow](https://github.com/mateosauton/personal-trainer/blob/bf5e9898b87d3786515d6bcce3ce72ba329bc789/.github/workflows/eas-update.yml)
-and [open PR #49](https://github.com/mateosauton/personal-trainer/pull/49)
-are separate from this checkout's proposed
-[CI/CD workflow](../.github/workflows/checks.yml). Until consolidation merges,
-merging to `master` can still trigger the existing native publisher.
+The current [checks workflow](../.github/workflows/checks.yml) checks PRs and
+`master` without publishing. The separate [promotion workflow](../.github/workflows/eas-update.yml)
+requires manual dispatch and the verified, phone-tested update group. PR #49
+merged the earlier consolidated workflow and source improvements. The protection
+state in the audit above is dated; verify current enforcement before relying on it.
 
-The shared checkout has since gained additional local candidates: editable
+Merged source now includes editable
 training preferences and pre-workout swaps, private avatars and account
 deletion, immutable session calculation context, home-timezone handling, and
-migration-baseline tooling. These are implementations under review, not verified
-production behavior. The remote evidence above remains the dated snapshot;
-follow [open release gates](OPEN_RELEASE_GATES.md) before shipping this candidate.
+migration-baseline tooling. Their source merge does not establish hosted
+configuration or installed-device behavior. Follow
+[open release gates](OPEN_RELEASE_GATES.md) before shipping a candidate.
 
 Use one integration branch for now. A permanent `develop` branch would add a
 second integration step without solving database isolation. Pro Git explains
@@ -76,7 +77,7 @@ storage. Naming all three `preview` does not connect them automatically.
 
 | Layer | Current mechanism | What it separates |
 | --- | --- | --- |
-| Source | `master`, current `codex/trim-tests-ci`, commit SHA | File versions and review history. A branch creates no database. |
+| Source | `master`, issue-linked `codex/...` branches, commit SHA | File versions and review history. A branch creates no database. |
 | Local app | Expo/Metro on the developer's machine | App code and local configuration. Its Supabase URL can still target real data. |
 | EAS configuration | `development`, `preview`, `production` variable sets | Build/update values. Isolation depends on the URLs and keys assigned. |
 | Native delivery | Build profiles and update channels in `eas.json` | Who can install a build and which updates it requests. An EAS channel is distinct from a Git branch. |
@@ -98,34 +99,37 @@ and [Expo update delivery concepts](https://docs.expo.dev/eas-update/deployment/
 
 ### Proposed data layout
 
-Start with two persistent Supabase projects, development and production.
-Use synthetic test accounts in development; keep real workout history in
-production. Point EAS development/preview and Cloudflare previews at
-development. Point production builds, production web assets, and deliberate
-release-test builds at production. Record each project's identifier, schema
-migration head, Auth redirects, and Storage setup in an environment inventory
-without credentials.
+The earlier shared-development proposal is superseded by the current isolation
+policy. Keep the existing production project and use the disposable local stack
+for development. Hosted development and preview remain unregistered and blocked;
+the maintainer declined additional hosted costs. Do not provision either target
+without a new authorization.
 
-This proposal does not establish that two projects already exist. Inspect the
-configured project URLs first, then prepare development through the authorized
-Supabase connection. Avoid copying production users or personal data. Consider
-a per-PR database later if simultaneous schema changes collide. A shared
-development backend and named test accounts are sufficient initially.
-Supabase's environment guide demonstrates independent databases and migration
-promotion. We adopt that separation without its extra Git branch.
+If hosted isolation is authorized later, give development and preview distinct
+backend references in `config/environments.json`. A separate Supabase branch can
+supply its own reference and credentials. Point each app/build target at its
+matching backend; the guard rejects a shared development/preview reference or
+production credentials on either target. Keep synthetic accounts separate from
+real workout history. Record backend reference, schema migration head, Auth
+redirects and Storage setup without credentials. Follow [environment isolation](ENVIRONMENTS.md).
 [Source: Supabase managing environments](https://supabase.com/docs/guides/deployment/managing-environments).
 
-Until separation exists, treat any preview using the production URL as a
-production client. Use a designated test account and avoid destructive test
-flows. A preview hostname does not make a migration safe for real users.
+Previously exported previews keep their embedded backend URL. Treat an older
+preview using the production URL as a production client. The new-build block
+does not disconnect those versions or establish that their data is isolated.
 
 ### Local configuration
 
-Use Node 22, `npm ci`, and the committed lockfile. `npm run env:pull` retrieves
-development configuration into `.env.local`; the preview and production
-variants replace the same file. Keep local overrides in
-`.env.development.local`, which has higher priority during development.
-After switching targets, restart Expo and verify the intended project URL.
+Use Node 22, `npm ci`, and the committed lockfile. Follow the local stack
+startup, environment generation and synthetic-account seed in
+[environment isolation](ENVIRONMENTS.md). `db:local:env` writes an ignored
+`.env.local` and refuses to overwrite an existing file.
+
+The `env:pull` scripts retrieve a selected EAS variable set into `.env.local`;
+they do not create its backend. Hosted development and preview cannot run while
+their references are unregistered. Local overrides in `.env.development.local`
+and shell variables can supersede downloaded values. After switching targets,
+restart Expo and verify the intended project URL.
 
 Every `EXPO_PUBLIC_*` value enters the app bundle. Use publishable Supabase
 keys, never service-role credentials. Do not commit actual environment files.
@@ -136,18 +140,23 @@ local files from overriding explicitly supplied build values.
 ### Source-only database setup and integration targets
 
 The new [Supabase configuration](../supabase/config.toml) names the local project
-`office-gym-trainer` and declares the `delete-account` Edge Function entrypoint
+`office-gym-trainer-local` and declares the `delete-account` Edge Function entrypoint
 with platform JWT verification enabled. That local project name does not select
 a hosted backend, create development infrastructure, or prove a complete local
 Supabase stack was started successfully. The deletion handler needs server-side
 credentials in its function environment; those never belong in an app env file.
 
 For repository-only database verification, `npm ci` installs PGlite and
-`npm run test:db` creates disposable databases. It needs no hosted Supabase
-credentials. For integration with real Auth, Storage, OAuth callbacks and Edge
-Functions, use the intended managed development project through the existing
-authorized connection, or separately verify local service startup and seed
-setup. Pulling EAS variables configures the app client, not those services.
+`npm run test:db` creates disposable databases without hosted credentials.
+The CI and promotion jobs also start PostgreSQL 17 and pass loopback
+`PT_LIFECYCLE_DB_URL` and `PT_ORDERING_DB_URL` values so the lifecycle and ordering
+harnesses exercise concurrent connections in separate temporary databases.
+Locally, those harnesses fall back to PGlite when the URLs are absent.
+
+Use the local Supabase stack for actual Auth, REST and private-Storage checks;
+keep the evidence tied to its source and migration head. OAuth callbacks and
+Edge Function behavior need separate verification. Pulling EAS variables
+configures the app client, not those services.
 
 The [baseline manifest](../supabase/migration-baseline.json) pins nine historical
 source migrations. Its production version mappings and verification timestamp
@@ -162,6 +171,12 @@ Use an issue for user-visible work, uncertain bugs, migrations, or a change
 needing a decision. An isolated documentation correction can use the PR itself.
 Keep an issue to the problem, acceptance criteria, affected subsystems, and
 verification. Link relevant [technical decisions](TECHNICAL_DECISIONS.md).
+
+Follow [issue workflow](ISSUE_WORKFLOW.md) for managed labels, assignment,
+named GitHub Projects, status, parent/dependency relationships and Development
+linked branches. Keep that policy and [.github/labels.json](../.github/labels.json)
+in sync when changing classification. Record remaining release checks in #8
+before closing an addressed implementation issue.
 
 | Type | Example in this app | What makes it complete |
 | --- | --- | --- |
@@ -204,7 +219,7 @@ git fetch origin --prune
 If it is clean and suitable for the new task:
 
 ```sh
-git switch -c codex/respect-gym-equipment origin/master
+git switch -c codex/123-respect-gym-equipment origin/master
 npm ci
 ```
 
@@ -212,7 +227,7 @@ If another change is in progress, leave it in place and use a separate
 worktree. In Codex, prefer the managed worktree tool. The manual equivalent is:
 
 ```sh
-git worktree add -b codex/respect-gym-equipment ../personal-trainer-equipment origin/master
+git worktree add -b codex/123-respect-gym-equipment ../personal-trainer-equipment origin/master
 cd ../personal-trainer-equipment
 npm ci
 ```
@@ -241,7 +256,7 @@ commit taxonomy on this personal repository.
 
 For the proposed persistent exercise-exclusion feature, merge useful increments:
 preserve excluded IDs with safe defaults, filter new plans, then add the phone
-controls. Build on the local training-preference and pre-workout-swap candidates
+controls. Build on the merged training-preference and pre-workout-swap implementations
 instead of implementing them twice. A mid-workout replacement needs a separate
 decision about existing snapshots and set identities. Each increment must
 preserve existing users and saved plans. If an incomplete feature needs a flag,
@@ -252,23 +267,25 @@ are easier to assess and revert.
 
 ## 5. Verify the subsystem that changed
 
-Run the same basic commands as the proposed CI before requesting merge:
+Run the same basic commands as CI before requesting merge:
 
 ```sh
 npm run check:web
-EXPO_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 EXPO_PUBLIC_SUPABASE_KEY=mock npm run build:web
+npm run build:web:check
 git diff --check
 ```
 
-`check:web` runs TypeScript and unit/database suites. The current `test:db`
-chain includes historical ownership/progression/ordering checks,
+`check:web` runs TypeScript, environment/release safety checks, preview-server
+tests, the focused Jest suite and database suites. The current `test:db` chain
+includes lifecycle, historical ownership/progression/ordering and session-context checks,
 `test:migrations`, and `test-database.cjs`. The last checks both a fresh schema
 and an upgrade from the pinned nine-file baseline with existing account,
 plan, timed-set and receipt fixtures. It compares resulting columns, functions,
 grants, constraints, policies, indexes and RLS flags, and runs SQL regressions.
 These are local test definitions, not a claim that every current check passes.
-The web export checks bundling with fixture settings; it does not authenticate
-against a backend. Use the [architecture subsystem map](ARCHITECTURE.md) to trace
+`build:web:check` compiles synthetic public settings into `.expo/web-check`,
+which must never be deployed. It does not authenticate against a backend.
+Distribution exports use `build:web` with a validated hosted environment. Use the [architecture subsystem map](ARCHITECTURE.md) to trace
 the changed code, then select additional evidence:
 
 | Changed area | Relevant evidence |
@@ -277,7 +294,7 @@ the changed code, then select additional evidence:
 | Workout writes | Unit checks plus `npm run test:db`; retry, out-of-order writes, resume, and two-account isolation. |
 | SQL/RPC/RLS | `npm run migrations:check`, `npm run test:migrations`, fresh-schema/baseline-upgrade behavior, old client payloads, and ownership denial. Hosted Auth/REST/Storage checks remain separate. |
 | Preferences/swaps | Atomic profile/plan save, stale preference or exercise rejection, unavailable alternatives, active-session swap rejection, and preserved history. |
-| Session context/calendar | Immutable captured units/bodyweight, explicit unknown historical context, home timezone across midnight/travel, and old-client defaults. `node scripts/test-session-context.cjs` is an additional local harness, not currently in `test:db`. |
+| Session context/calendar | Immutable captured units/bodyweight, explicit unknown historical context, home timezone across midnight/travel, and old-client defaults. `node scripts/test-session-context.cjs` runs within `test:db`. |
 | Privacy/account deletion | Private-avatar access and old URL handling; function deployment/JWT behavior; token-bound deletion and storage cleanup. Handler unit tests do not verify the hosted function. |
 | UI/navigation | Narrow phone layout, keyboard, one-handed actions, loading/error states, back navigation, and the changed workout flow. |
 | Auth | Sign-in/out, confirmation/recovery callbacks, existing/new account routing, and the affected native platform. |
@@ -369,11 +386,13 @@ merges while preparing an urgent release.
 
 If `master` contains unrelated unreleased work, first roll back the affected
 deployment when safe, then correct or revert the blocking work through `master`.
-The local native dispatcher only publishes current master. It cannot publish
-a patch branched from an older shipped SHA. That option requires a separately
-reviewed immutable-candidate publication gate before use, with the fix also
-integrated into `master`. Do not treat a historical release branch as an
-existing bypass. Follow [release recovery](RELEASES.md#10-incident-rollback-and-hotfix).
+The normal native promotion gate requires the current `master` SHA and its
+verified, phone-tested candidate group. Correct `master` and test a fresh
+candidate rather than bypassing that gate with a historical source branch.
+For incident recovery, follow [release safety](RELEASE_SAFETY.md) to select a
+previously verified compatible group and preserve its platform, runtime and
+backend evidence. Recovery republishes an existing artifact; it does not turn
+an arbitrary historical checkout into an approved release.
 
 Rollback restores a deployed artifact. Revert adds source history undoing a
 change so the next deployment does not reintroduce it. Neither undoes database
@@ -389,14 +408,15 @@ Codex. Preserve unmerged work and needed local files first.
 
 | Priority | Change | Done when |
 | --- | --- | --- |
-| First | Merge the reviewed CI/native-publication changes. | Remote workflow checks PRs and requires explicit publication with commit/build/platform evidence. |
+| Complete | Consolidated checks from #49, followed by environment and release safety. | PR checks do not publish; manual promotion verifies the exact tested group, source, builds, backend and runtime. |
 | First | Enforce PRs and `Core and security checks` on `master`. | An unchecked test PR cannot merge; the rule applies to the owner and prevents force pushes/deletion. |
 | First | Reconcile the pinned source baseline with production migration history. | Verified version mappings, a representative restore rehearsal and a linked dry run list only intended additions. Source checksums alone do not close this gate. |
-| Next | Establish development Supabase and map all targets. | Preview accounts/data are separate; Auth, Storage, and migration checks pass there. |
+| Deferred | Hosted development/preview after explicit cost approval. | Each authorized target has a distinct backend reference and verified Auth, Storage and migration behavior. Local development remains available meanwhile. |
 | Next | Record source SHA, backend migration head, and platform IDs per release. | A phone bug can be traced to its runtime and data contract. |
 | Later | Automate onboarding and completed-session mobile smoke flows. | CI reproduces those flows; physical-device evidence remains explicit. |
 
-Require the new job only after consolidation merges and GitHub runs the replacement workflow. Verify
+Consolidation has merged and GitHub has run the replacement workflow. Configure
+the required check and verify
 enforcement instead of equating a saved rule with a working gate. Require PRs,
 current passing checks, and resolved conversations. Keep required approvals
 at zero for solo work. GitHub documents checks, administrator bypass, and plan

@@ -19,6 +19,11 @@ list project `asbudyijvunpnhrhsubm`; querying its migrations returned permission
 denied. No remote history, schema, or application data was modified. The source
 baseline is based on the release record, not a fresh production schema dump.
 
+Later that day, PR #61 used the authenticated dashboard for a scoped SQL upgrade.
+Its production history capture, transaction rehearsal and applied migration
+versions are recorded in [workout recovery](WORKOUT_RESUME.md). The older baseline
+mappings remain unverified; that upgrade does not make ordinary `db push` safe.
+
 ## Checks available now
 
 ```sh

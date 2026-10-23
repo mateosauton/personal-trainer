@@ -48,8 +48,22 @@ jobs:
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: recovery-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       EXPO_NO_DOTENV: '1'
+      PT_LIFECYCLE_DB_URL: postgresql://postgres:recovery-test@127.0.0.1:5432/postgres
+      PT_ORDERING_DB_URL: postgresql://postgres:recovery-test@127.0.0.1:5432/postgres
       RELEASE_SHA: ${{ inputs.source_sha }}
       RELEASE_PLATFORM: ${{ inputs.platform }}
       RELEASE_GROUP: ${{ inputs.candidate_group }}
