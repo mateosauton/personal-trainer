@@ -27,24 +27,23 @@ Verified on 2026-10-22 against the checkout and connected GitHub API:
 
 | Area | Observed state | Recommended policy |
 | --- | --- | --- |
-| Integration branch | Current remote `master` is `bf5e9898b87d3786515d6bcce3ce72ba329bc789`. | Keep `master` releasable. Use short `codex/...` branches and PRs. |
-| Work in progress | Local branch `codex/trim-tests-ci` is the head of open PR #49. This checkout also contains uncommitted changes. | Preserve those changes; do not treat them as deployed. |
-| Merge enforcement | GitHub reports `protected: false`, required checks off, and no rulesets. The detailed protection endpoint returns 403 for this connector. | Configure and verify an enforced PR/check rule after the replacement workflow lands. |
-| Native publication | Remote `master` contains `eas-update.yml`, which publishes on pushes to `master`. | The local replacement makes publication a separate manual operation with a tested SHA, build ID, and platform. It takes effect after merge. |
+| Integration branch | Current remote `master` is `5f349d2e7cc71d153df591d15b087ed99d82a7c2`. | Keep `master` releasable. Use short `codex/<issue-number>-<slug>` branches and PRs. |
+| Work in progress | PR #49 is merged. Open PRs #60 and #61 prepare environment safety and recovery changes. | Check those candidates before starting overlapping work. Prepared issue branches alone do not mean implementation has started. |
+| Merge enforcement | GitHub reports `protected: false`, required checks off, and no rulesets. The detailed protection endpoint returns 403 for this connector. | Configure and verify an enforced PR/check rule. |
+| Native publication | Remote `master` contains `checks.yml`, with manual publication after checks and a tested SHA, build ID, and platform. | Follow the device checklist and publish only the verified platform. A source merge is separate from native publication. |
 | Hosted web | Repository configuration builds Cloudflare assets; the release notes describe `master` as its production trigger. | Recheck hosted trigger settings before changing release behavior. Git cannot prove those settings. |
 
-The [remote native workflow](https://github.com/mateosauton/personal-trainer/blob/bf5e9898b87d3786515d6bcce3ce72ba329bc789/.github/workflows/eas-update.yml)
-and [open PR #49](https://github.com/mateosauton/personal-trainer/pull/49)
-are separate from this checkout's proposed
-[CI/CD workflow](../.github/workflows/checks.yml). Until consolidation merges,
-merging to `master` can still trigger the existing native publisher.
+The [merged CI/CD workflow](../.github/workflows/checks.yml) checks PRs and
+`master`; its native publisher requires an explicit manual dispatch. PR #49
+merged the consolidated workflow and source improvements. GitHub still reports
+`master` as unprotected, so check enforcement remains unfinished.
 
-The shared checkout has since gained additional local candidates: editable
+Merged source now includes editable
 training preferences and pre-workout swaps, private avatars and account
 deletion, immutable session calculation context, home-timezone handling, and
-migration-baseline tooling. These are implementations under review, not verified
-production behavior. The remote evidence above remains the dated snapshot;
-follow [open release gates](OPEN_RELEASE_GATES.md) before shipping this candidate.
+migration-baseline tooling. Their source merge does not establish hosted
+configuration or installed-device behavior. Follow
+[open release gates](OPEN_RELEASE_GATES.md) before shipping a candidate.
 
 Use one integration branch for now. A permanent `develop` branch would add a
 second integration step without solving database isolation. Pro Git explains
@@ -60,7 +59,7 @@ storage. Naming all three `preview` does not connect them automatically.
 
 | Layer | Current mechanism | What it separates |
 | --- | --- | --- |
-| Source | `master`, current `codex/trim-tests-ci`, commit SHA | File versions and review history. A branch creates no database. |
+| Source | `master`, issue-linked `codex/...` branches, commit SHA | File versions and review history. A branch creates no database. |
 | Local app | Expo/Metro on the developer's machine | App code and local configuration. Its Supabase URL can still target real data. |
 | EAS configuration | `development`, `preview`, `production` variable sets | Build/update values. Isolation depends on the URLs and keys assigned. |
 | Native delivery | Build profiles and update channels in `eas.json` | Who can install a build and which updates it requests. An EAS channel is distinct from a Git branch. |
@@ -147,6 +146,12 @@ needing a decision. An isolated documentation correction can use the PR itself.
 Keep an issue to the problem, acceptance criteria, affected subsystems, and
 verification. Link relevant [technical decisions](TECHNICAL_DECISIONS.md).
 
+Follow [issue workflow](ISSUE_WORKFLOW.md) for managed labels, assignment,
+named GitHub Projects, status, parent/dependency relationships and Development
+linked branches. Keep that policy and [.github/labels.json](../.github/labels.json)
+in sync when changing classification. Record remaining release checks in #8
+before closing an addressed implementation issue.
+
 | Type | Example in this app | What makes it complete |
 | --- | --- | --- |
 | Bug | A plan rebuild assigns a machine excluded in onboarding. | Reproduce with a saved profile, correct selection, and verify new and rebuilt plans. |
@@ -188,7 +193,7 @@ git fetch origin --prune
 If it is clean and suitable for the new task:
 
 ```sh
-git switch -c codex/respect-gym-equipment origin/master
+git switch -c codex/123-respect-gym-equipment origin/master
 npm ci
 ```
 
@@ -196,7 +201,7 @@ If another change is in progress, leave it in place and use a separate
 worktree. In Codex, prefer the managed worktree tool. The manual equivalent is:
 
 ```sh
-git worktree add -b codex/respect-gym-equipment ../personal-trainer-equipment origin/master
+git worktree add -b codex/123-respect-gym-equipment ../personal-trainer-equipment origin/master
 cd ../personal-trainer-equipment
 npm ci
 ```
@@ -225,7 +230,7 @@ commit taxonomy on this personal repository.
 
 For the proposed persistent exercise-exclusion feature, merge useful increments:
 preserve excluded IDs with safe defaults, filter new plans, then add the phone
-controls. Build on the local training-preference and pre-workout-swap candidates
+controls. Build on the merged training-preference and pre-workout-swap implementations
 instead of implementing them twice. A mid-workout replacement needs a separate
 decision about existing snapshots and set identities. Each increment must
 preserve existing users and saved plans. If an incomplete feature needs a flag,
@@ -236,7 +241,7 @@ are easier to assess and revert.
 
 ## 5. Verify the subsystem that changed
 
-Run the same basic commands as the proposed CI before requesting merge:
+Run the same basic commands as CI before requesting merge:
 
 ```sh
 npm run check:web
@@ -373,14 +378,15 @@ Codex. Preserve unmerged work and needed local files first.
 
 | Priority | Change | Done when |
 | --- | --- | --- |
-| First | Merge the reviewed CI/native-publication changes. | Remote workflow checks PRs and requires explicit publication with commit/build/platform evidence. |
+| Complete | Consolidated CI/native-publication changes merged in #49. | Remote workflow checks PRs and requires explicit publication with commit/build/platform evidence. |
 | First | Enforce PRs and `Core and security checks` on `master`. | An unchecked test PR cannot merge; the rule applies to the owner and prevents force pushes/deletion. |
 | First | Reconcile the pinned source baseline with production migration history. | Verified version mappings, a representative restore rehearsal and a linked dry run list only intended additions. Source checksums alone do not close this gate. |
 | Next | Establish development Supabase and map all targets. | Preview accounts/data are separate; Auth, Storage, and migration checks pass there. |
 | Next | Record source SHA, backend migration head, and platform IDs per release. | A phone bug can be traced to its runtime and data contract. |
 | Later | Automate onboarding and completed-session mobile smoke flows. | CI reproduces those flows; physical-device evidence remains explicit. |
 
-Require the new job only after consolidation merges and GitHub runs the replacement workflow. Verify
+Consolidation has merged and GitHub has run the replacement workflow. Configure
+the required check and verify
 enforcement instead of equating a saved rule with a working gate. Require PRs,
 current passing checks, and resolved conversations. Keep required approvals
 at zero for solo work. GitHub documents checks, administrator bypass, and plan

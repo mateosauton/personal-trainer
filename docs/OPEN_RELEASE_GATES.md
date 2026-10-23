@@ -4,8 +4,23 @@ This document tracks the unfinished work in
 [#8](https://github.com/mateosauton/personal-trainer/issues/8),
 [#22](https://github.com/mateosauton/personal-trainer/issues/22) and
 [#39](https://github.com/mateosauton/personal-trainer/issues/39).
-Current source changes are local. No native build, hosted migration, store
-submission or production publication was performed while addressing these issues.
+Source changes from #49 are merged. Open PRs #60 and #61 remain separate
+candidates. No native build, hosted migration, store submission or production
+publication was performed during the issue triage.
+
+## Implementation handoff
+
+Issues #3, #9, #10, #33 and #42 are closed for completed source acceptance.
+Their remaining release checks stay in #8: installed account switching with
+pending data, preference/swap and home-timezone behavior after migration,
+timed edits through outage/restart/replay, and hosted confirmation/recovery URL
+cleanup. Record the exact candidate and result before completing those checks.
+This handoff does not mark any device or hosted check as passed. Issue #6
+remains open until its complete email recovery flow is verified.
+
+Release issue #8 is blocked by #4, #5, #6, #7, #22 and #39. Cross-device recovery
+in #30 remains a separate follow-up. See [issue progress](ISSUE_PROGRESS.md)
+and [issue workflow](ISSUE_WORKFLOW.md) for the project boards and relationships.
 
 ## Evidence already recorded
 
