@@ -20,7 +20,8 @@ test('accepts the explicitly mapped hosted environment and canonicalizes its URL
 test('rejects missing, unknown and unprovisioned environments', () => {
   for (const environment of ['', 'staging', 'prod']) assert.throws(() => validateEnvironment(input(environment), registry), /environment/i);
   assert.throws(() => validateEnvironment({ ...input(), appEnvironment: undefined }, registry), /environment/i);
-  for (const environment of ['development', 'preview']) assert.throws(() => validateEnvironment(input(environment)), /not provisioned/i);
+  const unprovisioned = { ...registry, development: { projectRef: null }, preview: { projectRef: null } };
+  for (const environment of ['development', 'preview']) assert.throws(() => validateEnvironment(input(environment), unprovisioned), /not provisioned/i);
 });
 
 test('rejects cross-environment backends and duplicate backend mappings', () => {

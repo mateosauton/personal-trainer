@@ -82,7 +82,8 @@ test('wrapper checks routing before EAS config discovery can erase the outer com
 });
 
 test('unregistered preview cannot start the pinned CLI', () => {
-  const fixture = attempt(args('preview', 'android', 'preview'), environment('preview'), { registry: undefined });
+  const unprovisioned = { ...registry, preview: { projectRef: null } };
+  const fixture = attempt(args('preview', 'android', 'preview'), environment('preview'), { registry: unprovisioned });
   assert.throws(fixture.run, /not provisioned/);
   assert.equal(fixture.invocations.length, 0);
 });
