@@ -3,6 +3,9 @@
 > Historical snapshot. Start with the current [architecture](ARCHITECTURE.md),
 > [releases](RELEASES.md), and [decision register](TECHNICAL_DECISIONS.md).
 > Recheck old findings against current code before implementing them.
+> Web hosting was refreshed on 2026-10-22. Cloudflare is the only web host;
+> the former Vercel deployment configuration has been removed. Use the current
+> [Cloudflare release guide](CLOUDFLARE_RELEASE.md) for deployment instructions.
 
 **Repo:** `mateosauton/personal-trainer` · **App:** Office Gym (`office-gym-trainer`)
 **Audience:** the engineer taking this over. No prior context assumed.
@@ -275,7 +278,7 @@ Ids match [IMPROVEMENTS.md](./IMPROVEMENTS.md).
 | Images | **expo-image** | `cachePolicy="memory-disk"` — a session repeats offline after its first run. |
 | Tests | **Jest** + `jest-expo` | 16 suites, 114 tests, including component suites and `queries`/`auth`/`outbox`. |
 | Native builds | **EAS** | `eas.json` with `preview` (internal APK) and `production` (autoIncrement) profiles. |
-| Hosting | **Vercel** primary; GitHub Pages + jsDelivr mirrors; a `wrangler.jsonc` for Cloudflare Workers | `npm run export:web` → static SPA using EAS production variables. See [§11.2](#112-the-deployed-targets). |
+| Hosting | Cloudflare only | `wrangler.jsonc` serves the static Expo export with a single-page fallback. See [§11.2](#112-the-deployed-targets). |
 
 ### 3.1 Choices worth defending in a review
 
@@ -576,7 +579,7 @@ history, so `useDashboard` exists. Each screen still holds its *own* instance an
 ├── scripts/build-catalog.mjs     # free-exercise-db → lib/data/exercises.json
 ├── tools/dev/                    # mock-supabase, drive, serve-dist
 ├── __tests__/                    # 16 suites, 114 tests
-├── eas.json · wrangler.jsonc · vercel.json
+├── eas.json · wrangler.jsonc
 └── .github/workflows/            # publish-pages.yml · verify-deploy.yml · eas-update.yml — none runs tests (R16)
 ```
 
@@ -676,8 +679,8 @@ derived. **Never delete a "why" comment while changing the code it guards.**
 ### 7.9 Git **[established]**
 
 Mixed: Conventional-commit prefixes for infrastructure (`ci:`, `chore:`, `docs:`) and plain imperative subjects for
-product changes. **[proposed]** Standardise on Conventional Commits. Squash-merge to `master` — Vercel builds every
-push to it, so `master` must always be deployable.
+product changes. **[proposed]** Standardise on Conventional Commits. Keep `master` deployable.
+Follow the current [Git workflow](GIT_WORKFLOW.md) and [CI guide](CI.md) for release checks and publishing.
 
 ### 7.10 What "done" looks like
 
@@ -1151,8 +1154,9 @@ local dotenv loading for hosted exports.
 
 The committed `.env.production` was removed. `.gitignore` excludes all `.env*` files except `.env.example`
 and `.env.test`. Never put a service-role key or any secret in an `EXPO_PUBLIC_*` variable.
-GitHub uses the repository's `EXPO_TOKEN` secret. Vercel needs an `EXPO_TOKEN` in its Production and Preview
-build environments to fetch EAS variables. See [README setup](../README.md#environment-variables).
+GitHub native publishing uses the repository's `EXPO_TOKEN` secret. Cloudflare uses `npm run build:web`
+with public app variables copied into its build environment and does not need an Expo token.
+See [README setup](../README.md#environment-variables).
 
 The dev sign-in shortcut (`lib/dev-auth.ts`) needs a dev build *or* `EXPO_PUBLIC_ALLOW_DEV_LOGIN=1`, both
 credentials present, and a whitelisted address. Keep all test-login variables out of EAS and in the local
@@ -1160,36 +1164,26 @@ development override file; a hidden button does not remove an inlined password f
 
 ### 11.2 The deployed targets
 
+Cloudflare is the only web host. The public testing app is at
+[personal-trainer.sautonmateo.workers.dev](https://personal-trainer.sautonmateo.workers.dev).
+
 ```mermaid
 flowchart LR
-    M["push to master"] --> V["Vercel: npm run export:web<br/>EAS production variables; rewrites routes to index.html"]
-    M --> W["publish-pages.yml"]
-    W --> B1["baseUrl /personal-trainer → gh-pages branch<br/>404.html + .nojekyll"]
-    W --> B2["baseUrl /gh/owner/repo@cdn → cdn branch"]
-    M --> VD["verify-deploy.yml — waits for Vercel,<br/>fetches, asserts; hourly uptime probe"]
-
-    V --> VU["vercel.app — behind Deployment Protection"]
-    B1 --> GP["github.io/personal-trainer/ — needs Pages enabled by hand"]
-    B2 --> JD["jsDelivr @cdn — no login needed"]
+    M["Cloudflare build trigger"] --> C["npm run check:web and npm run build:web"]
+    C --> W["Cloudflare Worker static assets from dist/"]
+    W --> U["personal-trainer.sautonmateo.workers.dev"]
 ```
 
-*Vercel* is the one you want (real SPA rewrites, so deep links work); Deployment Protection currently gates it, and
-*Settings → Deployment Protection → Vercel Authentication → Disabled* makes it public with nothing exposed.
-*GitHub Pages* has no rewrite rules, so `404.html` doubles as the SPA entry. *jsDelivr* needs no switch thrown but
-cannot rewrite, so deep links 404 and you must enter at the root.
+`wrangler.jsonc` runs checks before exporting the static app and configures
+`single-page-application` fallback for direct routes and browser refreshes.
+Hosted build variables and branch triggers are configured in Cloudflare.
+See the [Cloudflare release guide](CLOUDFLARE_RELEASE.md) for previews,
+verification, and rollback, and the [CI guide](CI.md) for the current checks.
 
-Pages and CDN need **separate exports** because `experiments.baseUrl` is baked into every asset URL;
-`.github/scripts/set-base-url.mjs` patches `app.json` in CI rather than committing the prefix.
-
-A `wrangler.jsonc` was added for Cloudflare Workers; treat it as a fourth, newest target and check whether it is
-wired to CI before relying on it.
-
-**Neither workflow runs `tsc` or `jest`** ([R16](#2-risks-and-open-gaps)).
-
-> ⚠️ **`verify-deploy.yml` is not an uptime check.** When Vercel answers with its SSO page the script records
-> `protected=0`, prints a message and **exits 0**. So it goes green on a fully gated deployment. Read it as "the
-> build was reachable", not "the app is up" — and do not treat it as monitoring while
-> [R15](#2-risks-and-open-gaps) is still open.
+Vercel, GitHub Pages, and jsDelivr were earlier web mirrors. Their old release
+instructions are retired. The repository no longer contains `vercel.json` or
+those publishing workflows. Exercise images still use jsDelivr independently
+of web hosting.
 
 ### 11.3 Native builds
 
@@ -1214,7 +1208,7 @@ Use the mock backend from [§0.2](#02-zero-to-a-running-app). To check a real ex
 
 ```bash
 npm run export:web
-node tools/dev/serve-dist.mjs dist 8090        # same rewrite rule Vercel applies
+node tools/dev/serve-dist.mjs dist 8090        # same SPA fallback as Cloudflare
 ```
 
 **Add flows to `drive.mjs` rather than writing new scripts** — but it does not run on a fresh checkout
@@ -1304,7 +1298,7 @@ reinstalling the app or clearing its data is the blunt version.
 | Exercise renders as a raw id | `getExercise()` returned undefined — a stale `exercise_id` after a catalog rebuild |
 | A query returns `[]` that should have rows | **An RLS denial reads as an empty result, not an error.** Check the policy before the query |
 | A dialog does nothing | Should no longer happen — but check nothing reintroduced a direct `Alert.alert` |
-| Web build 404s on a deep link | The jsDelivr and Pages mirrors cannot rewrite; only Vercel can ([§11.2](#112-the-deployed-targets)) |
+| Web build 404s on a deep link | Check that Cloudflare serves `dist/` with `not_found_handling: "single-page-application"` from `wrangler.jsonc` ([§11.2](#112-the-deployed-targets)) |
 
 **Supabase → Logs → API** shows the actual PostgREST requests — the fastest way to tell a bad filter from a policy
 denial. React DevTools and the Expo dev menu work normally.
@@ -1517,7 +1511,7 @@ This is a sequence, not a second copy of the risk list — each item links to
 | Anything about the exercise data | `scripts/build-catalog.mjs`, then `npm run catalog` |
 | The schema | a new `supabase/migrations/NNNN_*.sql` + `lib/types.ts` + the query — applied **by hand**, [§10.7](#107-migrations) |
 | Any query | `lib/db/queries.ts` (15 exported functions) |
-| Hosting and CI | `vercel.json`, `wrangler.jsonc`, `eas.json`, `.github/workflows/` |
+| Hosting and CI | `wrangler.jsonc`, `eas.json`, `.github/workflows/` |
 
 ### Licensing
 
