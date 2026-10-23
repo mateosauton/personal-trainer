@@ -42,6 +42,18 @@ describe('workout completion motion', () => {
     expect(takeTrainedDayMotion(owner, today, true, [completed('new-session')])).toBeNull();
   });
 
+  it('waits for both dashboard reads regardless of which confirms the new day first', () => {
+    for (const sessionArrivesFirst of [false, true]) {
+      const owner = `separate-reads-${sessionArrivesFirst}`;
+      takeTrainedDayMotion(owner, today, false, []);
+      signalWorkoutCompletion(owner, 'new-session');
+      expect(takeTrainedDayMotion(owner, today, !sessionArrivesFirst,
+        sessionArrivesFirst ? [completed('new-session')] : [])).toBeNull();
+      expect(takeTrainedDayMotion(owner, today, true, [completed('new-session')])).toBe('new-session');
+      expect(takeTrainedDayMotion(owner, today, true, [completed('new-session')])).toBeNull();
+    }
+  });
+
   it('does not fill on initial load, history refresh, or another workout on the same day', () => {
     expect(takeTrainedDayMotion('initial-load', today, true, [completed('old')])).toBeNull();
     expect(takeTrainedDayMotion('refresh', today, false, [])).toBeNull();
