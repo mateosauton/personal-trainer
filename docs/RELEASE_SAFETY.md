@@ -22,7 +22,7 @@ The candidate runtime must equal both binary runtimes and their EAS fingerprints
 
 ## Prepare and test a candidate
 
-Use a clean checkout of the current `master` commit, Node 22 and EAS CLI 23.2.0. Run `npm ci`, `npm run lint`, and `npm test -- --runInBand --testTimeout=20000`.
+Use a clean checkout of the current `master` commit, Node 22 and EAS CLI 23.2.0. Run `npm ci` and `npm run check:web`; this includes TypeScript, behavior/security tests, database checks and the migration-baseline upgrade rehearsal.
 
 Load production environment values explicitly for candidate export:
 
@@ -43,6 +43,8 @@ Install a matching release-test build and load **that exact update group**. Veri
 - Start a workout, record/edit sets, finish it, restart, and confirm history and totals.
 - Disconnect, record a set, reconnect, and confirm replay without duplicates or lost progress.
 - Confirm current database migrations/RPCs remain compatible with installed clients and the candidate. List any prerequisite backend deployment.
+
+The broader [open release gates](OPEN_RELEASE_GATES.md) still require their own device, signing, migration, dependency, public-link, store and recovery evidence. Passing this artifact gate does not close those product release gates.
 
 The workflow checks the identities. The phone test and backend compatibility statements are explicit human attestations, not automated device or database proofs. Use a test account; the release-test build intentionally contacts the production backend.
 

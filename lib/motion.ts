@@ -3,6 +3,7 @@ export type StepDirection = 'forward' | 'backward';
 export const motion = {
   fast: 140,
   base: 240,
+  focused: { distance: 10, popScale: 1.045, stagger: 45, readyScale: 1.025 },
   settle: { damping: 16, stiffness: 260 },
   pop: { damping: 12, stiffness: 320 },
 } as const;

@@ -2,7 +2,7 @@ import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
-import Animated, { FadeIn, ReduceMotion } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeInDown, ReduceMotion } from 'react-native-reanimated';
 
 import { DoodlePop } from '@/components/Doodle';
 import {
@@ -25,6 +25,7 @@ import {
   getSessionPlanDay,
   getProgress,
   getSessionSetSnapshot,
+  getSessionCalculationContext,
   type ProgressRow,
   type SessionSummaryLine,
 } from '@/lib/db/queries';
@@ -34,6 +35,8 @@ import {
   pendingSyncCount,
 } from '@/lib/session/sync';
 import { workouts } from '@/lib/session/workout';
+import { buildOfflineSummary } from '@/lib/session/offline-summary';
+import { claimCompletionMotion, isFreshWorkoutCompletion } from '@/lib/session/completion-motion';
 import { nextLoad } from '@/lib/progression';
 import { sessionTotals } from '@/lib/stats';
 import { colors, space, type } from '@/lib/theme';
@@ -42,10 +45,11 @@ import { effectiveLoadKg, estimateOneRepMax, formatWeight } from '@/lib/units';
 import type { Units } from '@/lib/types';
 
 export default function SessionSummary() {
-  const { dayId, sessionId, elapsed } = useLocalSearchParams<{
+  const { dayId, sessionId, elapsed, celebrate } = useLocalSearchParams<{
     dayId: string;
     sessionId: string;
     elapsed: string;
+    celebrate?: string;
   }>();
   const userId = useUserId();
   const { profile } = useAuth();
@@ -56,17 +60,49 @@ export default function SessionSummary() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [contextUnknown, setContextUnknown] = useState(false);
+  const [animateIntro, setAnimateIntro] = useState(false);
+  const [animatePr, setAnimatePr] = useState(false);
 
   const durationS = Number.parseInt(elapsed ?? '0', 10) || 0;
   const profileUnits = profile?.units ?? 'kg';
   const [units, setUnits] = useState<Units>(profileUnits);
+  const [capturedDurationS, setCapturedDurationS] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setSyncMessage(null);
+    setContextUnknown(false);
+    setCapturedDurationS(null);
+    setAnimateIntro(false);
+    setAnimatePr(false);
+    let provisional: ReturnType<typeof buildOfflineSummary> = null;
+    const freshFinish = celebrate === '1' && isFreshWorkoutCompletion(userId, sessionId);
+    let revealed = false;
+    const revealSummary = () => {
+      if (!revealed) {
+        revealed = true;
+        setAnimateIntro(freshFinish && claimCompletionMotion(userId, sessionId, 'intro'));
+      }
+      setLoading(false);
+    };
 
     (async () => {
+      const local = await workouts.read(userId);
+      if (cancelled) return;
+      const captured = local?.sessionId === sessionId ? local : null;
+      provisional = buildOfflineSummary(captured, userId, sessionId);
+      if (provisional) {
+        setLines(provisional.lines);
+        setUnits(provisional.units);
+        setCapturedDurationS(provisional.durationS);
+        setContextUnknown(captured?.calculationContextKnown === false);
+        setSyncMessage('Saved on this device. Syncing your workout before confirming personal records and next loads.');
+        revealSummary();
+      }
       // A failed send leaves operations queued even though flush resolves.
       // Never derive future loads from a partial server view of this workout.
       await flushOutbox();
@@ -81,24 +117,24 @@ export default function SessionSummary() {
         );
       }
       if (cancelled) return;
+      const calculation = captured && captured.calculationContextKnown !== false
+        ? { units: captured.units, bodyweightKg: captured.bodyweightKg ?? null }
+        : await getSessionCalculationContext(sessionId, userId);
+      if (cancelled) return;
+      const calculationUnits = calculation?.units ?? profileUnits;
+      const bodyweightKg = calculation?.bodyweightKg ?? null;
+      setContextUnknown(calculation === null);
       const previous = await getSessionProgressResult(sessionId);
       if (cancelled) return;
       if (previous !== null) {
-        setUnits(profileUnits);
+        setUnits(calculationUnits);
         await workouts.clear(userId, sessionId);
         if (cancelled) return;
         setLines(previous);
-        setLoading(false);
+        setSyncMessage(null);
+        revealSummary();
         return;
       }
-      const local = await workouts.read(userId);
-      if (cancelled) return;
-      const captured = local?.sessionId === sessionId ? local : null;
-      const calculationUnits = captured?.units ?? profileUnits;
-      const bodyweightKg =
-        captured?.bodyweightKg !== undefined
-          ? captured.bodyweightKg
-          : (profile?.bodyweight_kg ?? null);
       setUnits(calculationUnits);
       const day = await getSessionPlanDay(sessionId, userId);
       if (!day)
@@ -154,7 +190,7 @@ export default function SessionSummary() {
             : sets[0]?.weight_kg ?? null;
 
           const verdict =
-            context && exercise
+            context && exercise && calculation
               ? nextLoad(
                   sets.map((s) => ({ reps: s.reps, rpe: s.rpe })),
                   context.item.reps_high,
@@ -185,7 +221,7 @@ export default function SessionSummary() {
           });
 
           // Warm-ups carry no load and should never move a working weight.
-          if (context && context.block.kind !== 'warmup') {
+          if (context && context.block.kind !== 'warmup' && calculation) {
             updates.push({
               exercise_id: exerciseId,
               last_weight_kg: verdict?.last_weight_kg ?? workingLoad,
@@ -221,8 +257,12 @@ export default function SessionSummary() {
           await workouts.clear(userId, sessionId);
           if (cancelled) return;
           setLines(saved);
-          setLoading(false);
-          if (saved.some((l) => l.isPr)) {
+          setSyncMessage(null);
+          revealSummary();
+          const freshPr = freshFinish && saved.some((line) => line.isPr)
+            && claimCompletionMotion(userId, sessionId, 'pr');
+          setAnimatePr(freshPr);
+          if (freshPr) {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           }
           return;
@@ -230,11 +270,9 @@ export default function SessionSummary() {
       }
     })().catch((error: unknown) => {
       if (!cancelled) {
-        setError(
-          error instanceof Error
-            ? error.message
-            : 'Could not load your workout. Please retry.',
-        );
+        const message = error instanceof Error ? error.message : 'Could not load your workout. Please retry.';
+        if (provisional) setSyncMessage(`Saved on this device. ${message} Personal records and next loads will be confirmed after sync.`);
+        else setError(message);
         setLoading(false);
       }
     });
@@ -242,7 +280,7 @@ export default function SessionSummary() {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, userId, dayId, profile?.bodyweight_kg, profileUnits, retry]);
+  }, [sessionId, userId, dayId, profile?.bodyweight_kg, profileUnits, retry, celebrate]);
 
   const save = async () => {
     setSaving(true);
@@ -288,19 +326,32 @@ export default function SessionSummary() {
 
   return (
     <Screen>
-      <Overline>Session complete</Overline>
-      <Display style={{ marginTop: space.sm }}>Nice work.</Display>
+      <Animated.View
+        entering={animateIntro ? FadeInDown.duration(motion.base)
+          .withInitialValues({ transform: [{ translateY: motion.focused.distance }] })
+          .reduceMotion(ReduceMotion.System) : undefined}
+      >
+        <Overline>Session complete</Overline>
+        <Display style={{ marginTop: space.sm }}>Nice work.</Display>
+      </Animated.View>
+      {contextUnknown ? <Muted style={{ marginTop: space.md }}>Original calculation details were not recorded for this workout. Bodyweight estimates and next-load recommendations are unavailable.</Muted> : null}
+      {syncMessage ? (
+        <Card style={{ marginTop: space.lg, gap: space.md }}>
+          <Body>{syncMessage}</Body>
+          <Button title="Sync summary" variant="surface" onPress={() => setRetry(value => value + 1)} />
+        </Card>
+      ) : null}
 
       <Animated.View
-        entering={FadeIn.duration(motion.base).reduceMotion(
+        entering={animateIntro ? FadeIn.duration(motion.base).reduceMotion(
           ReduceMotion.System,
-        )}
+        ) : undefined}
       >
         <Card style={{ marginTop: space.xl }}>
           <View style={styles.stats}>
             <Stat
               label="Minutes"
-              value={`${Math.max(1, Math.round(durationS / 60))}`}
+              value={`${Math.max(1, Math.round((capturedDurationS ?? durationS) / 60))}`}
             />
             <Stat label="Sets" value={`${totalSets}`} />
             <Stat label="Volume" value={formatWeight(totalVolume, units)} />
@@ -312,9 +363,9 @@ export default function SessionSummary() {
         {lines.map((line, index) => (
           <Animated.View
             key={line.exerciseId}
-            entering={FadeIn.delay(index * 55)
+            entering={animateIntro ? FadeIn.delay(Math.min(index, 4) * motion.focused.stagger)
               .duration(motion.base)
-              .reduceMotion(ReduceMotion.System)}
+              .reduceMotion(ReduceMotion.System) : undefined}
             style={styles.line}
           >
             <View style={{ flex: 1, gap: 2 }}>
@@ -328,7 +379,7 @@ export default function SessionSummary() {
               </Muted>
             </View>
             {line.isPr ? (
-              <DoodlePop>
+              <DoodlePop active={animatePr} scale={motion.focused.popScale}>
                 {/* The badge carries the number that earned it: a bare "PR" makes
                     you go looking for the weight it is talking about. */}
                 <Chip label={prLabel(line.topLoadKg, units)} selected />

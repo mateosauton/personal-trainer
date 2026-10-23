@@ -1,6 +1,7 @@
 import ArrowLeft from 'lucide-react-native/icons/arrow-left';
 import Calendar from 'lucide-react-native/icons/calendar';
 import Check from 'lucide-react-native/icons/check';
+import ChevronDown from 'lucide-react-native/icons/chevron-down';
 import ChevronLeft from 'lucide-react-native/icons/chevron-left';
 import ChevronRight from 'lucide-react-native/icons/chevron-right';
 import House from 'lucide-react-native/icons/house';
@@ -21,6 +22,7 @@ export const icons = {
   check: Check,
   prev: ChevronLeft,
   next: ChevronRight,
+  expand: ChevronDown,
 } as const;
 
 export type IconName = keyof typeof icons;

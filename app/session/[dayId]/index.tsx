@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { ExerciseMedia } from '@/components/ExerciseMedia';
+import { ExerciseSwap } from '@/components/ExerciseSwap';
 import {
   Body,
   Button,
@@ -44,6 +45,7 @@ export default function SessionOverview() {
   const [day, setDay] = useState<PlanDay | null>(null);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [swapping, setSwapping] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -112,6 +114,7 @@ export default function SessionOverview() {
     setStarting(true);
     setStartError(null);
     try {
+      if (swapping) return;
       const saved = await workouts.read(userId);
       if (!isCurrent()) return;
       if (saved) {
@@ -130,7 +133,7 @@ export default function SessionOverview() {
         const progress = await getProgress(userId);
         if (!isCurrent()) return;
         const startedAtMs = Date.now();
-        const sessionId = await startSession(userId, day.id);
+        const sessionId = await startSession(userId, day.id, { units: profile?.units ?? 'kg', bodyweightKg: profile?.bodyweight_kg ?? null }, day);
         candidate = {
           version: 1,
           ownerId: userId,
@@ -165,6 +168,12 @@ export default function SessionOverview() {
       setStarting(false);
     }
   };
+  const reloadDay = async () => {
+    const activePlan = await getActivePlan(userId);
+    if (!mounted.current || currentIdentity.current !== identity) return;
+    setDay(activePlan?.days.find((candidate) => candidate.id === dayId) ?? null);
+  };
+  const taken = new Set(day.blocks.flatMap((block) => block.items.map((item) => item.exercise_id)));
   const targetSeconds = day.blocks.reduce((sum, block) => sum + (getBlockDurationSeconds(block) ?? 0), 0);
 
   return (
@@ -218,6 +227,8 @@ export default function SessionOverview() {
                         {dose}
                         {item.notes ? ` · ${item.notes}` : ''}
                       </Muted>
+                      {block.kind !== 'warmup' ? <ExerciseSwap item={item} excluded={taken}
+                        disabled={starting || swapping} onBusy={setSwapping} onSwapped={reloadDay} /> : null}
                     </View>
                   </View>
                 );
@@ -234,6 +245,7 @@ export default function SessionOverview() {
         title={startError ? 'Retry start' : 'Begin'}
         onPress={begin}
         loading={starting}
+        disabled={swapping}
         style={{ marginTop: space.xl }}
       />
       <Button variant="ghost" title="Not now" onPress={() => router.back()} />

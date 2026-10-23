@@ -18,3 +18,5 @@ Verify using the installed release binary:
 - Simulate backend and local-storage failures and verify Retry/sign-out remain available.
 
 These installed-device and delivery checks are required before closing issue #6; unit tests alone do not prove email delivery or production redirect configuration.
+
+Browser callbacks remove authentication parameters after successful exchange or a rejected link while preserving ordinary route and URL state.

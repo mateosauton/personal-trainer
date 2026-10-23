@@ -6,6 +6,14 @@ demo, target reps, and a weight prompt after every set.
 
 Built with Expo / React Native (runs in Expo Go, no Xcode needed) and Supabase.
 
+## Project guides
+
+- [Architecture](docs/ARCHITECTURE.md): infrastructure, modules, schema, runtime flows, failure behavior, and the proposed evolution.
+- [Technical decisions](docs/TECHNICAL_DECISIONS.md): subsystem effects, decision records, and bug/feature/chore management.
+- [Git workflow](docs/GIT_WORKFLOW.md): environments, branches, worktrees, change review, migrations, and hotfixes.
+- [Releases](docs/RELEASES.md): native/web/database artifacts, verification, promotion, compatibility, and recovery.
+- [Issues, fixes, and mobile product priorities](docs/ENGINEERING_REVIEW.md)
+
 ## Running it
 
 Use Node 22 and `npm ci`. Start an isolated local Supabase stack with Docker
@@ -26,7 +34,7 @@ Hosted development and preview builds remain blocked until their distinct
 Supabase project references are registered. No command falls back to production.
 
 ```sh
-npm run check:web        # TypeScript, safety tests, preview server, app tests
+npm run check:web        # TypeScript, safety, app and database regressions
 npm run build:web:check  # synthetic Metro check in .expo/web-check; never deploy
 npm run db:local:test    # SQL integration tests on the local stack
 npm run catalog         # rebuild the exercise catalog
@@ -45,6 +53,15 @@ agree with the target. `eas.json` pins markers for each native profile; OTA
 commands also require a supported channel and explicit EAS environment. See
 [environment setup](docs/ENVIRONMENTS.md) before pulling hosted values.
 
+| Variable | Value |
+| --- | --- |
+| `EXPO_PUBLIC_SUPABASE_URL` | Supabase project URL |
+| `EXPO_PUBLIC_SUPABASE_KEY` | Supabase publishable key |
+| `EXPO_PUBLIC_GOOGLE_SIGN_IN_ENABLED` | `1` |
+
+Google's flag is set to `1` in the EAS `development`, `preview`, and `production`
+environments. Apple stays unset until its provider configuration is complete.
+
 ```sh
 npm run env:pull             # isolated development values into .env.local
 npm run env:pull:preview     # isolated preview values into .env.local
@@ -62,6 +79,12 @@ and server credentials must remain outside Git.
 Native updates require a manually dispatched promotion of an already tested
 update group. A master push runs checks and may deploy the Cloudflare web app;
 it does not publish a native OTA. Follow the [native release runbook](docs/RELEASE_SAFETY.md).
+
+GitHub publishing uses the repository's `EXPO_TOKEN` secret. Cloudflare and
+Vercel builds use `npm run build:web` with the Supabase public values and Google
+sign-in flag mirrored from EAS production into their build environments. These
+hosts do not need an Expo access token. Local production exports use
+`npm run export:web` to fetch EAS values directly.
 
 ## Authentication
 
@@ -146,26 +169,33 @@ call. It picks a split from your training frequency, then fills each day with a
 warm-up plus four blocks: two straight-set compounds, an antagonist superset,
 and a core/conditioning circuit. Rep schemes come from your goal, rest scales
 with your session budget, and exercises are filtered to the equipment you
-actually have, capped at your experience level, and deduped across the week.
-Seeded from your user id, so the same answers reproduce the same plan.
+actually have and capped at your experience level. The app uses
+`lib/plan/office-gym.ts` to restrict every selection and fallback to reviewed
+movements for this gym. Rebuilding keeps your saved equipment restrictions.
+Narrow pools may repeat exercises. Seeded from your user id, so the same
+answers reproduce the same plan. The separate 47-minute authored routine keeps
+its prescribed rotation, while the local candidate applies equipment, experience
+and limitation filters with compatible replacements or omissions.
 
 **Progression** (`lib/progression.ts`) is double progression: work up the rep
 range at a fixed load, add weight once every set tops the range at RPE ≤ 8
 (+5 kg lower body, +2.5 kg upper). Two sessions stuck at the bottom of the range
 backs the load off 10%.
 
-**Bodyweight movements** store load as `bodyweight + added_load_kg`, so a
-weighted pull-up is comparable to a lat pulldown and estimated 1RMs stay honest.
+**Bodyweight movements** store added load separately. Effective-load estimates
+add the captured bodyweight when known. The candidate preserves original
+session units/bodyweight; unknown historical context stays unknown.
 
-**The catalog** is 873 exercises bundled in the app (`lib/data/exercises.json`),
-not in Postgres — it is static reference data versioned with the binary, and the
-generator runs on-device, so it must work with no network. Postgres holds only
-your data, every table RLS'd to `auth.uid()`.
+**The catalog** combines 873 source exercises (`lib/data/exercises.json`) with
+authored gym variations bundled in the app. The metadata is static reference
+data versioned with the app bundle. The generator runs on-device without a
+network request; Postgres stores account plans and workout records protected
+by ownership policies and RPC checks.
 
-**Media** is one path (`components/ExerciseMedia.tsx`): every exercise crossfades
-between its start and end stills, which reads as the two ends of the movement.
-The stills stream from a CDN and are disk-cached, so a session repeats offline
-after its first run.
+**Media** uses `components/ExerciseMedia.tsx` to show the exercise's static
+start-position image when available. Authored movements can use text instructions
+without an image. Images stream from a CDN and use memory/disk caching; images
+never downloaded remain unavailable offline.
 
 ## Licensing
 

@@ -4,11 +4,13 @@ import * as Linking from 'expo-linking';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { completeAuthFromUrl, isRecoveryLink } from './deep-link';
+import { avatarPath } from './avatar';
 import { getProfile } from './db/queries';
 import { supabase } from './db/supabase';
 import type { ProfileState } from './auth-gate';
 import type { Profile } from './types';
 import { setSyncAccount, startOutboxSync } from './session/sync';
+import { storageLock } from './session/storage-lock';
 
 interface AuthState {
   session: Session | null;
@@ -29,14 +31,17 @@ const profileCacheKey = (userId: string) => `office-gym.profile.${userId}`;
 
 const cachedProfile = async (userId: string): Promise<Profile | null> => {
   try {
-    const raw = await AsyncStorage.getItem(profileCacheKey(userId));
-    return raw ? JSON.parse(raw) as Profile : null;
+    const raw = await storageLock(profileCacheKey(userId), () => AsyncStorage.getItem(profileCacheKey(userId)));
+    if (!raw) return null;
+    const profile = JSON.parse(raw) as Profile;
+    if (profile.id !== userId) return null;
+    return { ...profile, avatar_url: avatarPath(profile.avatar_url, userId) };
   } catch { return null; }
 };
 
 const cacheProfile = async (profile: Profile) => {
   try {
-    await AsyncStorage.setItem(profileCacheKey(profile.id), JSON.stringify(profile));
+    await storageLock(profileCacheKey(profile.id), () => AsyncStorage.setItem(profileCacheKey(profile.id), JSON.stringify(profile)));
   } catch { /* A cache failure must not discard a profile loaded from the server. */ }
 };
 

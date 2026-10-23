@@ -6,13 +6,14 @@ import { useState } from 'react';
 import { Keyboard, Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { Attribution } from '@/components/Attribution';
+import { AccountPrivacy } from '@/components/AccountPrivacy';
+import { useAvatar } from '@/lib/useAvatar';
 import { NumberField } from '@/components/NumberField';
+import { TrainingPreferences } from '@/components/TrainingPreferences';
 import { Button, Card, Chip, Display, Muted, Overline, Screen } from '@/components/ui';
-import { confirm, notify } from '@/lib/alerts';
+import { notify } from '@/lib/alerts';
 import { useAuth, useUserId } from '@/lib/auth';
-import { exportAccountData } from '@/lib/account-export';
-import { savePlan, updateProfile, uploadAvatar } from '@/lib/db/queries';
-import { ALL_EQUIPMENT, generatePlan } from '@/lib/plan/generate';
+import { updateProfile, uploadAvatar } from '@/lib/db/queries';
 import { colors, radius, space, type, webFocusRing } from '@/lib/theme';
 import { cmToDisplay, displayToCm, displayToKg, heightUnit, kgToDisplay } from '@/lib/units';
 import type { Units } from '@/lib/types';
@@ -36,19 +37,6 @@ export default function ProfileTab() {
       : '',
   );
   const [saving, setSaving] = useState(false);
-  const [regenerating, setRegenerating] = useState(false);
-  const [exporting, setExporting] = useState(false);
-
-  const exportData = async () => {
-    setExporting(true);
-    try {
-      await exportAccountData(userId);
-    } catch (error) {
-      notify('Could not export', error instanceof Error ? error.message : 'Please retry.');
-    } finally {
-      setExporting(false);
-    }
-  };
 
   const number = (value: string) => {
     const parsed = Number.parseFloat(value);
@@ -107,46 +95,8 @@ export default function ProfileTab() {
     await refreshProfile();
   };
 
-  const regenerate = async () => {
-    // Onboarding sets both, but a profile row that predates it -- or one whose
-    // write failed -- would otherwise make this button do nothing at all.
-    if (!profile?.goal || !profile.experience) {
-      notify('Not enough to go on', 'Finish onboarding first so we know your goal and experience.');
-      return;
-    }
-    const rebuild = await confirm({
-      title: 'Build a new plan?',
-      message: 'Your logged sessions and weights stay. The current plan is replaced.',
-      confirmLabel: 'Rebuild',
-    });
-    if (!rebuild) return;
-
-    setRegenerating(true);
-    try {
-      // Keep the profile honest about what the plan was built from.
-      await updateProfile(userId, { equipment: ALL_EQUIPMENT });
-      await savePlan(
-        userId,
-        generatePlan({
-          userId,
-          goal: profile.goal,
-          experience: profile.experience,
-          daysPerWeek: profile.days_per_week ?? 4,
-          sessionMinutes: profile.session_minutes ?? 45,
-          equipment: ALL_EQUIPMENT,
-          limitations: profile.limitations,
-        }),
-      );
-      await refreshProfile();
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch (e) {
-      notify('Could not rebuild', e instanceof Error ? e.message : 'Try again.');
-    } finally {
-      setRegenerating(false);
-    }
-  };
-
-  const avatar = photoUri ?? profile?.avatar_url ?? null;
+  const signedAvatar = useAvatar(profile?.avatar_url ?? null, userId);
+  const avatar = photoUri ?? signedAvatar;
 
   return (
     <Screen>
@@ -218,18 +168,8 @@ export default function ProfileTab() {
       </Card>
 
       <Button title="Save" onPress={save} loading={saving} style={{ marginTop: space.xl }} />
-      <Button
-        title="Rebuild my plan"
-        variant="surface"
-        onPress={regenerate}
-        loading={regenerating}
-        style={{ marginTop: space.md }}
-      />
-      <Card style={{ marginTop: space.lg, gap: space.md }}>
-        <Overline>Your data</Overline>
-        <Muted>Save your synced profile, plans and workout history as JSON. Unsynced changes and photo files are not included.</Muted>
-        <Button title="Export synced data" variant="surface" onPress={exportData} loading={exporting} />
-      </Card>
+      <TrainingPreferences key={userId} />
+      <AccountPrivacy owner={userId} />
       <Button variant="ghost" title="Sign out" onPress={() => { void signOut().catch((error: unknown) => notify('Could not sign out', error instanceof Error ? error.message : 'Please retry.')); }} style={{ marginTop: space.sm }} />
 
       <Attribution />

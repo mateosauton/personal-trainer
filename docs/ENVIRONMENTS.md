@@ -13,12 +13,12 @@ credentials, so it can satisfy this boundary without another standalone project.
 | --- | --- | --- | --- |
 | `local` | Supabase CLI on exactly `http://127.0.0.1:54321` | Synthetic accounts and disposable local records | Development only |
 | `mock` | Exact test fixture key and loopback URL | Test fixtures | Development/test only |
-| `development` | Its own registered hosted project | Synthetic accounts | EAS development client |
-| `preview` | Its own registered hosted project | Synthetic accounts | PR web preview and internal preview binaries |
+| `development` | Its own registered hosted branch or project | Synthetic accounts | EAS development client |
+| `preview` | Its own registered hosted branch or project | Synthetic accounts | PR web preview and internal preview binaries |
 | `production` | `asbudyijvunpnhrhsubm` | Real user accounts and workouts | Production web, release-test and store builds |
 
 The development and preview project references start as `null`. Their builds
-fail until separate projects are provisioned and registered. The guard also
+fail until isolated backends are provisioned and registered. The guard also
 rejects a shared project reference, an incorrect URL, a mismatched legacy anon
 JWT, an administrative key, a missing marker, or public developer credentials
 in distribution. Opaque publishable keys are checked for public-key format;
@@ -89,8 +89,10 @@ npm start
 The local stack has a different container/volume identity,
 `office-gym-trainer-local`. It supplies Postgres, GoTrue Auth, API, Storage,
 Studio at `http://127.0.0.1:54323`, and a local email inbox at
-`http://127.0.0.1:54324`. Migration `0002` creates the local `avatars` bucket
-and its ownership policies. Real user records and production avatar objects
+`http://127.0.0.1:54324`. Migration `0002` creates the local `avatars` bucket;
+`20261022211107_private_avatars.sql` then makes it private and restricts reads
+and writes to the authenticated owner's directory. The current client uses
+short-lived signed photo URLs. Real user records and production avatar objects
 are never copied into it.
 
 `db:local:env` writes an ignored `.env.local` containing only the local URL,
@@ -141,6 +143,8 @@ their own database.
 ```sh
 npm run db:local:test
 npm run db:local:stop
+# Start again before resetting a stopped stack.
+npm run db:local:start
 # Deletes records in this local stack and reapplies repository migrations.
 npm run db:local:reset -- --confirm-local-reset
 npm run db:local:seed
@@ -154,20 +158,43 @@ run. Existing tests roll back their fixtures.
 
 ## Migrations and hosted setup
 
-The nine existing migration files are preserved byte for byte. A fresh local
-Supabase database can replay them in filename order. This does not prove an
-existing hosted database can replay them safely. The deployed history uses
-legacy `0001` through `0007` names mixed with timestamps, and production's
-recorded versions have not been reconciled with those files.
+The repository now contains 13 migrations. The original nine deployed-source
+files remain pinned byte for byte by `supabase/migration-baseline.json`. Four
+later migrations make avatars private, preserve workout calculation context,
+add atomic training-preference/exercise-swap RPCs, and capture a stable home
+timezone. A fresh local database applies all 13 in filename order. An existing
+database needs its actual history reconciled before any upgrade.
 
-For development and preview provisioning, the maintainer should:
+Run the existing baseline and database checks without modifying their manifest
+to manufacture a match:
 
-1. Use the selected personal organization and production parent above. Choose
-   isolated branches of that project or distinct empty standalone projects, with
-   explicit cost limits. Branches incur their own compute and usage charges.
-   Local development needs neither. Do not create hosted resources without cost approval.
-2. For an empty standalone project, apply the reviewed schema. A dashboard
-   branch derives its schema from the parent's migration history or a schema dump:
+```sh
+npm run migrations:check
+npm run test:migrations
+npm run test:db
+```
+
+The database suite compares fresh creation with an upgrade from the pinned
+nine-file baseline, checks data preservation and schema equivalence, and runs
+the SQL regressions. It uses PGlite with test Auth/Storage definitions. It does
+not establish hosted GoTrue, Storage or Edge Function behavior. Use
+`npm run db:local:test` for SQL regressions inside real local Supabase and verify
+Auth/Storage through their service APIs separately.
+
+Production's recorded versions have not been reconciled with the legacy
+`0001` through `0007` source names. The baseline manifest deliberately retains
+null `productionVersion` and verification-time fields. Follow
+[migration baseline reconciliation](MIGRATION_BASELINE.md) before a hosted
+upgrade; a passing fresh database test does not make `supabase db push` safe.
+
+Hosted previews remain optional and blocked. If a hosted branch is authorized
+later, the maintainer should:
+
+1. Use an isolated branch of the selected personal project, with explicit cost
+   limits. A separate standalone project is not part of this setup. Branches incur
+   their own compute and usage charges. Local development needs neither.
+   Do not create hosted resources without cost approval.
+2. A dashboard branch derives its schema from the parent's migration history or a schema dump:
    inspect the resulting schema before applying anything and never blindly replay
    the nine baseline files into a populated branch. Keep "Include data" disabled.
    Verify ownership policies and SQL regression tests using synthetic accounts. Never restore a production data
@@ -178,8 +205,9 @@ For development and preview provisioning, the maintainer should:
    markers in the corresponding EAS environment and Cloudflare build trigger.
 4. Configure exact Auth callback URLs for each environment and native scheme,
    email templates/SMTP, any OAuth credentials and function secrets separately.
-   A database migration does not copy these settings. Check avatar bucket ownership
-   with both accounts. Upload only synthetic image files.
+   A database migration does not copy these settings. Confirm the avatar bucket is
+   private, its owner can obtain a signed image URL, and another account cannot read
+   or upload into that owner's folder. Upload only synthetic image files.
 5. Build and exercise onboarding, allowed equipment, plan creation, set logging,
    interrupted sync, avatar upload and password recovery. Record the backend
    reference beside the app commit and build identifier before promotion.
@@ -225,15 +253,28 @@ Deleting a configuration variable does not disconnect those clients.
 
 ## Verification evidence
 
-On 22 October 2026, the local guard tests passed. A real disposable Supabase
-stack using CLI `2.120.0`, PostgreSQL 17 and unchanged copies of all nine migrations
-also passed both SQL regressions, two synthetic Auth password sign-ins, separate
-profile reads through PostgREST/RLS, an owner avatar upload, and rejection of
-another user's upload into that owner's Storage folder.
+The first local integration check on 22 October 2026 covered the original nine
+migrations and two SQL regressions. That evidence describes the earlier baseline.
+
+After incorporating `master` commit `5f349d2`, a new disposable Supabase stack
+using CLI `2.120.0` and PostgreSQL 17 applied all 13 current migrations. Every
+copied migration matched the repository's SHA-256 hash. All five SQL regressions
+passed: account export, home timezone, private avatars, timed set writes and
+training preferences. The nine deployed-source checksum checks and migration
+planner tests also passed without changing the baseline manifest.
+
+The same current stack passed two synthetic Auth password sign-ins, owner-only
+profile reads through PostgREST/RLS, and the new UTC timezone default. Storage
+verification confirmed a private avatar bucket, owner upload and authenticated
+read, owner signing and successful signed-image delivery. Another user's read
+and upload, and an anonymous public-image request, were denied. The
+`delete-account` function configuration was retained, but its complete adapter
+and account-deletion flow were not exercised by these service checks.
 
 An existing unrelated local stack occupied the committed `5432x` ports. That
 startup failed safely. The integration check ran under its own temporary stack
 identity on `55320` through `55324`; it did not stop or modify the existing stack.
+The temporary verification stack and its synthetic data were removed afterward.
 The alternate-port check verifies the service configuration and migration replay,
 while the committed wrapper's exact-port routing and refusal paths are covered
 by its boundary tests. No hosted service or installed native app was verified

@@ -46,3 +46,8 @@ enable_confirmations = true
 
 [analytics]
 enabled = false
+
+[functions.delete-account]
+# Platform validation plus getUser in the handler before any admin operation.
+verify_jwt = true
+entrypoint = "./functions/delete-account/index.js"

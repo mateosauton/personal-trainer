@@ -15,11 +15,14 @@ import {
 } from '@/components/ui';
 import { useAuth, useUserId } from '@/lib/auth';
 import { savePlan, updateProfile, uploadAvatar } from '@/lib/db/queries';
-import { ALL_EQUIPMENT, generatePlan } from '@/lib/plan/generate';
+import { GYM_EQUIPMENT } from '@/lib/plan/gym-routine';
+import { OFFICE_EQUIPMENT } from '@/lib/plan/preferences';
+import { deviceTimeZone } from '@/lib/calendar-days';
+import { generateOfficeGymPlan } from '@/lib/plan/office-gym';
 import { colors, radius, space, type, webFocusRing } from '@/lib/theme';
 import { displayToCm, displayToKg, heightUnit } from '@/lib/units';
 import { getStepDirection, motion, type StepDirection } from '@/lib/motion';
-import type { Goal, Level, Units } from '@/lib/types';
+import type { Equipment, Goal, Level, Units } from '@/lib/types';
 
 const GOALS: { value: Goal; label: string; blurb: string }[] = [
   { value: 'strength', label: 'Get stronger', blurb: 'Heavy, low reps, long rests' },
@@ -42,7 +45,7 @@ const LIMITATIONS = [
   { value: 'wrist', label: 'Wrists' },
 ];
 
-const STEPS = ['you', 'goal', 'level', 'days', 'length', 'body', 'limits'] as const;
+const STEPS = ['you', 'goal', 'level', 'days', 'length', 'equipment', 'body', 'limits'] as const;
 type Step = (typeof STEPS)[number];
 
 /** The three things the build screen reports, in the order they happen. */
@@ -64,6 +67,7 @@ export default function Onboarding() {
   const [bodyweight, setBodyweight] = useState('');
   const [height, setHeight] = useState('');
   const [limits, setLimits] = useState<string[]>([]);
+  const [equipment, setEquipment] = useState<Equipment[]>([...GYM_EQUIPMENT]);
   const [stage, setStage] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -117,14 +121,14 @@ export default function Onboarding() {
       setStage(1);
       const bw = parse(bodyweight);
       const h = parse(height);
-      const plan = generatePlan({
+      const plan = generateOfficeGymPlan({
         userId,
         goal,
         experience,
         daysPerWeek: days,
         sessionMinutes: minutes,
-        equipment: ALL_EQUIPMENT,
         limitations: limits,
+        equipment,
       });
       await savePlan(userId, plan);
 
@@ -136,7 +140,8 @@ export default function Onboarding() {
         experience,
         days_per_week: days,
         session_minutes: minutes,
-        equipment: ALL_EQUIPMENT,
+        equipment,
+        home_timezone: deviceTimeZone(),
         limitations: limits,
         units,
         bodyweight_kg: bw == null ? null : displayToKg(bw, units),
@@ -286,6 +291,17 @@ export default function Onboarding() {
                         setMinutes(m);
                       }}
                     />
+                  ))}
+                </View>
+              </Question>
+            )}
+
+            {step === 'equipment' && (
+              <Question title={'What equipment\nis available?'} hint="Choose from the confirmed office gym. Bodyweight is always available.">
+                <View style={styles.wrap}>
+                  {OFFICE_EQUIPMENT.map((option) => (
+                    <Chip key={option.value} label={option.label} selected={equipment.includes(option.value)}
+                      onPress={() => toggle(equipment, option.value, setEquipment)} />
                   ))}
                 </View>
               </Question>
