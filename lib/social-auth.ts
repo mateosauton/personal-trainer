@@ -5,6 +5,7 @@ import { Platform } from 'react-native';
 
 import { supabase } from './db/supabase';
 import { authRedirectTo, completeAuthFromUrl } from './deep-link';
+import { canUseBrowserOAuth } from './social-auth-availability';
 
 export type SocialProvider = 'google' | 'apple';
 
@@ -30,6 +31,11 @@ export async function signInWithSocialProvider(provider: SocialProvider): Promis
     if (error) throw error;
     if (!data.session) throw new Error('Apple sign-in did not return a session. Please try again.');
     return true;
+  }
+
+  if (!canUseBrowserOAuth()) {
+    const name = provider === 'google' ? 'Google' : 'Apple';
+    throw new Error(`${name} sign-in is available in the installed app. In Expo Go, use email and password.`);
   }
 
   const redirectTo = authRedirectTo();
