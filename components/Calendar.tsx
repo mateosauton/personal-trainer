@@ -7,7 +7,7 @@ import {
   isSameMonth,
   startOfMonth,
 } from 'date-fns';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Body, Button, Card, Muted, Overline } from '@/components/ui';
@@ -26,19 +26,27 @@ const columnOf = (date: Date) => (getDay(date) + 6) % 7;
  */
 export function Calendar({
   trainedDays,
+  today,
   selected,
   onSelect,
 }: {
   trainedDays: Set<string>;
+  today: string;
   selected: string | null;
   onSelect: (day: string) => void;
 }) {
-  const [month, setMonth] = useState(() => startOfMonth(new Date()));
-  const today = dayKey(new Date());
+  const referenceDate = new Date(`${today}T12:00:00`);
+  const [month, setMonth] = useState(() => startOfMonth(referenceDate));
+  const previousToday = useRef(today);
+  useEffect(() => {
+    const previous = new Date(`${previousToday.current}T12:00:00`);
+    setMonth((current) => isSameMonth(current, previous) ? startOfMonth(new Date(`${today}T12:00:00`)) : current);
+    previousToday.current = today;
+  }, [today]);
 
   const days = eachDayOfInterval({ start: startOfMonth(month), end: endOfMonth(month) });
   const lead = Array.from({ length: columnOf(days[0]!) });
-  const atCurrentMonth = isSameMonth(month, new Date());
+  const atCurrentMonth = isSameMonth(month, referenceDate);
 
   return (
     <Card style={{ gap: space.md }}>

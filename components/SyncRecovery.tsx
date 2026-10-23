@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LegacySetRecovery } from './LegacySetRecovery';
+import { QueueDataRecovery } from './QueueDataRecovery';
 import type { RejectedOperation } from '@/lib/session/outbox';
 import { Body, Button, Card, Overline } from '@/components/ui';
 import { getSyncStatus, retrySync, getSetConflicts, getLegacySetConflicts, reviewSetConflict, resolveSetConflict, type SetConflictReview } from '@/lib/session/sync';
@@ -157,6 +158,7 @@ function AccountSyncRecovery({ userId }: { userId: string }) {
       ))}
       {(own.legacy ?? []).map(captured => <LegacySetRecovery key={JSON.stringify(captured)}
         userId={userId} captured={captured} onResolved={refresh} />)}
+      {own.error ? <QueueDataRecovery userId={userId} onRepaired={refresh} /> : null}
       <Button
         title="Retry workout sync"
         disabled={busyOwner === userId}

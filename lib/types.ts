@@ -56,6 +56,8 @@ export interface Profile {
   session_minutes: number | null;
   equipment: Equipment[];
   limitations: string[];
+  /** Stable calendar reference, assigned at onboarding or migrated from recorded session timezone. */
+  home_timezone?: string;
   onboarded_at: string | null;
 }
 

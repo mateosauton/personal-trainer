@@ -1,8 +1,18 @@
+import { useEffect, useRef } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import Animated, { ReduceMotion, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming } from 'react-native-reanimated';
 
 import { Card, Heading, Muted, Overline } from '@/components/ui';
+import { motion } from '@/lib/motion';
+import { claimCompletionMotion } from '@/lib/session/completion-motion';
 import { recentDays } from '@/lib/stats';
 import { colors, radius, space, type } from '@/lib/theme';
+
+export interface StreakCompletion {
+  ownerId: string;
+  sessionId: string;
+  day: string;
+}
 
 /**
  * Days trained. The number that matters is the streak, so it is the only thing
@@ -13,12 +23,16 @@ export function Streak({
   streak,
   total,
   trainedDays,
+  today,
+  completion,
 }: {
   streak: number;
   total: number;
   trainedDays: Set<string>;
+  today: string;
+  completion?: StreakCompletion | null;
 }) {
-  const days = recentDays(14);
+  const days = recentDays(14, today);
 
   return (
     <Card style={styles.card}>
@@ -42,10 +56,11 @@ export function Streak({
 
       <View style={styles.strip} accessibilityLabel={`${streak} day streak`}>
         {days.map((day) => (
-          <View
+          <DayPip
             key={day}
-            testID={trainedDays.has(day) ? `day-on-${day}` : `day-off-${day}`}
-            style={[styles.pip, trainedDays.has(day) && styles.pipOn]}
+            day={day}
+            trained={trainedDays.has(day)}
+            completion={completion?.day === day ? completion : null}
           />
         ))}
       </View>
@@ -55,6 +70,44 @@ export function Streak({
           : 'Keep it alive — one session a day counts.'}
       </Muted>
     </Card>
+  );
+}
+
+function DayPip({ day, trained, completion }: {
+  day: string;
+  trained: boolean;
+  completion: StreakCompletion | null;
+}) {
+  const reduceMotion = useReducedMotion();
+  const fill = useSharedValue(trained ? 1 : 0);
+  const played = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!trained) {
+      fill.value = 0;
+      return;
+    }
+    if (!completion) {
+      fill.value = 1;
+      return;
+    }
+    if (played.current === completion.sessionId) return;
+    played.current = completion.sessionId;
+    const fresh = claimCompletionMotion(completion.ownerId, completion.sessionId, 'streak');
+    if (!fresh || reduceMotion) {
+      fill.value = 1;
+      return;
+    }
+    fill.value = 0;
+    fill.value = withTiming(1, { duration: motion.base, reduceMotion: ReduceMotion.System });
+  }, [completion, fill, reduceMotion, trained]);
+
+  const fillStyle = useAnimatedStyle(() => ({ transform: [{ scaleX: fill.value }] }));
+
+  return (
+    <View testID={trained ? `day-on-${day}` : `day-off-${day}`} style={styles.pip}>
+      <Animated.View style={[styles.pipFill, fillStyle]} />
+    </View>
   );
 }
 
@@ -70,6 +123,11 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: radius.pill,
     backgroundColor: colors.elevated,
+    overflow: 'hidden',
   },
-  pipOn: { backgroundColor: colors.success },
+  pipFill: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: colors.success,
+    transformOrigin: 'left',
+  },
 });

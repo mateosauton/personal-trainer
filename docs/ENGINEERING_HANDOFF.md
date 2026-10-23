@@ -1,5 +1,9 @@
 # Office Gym — Engineering Handoff
 
+> Historical snapshot. Start with the current [architecture](ARCHITECTURE.md),
+> [releases](RELEASES.md), and [decision register](TECHNICAL_DECISIONS.md).
+> Recheck old findings against current code before implementing them.
+
 **Repo:** `mateosauton/personal-trainer` · **App:** Office Gym (`office-gym-trainer`)
 **Audience:** the engineer taking this over. No prior context assumed.
 
@@ -15,8 +19,13 @@
 > and §11.3 reflect that, and §2's R16 now names the path it opens. If `git log --oneline -1` shows something later
 > than `9245b5a`, assume more has moved and re-run §0.5.
 >
-> **Post-merge refresh:** §10.6 lists the current 22 query exports, and the `colors.faint` inventory now has
+> **Post-merge snapshot:** §10.6 lists the then-current 22 query exports, and the `colors.faint` inventory now has
 > 12 call sites. The remaining historical claims and test totals retain the `9245b5a` snapshot pin.
+>
+> **2026-10-22 local-source refresh:** `lib/db/queries.ts` now exports 24 functions,
+> with paired training-plan/swap RPC adapters in `lib/db/plan-preferences.ts`.
+> `lib/catalog.ts` now uses `secondary_muscles` when filtering limitations.
+> R13's old field-removal size estimates do not authorize removing that input.
 
 **Companion:** [IMPROVEMENTS.md](./IMPROVEMENTS.md) — prioritised proposals, with the ones already shipped marked as such.
 
@@ -235,7 +244,7 @@ Ids match [IMPROVEMENTS.md](./IMPROVEMENTS.md).
 | [**R15**](./IMPROVEMENTS.md#r15--observability-for-a-blind-app) | **No error boundary, no crash reporting, no analytics.** A render error is a white screen you never hear about — and the app now contains a durable write queue whose failures you cannot see. | `grep -rl "ErrorBoundary\|Sentry"` → nothing | 🟠 Blind operation |
 | [**R25**](./IMPROVEMENTS.md#r25--migration-tooling-backups-and-an-rls-test-harness) | **No migration tooling, no backups, no RLS test.** No `supabase/config.toml`, no local stack, and no record of which of the four migrations are live on production. `0003` contains an irreversible backfill. | `ls supabase/config.toml` → absent | 🟠 Every schema change is a leap |
 | [**R14**](./IMPROVEMENTS.md#r14--fix-the-faint-token-contrast-failure) | **`colors.faint` (`#5A5A61`) fails WCAG contrast** — 2.89:1 on `bg`, 2.49:1 on `elevated` — and is used in **twelve** places — eleven text or placeholder uses, plus one icon tint (`(tabs)/_layout.tsx`), which WCAG 1.4.11 holds to 3:1 and which `#5A5A61` also fails. | `lib/theme.ts`; [§14.4](#144-accessibility-audit-of-the-palette) | 🟠 Accessibility |
-| [**R13**](./IMPROVEMENTS.md#r13--stop-parsing-1-mb-of-json-at-startup) | **1,082,256 bytes of exercise JSON is parsed at startup.** `secondary_muscles` and `force_type` have no runtime consumers; `instructions` now supplies the player's fallback for movements without demonstration images, so removing it requires a lazy-loading replacement. | `wc -c lib/data/exercises.json`; grep | 🟠 Cold-start time |
+| [**R13**](./IMPROVEMENTS.md#r13--stop-parsing-1-mb-of-json-at-startup) | **1,082,256 bytes of exercise JSON is parsed at startup.** Current limitation filtering consumes `secondary_muscles`; the player consumes fallback `instructions`. Preserve both behaviors when reducing startup data. | `wc -c lib/data/exercises.json`; inspect field consumers | 🟠 Cold-start time |
 | [**R11**](./IMPROVEMENTS.md#r11--decide-what-rpe-is-for) | **RPE is dead weight.** Two columns and a `nextLoad` branch exist; `run.tsx` writes `rpe: null` unconditionally, so the `rpe ≤ 8` gate is permanently true and progression is more aggressive than it claims. | `run.tsx`, `progression.ts` | 🟠 Untruthful behaviour |
 | [**R23**](./IMPROVEMENTS.md#r23--add-a-query-cache) | **No query cache.** Home and Plan each hold their own `useDashboard`, and **both** call `useFocusEffect(reload)` — so every tab switch refetches the plan, the history and the progress map. | `(tabs)/index.tsx`, `(tabs)/plan.tsx` | 🟠 Latency and cost |
 | [**R12**](./IMPROVEMENTS.md#r12--a-rest-timer-that-survives-a-locked-phone) | **The rest timer is a decrementing counter, not a clock.** `setInterval` with no wall-clock anchor; lock the phone mid-rest and the count is wrong, and the completion buzz only fires in the foreground. | `components/RestPage.tsx` | 🟠 Wrong rest = wrong training |
@@ -776,7 +785,7 @@ interface Exercise {
   is_bodyweight: boolean;     // equipment === 'bodyweight'  ← feeds effectiveLoadKg
   is_unilateral: boolean;     // regex on the name → the "Per side" note
   primary_muscles: string[];
-  secondary_muscles: string[];                              // preset writer only; no runtime consumer
+  secondary_muscles: string[];                              // now read by limitation filtering
   instructions: string[];                                   // player fallback when demo images are absent
   media_refs: { start: string; end: string };               // two CDN stills
   category: Category;
@@ -786,7 +795,9 @@ interface Exercise {
 
 `lib/data/gym-routine-exercises.ts` writes all three fields for authored movements. The player in
 `app/session/[dayId]/run.tsx` reads `instructions` when demonstration images are absent. No screen or domain
-function consumes `secondary_muscles` or `force_type` ([R13](#2-risks-and-open-gaps)).
+function consumed `secondary_muscles` or `force_type` in the historical snapshot.
+The current candidate reads `secondary_muscles` in `lib/catalog.ts` limitation
+filtering; retain it when revisiting [R13](#2-risks-and-open-gaps).
 
 ### 9.3 The build pipeline
 

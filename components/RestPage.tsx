@@ -9,8 +9,10 @@ import {
   Text,
   View,
 } from 'react-native';
+import Animated, { cancelAnimation, FadeIn, ReduceMotion, useAnimatedStyle, useReducedMotion, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 
 import { ExerciseMedia } from '@/components/ExerciseMedia';
+import { Icon } from '@/components/Icon';
 import {
   Body,
   Button,
@@ -21,6 +23,7 @@ import {
   ProgressBar,
 } from '@/components/ui';
 import { colors, radius, space, type } from '@/lib/theme';
+import { motion } from '@/lib/motion';
 import { formatClock } from '@/lib/plan/timing';
 import { pauseDeadline, remainingSeconds, resumeDeadline, startDeadline } from '@/lib/session/timing';
 import { displayToKg, formatWeight, step } from '@/lib/units';
@@ -59,6 +62,7 @@ interface Props {
   restLabel?: string;
   readyLabel?: string;
   feedback?: ReactNode;
+  justSaved?: boolean;
 }
 
 /**
@@ -89,21 +93,31 @@ export function RestPage({
   restLabel,
   readyLabel,
   feedback,
+  justSaved = false,
 }: Props) {
+  const reduceMotion = useReducedMotion();
+  const readyScale = useSharedValue(1);
+  const readyStyle = useAnimatedStyle(() => ({ transform: [{ scale: readyScale.value }] }));
   const [clock, setClock] = useState(() => ({
     endAt: restUntilMs ?? Date.now() + restSeconds * 1000,
     pausedAt: paused ? pausedAtMs ?? Date.now() : null,
   }));
   const [now, setNow] = useState(Date.now());
-  const firedRef = useRef(false);
+  // Reopening an already completed rest should show Ready without replaying it.
+  const firedRef = useRef(remainingSeconds(clock, now) <= 0);
 
   useEffect(() => {
     const timestamp = Date.now();
     setClock({ endAt: restUntilMs ?? startDeadline(restSeconds, timestamp).endAt,
       pausedAt: paused ? pausedAtMs ?? timestamp : null });
     setNow(timestamp);
-    firedRef.current = false;
-  }, [restSeconds, restUntilMs]);
+    // This page is keyed by set. A shifted deadline on resume is the same rest,
+    // so it must not replay its completed cue.
+    cancelAnimation(readyScale);
+    readyScale.value = 1;
+  }, [restSeconds, restUntilMs, readyScale]);
+
+  useEffect(() => () => cancelAnimation(readyScale), [readyScale]);
 
   useEffect(() => {
     const timestamp = Date.now();
@@ -129,10 +143,16 @@ export function RestPage({
   // Buzz once at zero and then wait: auto-advancing would yank the screen away
   // from someone still walking back to the rack.
   useEffect(() => {
-    if (remaining > 0 || firedRef.current) return;
+    if (remaining > 0 || firedRef.current || paused) return;
     firedRef.current = true;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  }, [remaining]);
+    if (restSeconds > 0 && !reduceMotion) {
+      readyScale.value = withSequence(
+        withTiming(motion.focused.readyScale, { duration: motion.fast, reduceMotion: ReduceMotion.System }),
+        withTiming(1, { duration: motion.fast, reduceMotion: ReduceMotion.System }),
+      );
+    }
+  }, [paused, readyScale, reduceMotion, remaining, restSeconds]);
 
   const done = remaining <= 0;
 
@@ -170,7 +190,7 @@ export function RestPage({
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.clockBlock}>
-        <Overline>{paused ? 'Timers paused' : restLabel ?? (done ? 'Rest complete' : 'Resting')}</Overline>
+        <Overline accessibilityLiveRegion="polite">{paused ? 'Timers paused' : restLabel ?? (done ? 'Rest complete' : 'Resting')}</Overline>
         <Text style={styles.clock}>{formatClock(remaining)}</Text>
         <ProgressBar
           value={restSeconds <= 0 ? 1 : 1 - remaining / restSeconds}
@@ -178,6 +198,16 @@ export function RestPage({
       </View>
 
       {feedback ? <View style={{ marginTop: space.lg }}>{feedback}</View> : null}
+
+      {justSaved ? (
+        <Animated.View
+          entering={FadeIn.duration(motion.fast).reduceMotion(ReduceMotion.System)}
+          style={styles.saved}
+        >
+          <Icon name="check" size={18} color={colors.accent} />
+          <Body style={styles.savedLabel}>Set saved on this device</Body>
+        </Animated.View>
+      ) : null}
 
       <View style={styles.card}>
         <Overline>{setLabel}</Overline>
@@ -264,14 +294,15 @@ export function RestPage({
         )}
       </View>
 
+      <Animated.View style={[{ marginTop: space.xl }, readyStyle]}>
       <Button
         title={advanceLabel}
         variant={done || !next ? 'accent' : 'surface'}
         loading={advancing}
         disabled={paused}
         onPress={onAdvance}
-        style={{ marginTop: space.xl }}
       />
+      </Animated.View>
     </ScrollView>
   );
 }
@@ -302,7 +333,10 @@ const styles = StyleSheet.create({
     fontSize: 56,
     lineHeight: 60,
     color: colors.accent,
+    fontVariant: ['tabular-nums'],
   },
+  saved: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.lg },
+  savedLabel: { ...type.small, color: colors.accent, flexShrink: 1 },
   card: {
     marginTop: space.lg,
     backgroundColor: colors.surface,

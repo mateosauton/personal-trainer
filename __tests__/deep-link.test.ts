@@ -1,4 +1,4 @@
-import { authRedirectTo, authRecoveryRedirectTo, completeAuthFromUrl, isRecoveryLink } from '@/lib/deep-link';
+import { authRedirectTo, authRecoveryRedirectTo, cleanAuthCallbackUrl, completeAuthFromUrl, isRecoveryLink } from '@/lib/deep-link';
 
 const mockExchange = jest.fn();
 const mockSetSession = jest.fn();
@@ -130,4 +130,41 @@ it('surfaces expired-link errors without trying to sign in', async () => {
   expect(mockExchange).not.toHaveBeenCalled();
   expect(mockSetSession).not.toHaveBeenCalled();
   expect(mockExchange).not.toHaveBeenCalled();
+});
+
+it('removes callback credentials while preserving route and unrelated URL state', () => {
+  expect(cleanAuthCallbackUrl('https://gym.test/reset-password?code=secret&next=home#tab=history&access_token=secret&refresh_token=secret&type=recovery'))
+    .toBe('https://gym.test/reset-password?next=home#tab=history');
+  expect(cleanAuthCallbackUrl('https://gym.test/?error=expired&error_description=Expired#section'))
+    .toBe('https://gym.test/#section');
+});
+
+it('keeps ordinary anchors and filter parameters on pages without a callback', () => {
+  const url = 'https://gym.test/?type=workout#history';
+  expect(cleanAuthCallbackUrl(url)).toBe(url);
+});
+
+it('coalesces concurrent delivery but checks the current account on later delivery', async () => {
+  const url = 'officegym://reset-password?code=concurrent-cleanup';
+  await expect(Promise.all([completeAuthFromUrl(url), completeAuthFromUrl(url)])).resolves.toEqual([true, true]);
+  expect(mockExchange).toHaveBeenCalledTimes(1);
+  mockGetSession.mockResolvedValue({ data: { session: { user: { id: 'another-account' } } }, error: null });
+  await expect(completeAuthFromUrl(url)).rejects.toThrow(/sign out/i);
+  expect(mockExchange).toHaveBeenCalledTimes(1);
+});
+
+it('clears a failed browser callback before reload without discarding its anchor', async () => {
+  const url = 'officegym://reset-password?code=expired-browser#help';
+  const replaceState = jest.fn();
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { location: { href: url }, history: { state: { route: 'reset' }, replaceState } } });
+  mockExchange.mockResolvedValueOnce({ error: new Error('Expired') });
+  try {
+    await expect(completeAuthFromUrl(url)).rejects.toThrow('Expired');
+    expect(replaceState).toHaveBeenCalledWith({ route: 'reset' }, '', 'officegym://reset-password#help');
+    await expect(completeAuthFromUrl('officegym://reset-password#help')).resolves.toBe(false);
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'window', original);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
 });
