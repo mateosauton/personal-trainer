@@ -78,6 +78,9 @@ function validateEnvironment(input, registry = environments) {
 
 function validateProcessEnvironment(env, options, registry = environments) {
   if (!env.APP_ENV || env.APP_ENV !== env.EXPO_PUBLIC_APP_ENV) throw new Error('APP_ENV and EXPO_PUBLIC_APP_ENV must be set explicitly and match.');
+  // The update wrapper pins this private target before EAS spawns config and
+  // export children. Recheck it after EAS has fetched its environment values.
+  if (env.TRAINER_UPDATE_APP_ENV !== undefined && (!['preview', 'production'].includes(env.TRAINER_UPDATE_APP_ENV) || env.APP_ENV !== env.TRAINER_UPDATE_APP_ENV)) throw new Error('TRAINER_UPDATE_APP_ENV must select preview or production and match APP_ENV.');
   if (options.expectedEnvironment && env.APP_ENV !== options.expectedEnvironment) throw new Error('APP_ENV does not match the expected deployment environment.');
   if (env.EAS_BUILD_PROFILE && EAS_PROFILE_ENVIRONMENTS[env.EAS_BUILD_PROFILE] !== env.APP_ENV) throw new Error('EAS build profile does not match the selected app environment.');
   if (env.WORKERS_CI || env.WORKERS_CI_BRANCH) {
@@ -101,7 +104,7 @@ function validateProcessEnvironment(env, options, registry = environments) {
 
 module.exports = { validateEnvironment, validateProcessEnvironment, MOCK_URL, MOCK_KEY, EAS_PROFILE_ENVIRONMENTS };
 
-/** Derive an independent deployment target from direct Expo/EAS commands. */
+/** Resolve the command visible in this process; child processes lose parent argv. */
 function resolveCommandContext(argv) {
   const command = argv[2];
   // These inspect/fetch configuration only. In particular, env:exec must be
@@ -114,6 +117,14 @@ function resolveCommandContext(argv) {
     const index = argv.indexOf(flag);
     return index < 0 ? undefined : argv[index + 1];
   };
+  // EAS discovers the project ID through a child `expo config --json`
+  // before it can download this project's environment variables. This reads
+  // configuration only; export, prebuild and native bundling stay strict.
+  if (command === 'config' && (!value('--type') || value('--type') === 'public')) return { readOnly: true };
+  // These helper checks apply only when original EAS argv is supplied. EAS
+  // 23.2 resolves app config in child Expo processes, so app.config.js cannot
+  // enforce its parent's update channel. The canonical update wrapper must
+  // validate channel/environment binding before it launches EAS.
   if (command === 'update') {
     const channel = value('--channel');
     const environment = value('--environment');

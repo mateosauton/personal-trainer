@@ -96,3 +96,10 @@ test('Cloudflare branch context requires production only on master', () => {
   assert.throws(() => validateProcessEnvironment(processInput('preview', { WORKERS_CI: '1', WORKERS_CI_BRANCH: 'master' }), { purpose: 'distribution' }, registry), /Cloudflare|environment/i);
   assert.throws(() => validateProcessEnvironment(processInput('production', { WORKERS_CI: '1' }), { purpose: 'distribution' }, registry), /Cloudflare|branch/i);
 });
+
+test('private update target survives EAS child argv and prevents environment relabeling', () => {
+  for (const environment of ['production', 'preview']) assert.doesNotThrow(() => validateProcessEnvironment(processInput(environment, { TRAINER_UPDATE_APP_ENV: environment }), { purpose: 'distribution' }, registry));
+  for (const [environment, expected] of [['production', 'preview'], ['preview', 'production'], ['production', 'development'], ['production', 'unknown'], ['production', '']]) {
+    assert.throws(() => validateProcessEnvironment(processInput(environment, { TRAINER_UPDATE_APP_ENV: expected }), { purpose: 'distribution' }, registry), /TRAINER_UPDATE_APP_ENV/);
+  }
+});

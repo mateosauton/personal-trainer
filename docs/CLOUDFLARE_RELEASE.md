@@ -38,11 +38,12 @@ credentials in build variables or assets.
 
 **Migration prerequisite:** read-only inspection on 2026-10-22 found both
 Cloudflare triggers pointed at the production project and had no environment
-markers. This PR does not change those hosted settings. New preview builds will
-fail until a distinct preview project is provisioned, migrated, registered in
+markers. Production markers have since been configured and verified for the
+existing `asbudyijvunpnhrhsubm` project. New preview builds remain blocked until
+an isolated preview backend (a branch or project) is verified, registered in
 `config/environments.json`, and configured on the preview trigger. Production
-builds also need the explicit markers above before merging. Existing deployed
-versions keep their old configuration until replaced. Follow [ENVIRONMENTS.md](ENVIRONMENTS.md).
+builds use the explicit markers above. Existing deployed versions keep their
+old configuration until replaced. Follow [ENVIRONMENTS.md](ENVIRONMENTS.md).
 
 `npm run build:web:check` uses synthetic public values only to validate Metro
 in CI; its `.expo/web-check` output must never be deployed. Hosted builds use

@@ -76,14 +76,16 @@
     "docs:verify": "node scripts/verify-docs.mjs",
     "env:check": "node scripts/verify-environment.cjs --distribution",
     "build:web:check": "node scripts/check-web-bundle.cjs",
-    "test:safety": "node --test config/environment-policy.test.cjs scripts/verify-environment.test.cjs scripts/dev-db.test.cjs scripts/check-web-bundle.test.cjs scripts/release-safety.test.mjs",
+    "test:safety": "node --test config/environment-policy.test.cjs scripts/verify-environment.test.cjs scripts/dev-db.test.cjs scripts/check-web-bundle.test.cjs scripts/release-safety.test.mjs scripts/publish-update.test.cjs",
     "db:local:start": "node scripts/dev-db.cjs start",
     "db:local:stop": "node scripts/dev-db.cjs stop",
     "db:local:env": "node scripts/dev-db.cjs env",
     "db:local:seed": "node scripts/dev-db.cjs seed",
     "db:local:test": "node scripts/dev-db.cjs test",
     "db:local:reset": "node scripts/dev-db.cjs reset",
-    "release:native": "node scripts/release-native.mjs"
+    "release:native": "node scripts/release-native.mjs",
+    "update:preview": "node scripts/publish-update.cjs --channel preview --environment preview",
+    "update:candidate": "node scripts/publish-update.cjs --channel release-test --environment production"
   },
   "private": true
 }

@@ -64,7 +64,7 @@ function sandbox(inheritedEnvironment = process.env) {
   // The fake GitHub production run must not inherit its test host's deployment
   // identity or credentials (for example a Cloudflare preview running npm test).
   const inherited = Object.fromEntries(Object.entries(inheritedEnvironment).filter(([name]) =>
-    !name.startsWith('WORKERS_CI') && name !== 'VERCEL_ENV' && name !== 'EAS_BUILD_PROFILE'
+    !name.startsWith('WORKERS_CI') && name !== 'VERCEL_ENV' && name !== 'EAS_BUILD_PROFILE' && name !== 'TRAINER_UPDATE_APP_ENV'
     && !name.startsWith('EXPO_PUBLIC_') && !name.startsWith('RELEASE_TEST_')));
   const directory = mkdtempSync(join(tmpdir(), 'trainer-release-'));
   mkdirSync(join(directory, 'bin'));
@@ -107,11 +107,11 @@ test('runner promotes the exact tested group and saves checked identities withou
 });
 test('fake production promotion is isolated from a parent hosted preview context', async () => {
   const s = sandbox({ ...process.env, WORKERS_CI: '1', WORKERS_CI_BRANCH: 'codex/environment-release-safety',
-    WORKERS_CI_COMMIT_SHA: 'parent-preview-sha', VERCEL_ENV: 'preview', EAS_BUILD_PROFILE: 'preview',
+    WORKERS_CI_COMMIT_SHA: 'parent-preview-sha', VERCEL_ENV: 'preview', EAS_BUILD_PROFILE: 'preview', TRAINER_UPDATE_APP_ENV: 'preview',
     EXPO_PUBLIC_DEV_LOGIN_PASSWORD: 'parent-preview-password' });
   try {
     assert.ok(!Object.keys(s.env).some(name => name.startsWith('WORKERS_CI')));
-    for (const name of ['VERCEL_ENV', 'EAS_BUILD_PROFILE', 'EXPO_PUBLIC_DEV_LOGIN_PASSWORD']) assert.equal(s.env[name], undefined);
+    for (const name of ['VERCEL_ENV', 'EAS_BUILD_PROFILE', 'TRAINER_UPDATE_APP_ENV', 'EXPO_PUBLIC_DEV_LOGIN_PASSWORD']) assert.equal(s.env[name], undefined);
     const receipt = await promoteRelease({ env: s.env, cwd: s.directory, fetcher: s.fetcher });
     assert.equal(receipt.status, 'promoted');
     assert.equal(s.commands().filter(command => command.includes('update:republish')).length, 1);

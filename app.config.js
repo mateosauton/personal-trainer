@@ -2,8 +2,19 @@ const { validateProcessEnvironment, resolveCommandContext } = require('./config/
 
 module.exports = ({ config }) => {
   const context = resolveCommandContext(process.argv);
-  if (context.readOnly) return config;
-  const environment = validateProcessEnvironment(process.env, context);
+  let environment;
+  try {
+    environment = validateProcessEnvironment(process.env, context.readOnly ? { purpose: 'distribution' } : context);
+  } catch (error) {
+    if (!context.readOnly) throw error;
+    // Configuration discovery must work before EAS can fetch valid variables.
+    // Return stable app identity, never unvalidated routing evidence. Every
+    // artifact-producing command reruns the strict guard in its own context.
+    const extra = { ...config.extra };
+    delete extra.appEnvironment;
+    delete extra.backendProjectRef;
+    return { ...config, extra };
+  }
   return {
     ...config,
     extra: {

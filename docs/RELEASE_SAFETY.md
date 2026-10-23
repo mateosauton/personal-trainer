@@ -1,6 +1,6 @@
 # Release safety
 
-This change removes production OTA publishing on every `master` push. The only repository native publisher is **Promote tested native update**, dispatched manually from `master`. It promotes one already tested platform and update group, preserving its JavaScript and assets. Merging a PR does not publish a native update.
+This change removes production OTA publishing on every `master` push. The only repository production native publisher is **Promote tested native update**, dispatched manually from `master`. It promotes one already tested platform and update group, preserving its JavaScript and assets. Merging a PR does not publish a native update.
 
 ## One release, three distinct identities
 
@@ -28,11 +28,13 @@ Load production environment values explicitly for candidate export:
 
 ```sh
 EXPO_NO_DOTENV=1 npx eas-cli@23.2.0 env:exec production \
-  'node scripts/verify-environment.cjs --distribution --environment production && npx eas-cli@23.2.0 update --channel release-test --environment production --platform android --message "Candidate workout fix" --non-interactive' \
+  'node scripts/publish-update.cjs --channel release-test --environment production --platform android --message "Candidate workout fix"' \
   --non-interactive
 ```
 
-For iOS, change the explicit platform to `ios`; create and test a separate group. This command uploads to the release-test channel. It is an operator action and should only be run after the code is ready for a phone test. Do not use `--platform all`, `--skip-bundler`, an old exported directory, or a preview environment for a production candidate.
+For iOS, change the explicit platform to `ios`; create and test a separate group. This command uploads to the release-test channel. It is an operator action and should only be run after the code is ready for a phone test.
+
+The wrapper validates the selected environment and backend **before starting EAS**, disables dotenv loading and invokes pinned EAS CLI 23.2.0. It carries the requested target in the private `TRAINER_UPDATE_APP_ENV` marker through EAS into the actual Expo export. If refetched EAS values select a different app environment, export fails before an update can be published. It requires exactly one channel, environment, platform and nonempty message. It rejects direct production publishing, branch targeting, skipped bundling, old input directories, duplicate arguments and unknown options. The only supported pairs are `release-test` with `production`, and `preview` with `preview`; preview also requires a separately registered backend. For an isolated preview, load `eas env:exec preview` and pass `--channel preview --environment preview` to the same wrapper.
 
 Install a matching release-test build and load **that exact update group**. Verify its group ID in the Expo update diagnostics/EAS dashboard before recording results. In an issue or PR, record source SHA, platform, update group, test build, intended installed production build, phone/OS, test time, and these results:
 
@@ -63,6 +65,7 @@ For an incident, stop new promotions. Identify the last known-good compatible gr
 ## Deliberate limits
 
 - This pipeline supports the repository's current **unsigned EAS Update** configuration. Any remote or local signing configuration is rejected. Introducing signing requires a reviewed certificate/key distribution design and new compatible binaries. App-store binary signing remains managed by EAS and the stores.
+- The supported publishing paths are this candidate wrapper and the manual promotion workflow. EAS 23.2.0 discovers configuration through child `expo config --json` calls, which cannot see the outer command's channel arguments. Discovery without valid variables returns app identity without routing proof; actual exports remain strict about their environment and backend. These checks cannot bind a raw `eas update` or `update:republish` invocation to the repository channel policy. A user holding EAS publishing permissions can bypass repository scripts, so restrict those permissions and use the supported paths. The guarded wrapper pins the target through config discovery and actual export; do not configure `TRAINER_UPDATE_APP_ENV` in shared EAS environments, where it could override the wrapper's private child-process value. Avoid editing EAS variables during candidate publication.
 - EAS fingerprints and source metadata are evidence from EAS; the gate trusts the EAS account, token, GitHub workflow code and dependencies. It does not establish device-test authenticity or inspect a store-installed binary remotely. The operator must identify the actual production build cohort correctly. Different runtime cohorts need separate release decisions.
 - GitHub serializes this workflow without cancellation; manual CLI writes or other repositories can bypass that lock. Restrict EAS publishing permissions. GitHub/EAS cannot atomically lock the Git branch and update service together: a small race remains after the final `master` read. Freeze merges during promotion when strict source stability is needed.
 - Channel state can change after validation. Restrict channel administration and avoid channel edits during release. The explicit destination branch prevents this script from creating or choosing a different branch during its write.
@@ -72,5 +75,7 @@ For an incident, stop new promotions. Identify the last known-good compatible gr
 ## Verification and sources
 
 `node --test scripts/release-safety.test.mjs` runs the policy cases and a runner integration suite with fake `git` and `eas` executables in a disposable directory. It proves mismatches stop before republish, a late `master` movement stops publication, promotion reuses the exact group, payload changes are caught, and ambiguous writes keep a receipt. No test publishes a real update.
+
+`node --test scripts/publish-update.test.cjs` verifies the candidate wrapper with an injected child process. It checks exact pinned CLI arguments for both supported targets and proves routing conflicts, unsupported options, missing configuration, privileged keys and developer credentials fail before any EAS invocation.
 
 The design follows [Expo's deployment guidance](https://docs.expo.dev/eas-update/deployment/) for promoting the tested group. Metadata and CLI behavior are pinned to [EAS CLI 23.2.0 schema](https://github.com/expo/eas-cli/blob/v23.2.0/packages/eas-cli/src/graphql/generated.ts), [update JSON formatting](https://github.com/expo/eas-cli/blob/v23.2.0/packages/eas-cli/src/update/utils.ts), [republish command](https://github.com/expo/eas-cli/blob/v23.2.0/packages/eas-cli/src/commands/update/republish.ts), and [republish implementation](https://github.com/expo/eas-cli/blob/v23.2.0/packages/eas-cli/src/update/republish.ts). In this version, `update:view --json` omits environment, dirty-source and signing metadata, so the gate uses authenticated read-only GraphQL queries. Missing fields or a changed API fail closed. The release receipt preserves the relevant verified values.

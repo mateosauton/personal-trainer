@@ -3,7 +3,9 @@
 Every app build selects a backend explicitly. Changing an EAS channel, native
 bundle identifier or web URL does not create a separate database, Auth tenant
 or Storage bucket. Development, preview and production need distinct Supabase
-project references in `config/environments.json`.
+backend references in `config/environments.json`. An isolated Supabase branch
+under the existing production project has its own instance, reference and API
+credentials, so it can satisfy this boundary without another standalone project.
 
 ## Targets and boundaries
 
@@ -40,16 +42,35 @@ Read-only checks found all three EAS environments pointing to
 | Production `c2a31eac-fa7f-49e8-a448-93c21a1b5c35` | `master` | `npx wrangler deploy` | `asbudyijvunpnhrhsubm` |
 | Preview `4c87308a-5735-4284-84fb-36932dd05cd2` | Every branch except `master` | `npx wrangler versions upload` | `asbudyijvunpnhrhsubm` |
 
-Neither trigger contained the new environment markers at inspection. The existing
-previews therefore share production data. No EAS variables, Cloudflare variables
-or hosted Supabase resources were changed by this implementation. The new guards
-intentionally block builds with that unsafe configuration.
+Neither trigger contained the new environment markers at the initial inspection.
+Existing previews therefore shared production data. The new guards block builds
+with that unsafe configuration.
 
-The connected Supabase account did not expose the historical production project.
-Its only visible organization was `tfh`, which contains unrelated projects.
-Do not create a personal project's environments in that organization without
-establishing ownership and billing. Production migration history, hosted Auth
-settings and its PostgreSQL major version remain unverified.
+The maintainer selected the existing `office-gym-trainer` project,
+`asbudyijvunpnhrhsubm`, in personal organization `phszlihdzycppyvriusv`
+(`mateosauton's Org`). The signed-in dashboard confirms its `main` branch is
+production, its region is `us-east-1`, and no development branches exist.
+The Supabase connector is still scoped to `tfh` and denies this project's API
+management requests; browser access is available. Do not use `tfh` for this app.
+
+The current setup keeps this existing project for production and uses the local
+stack for development. Hosted development and preview references remain `null`;
+no additional paid projects or branches have been created. A future hosted
+preview can use an isolated branch of this same parent after its costs and
+configuration are reviewed. Its child URL must differ from the production URL;
+renaming the production environment is insufficient.
+
+Cloudflare's production trigger has now been configured and read back with
+`APP_ENV=production`, `EXPO_PUBLIC_APP_ENV=production` and `EXPO_NO_DOTENV=1`.
+Its existing backend URL, public key and provider flags were preserved. This
+configuration change does not publish a build. EAS production now has the same
+three markers. A clean-shell `eas env:exec production` downloaded those values
+and passed the real distribution preflight for `asbudyijvunpnhrhsubm`. A read-only
+request to that project's Auth settings API accepted its configured public key
+with HTTP 200. No update or web deployment was published by these checks.
+Preview configuration remains blocked until an isolated backend is registered.
+Production migration history,
+hosted Auth settings and PostgreSQL major version remain unverified.
 
 ## Start a separate local backend
 
@@ -141,10 +162,15 @@ recorded versions have not been reconciled with those files.
 
 For development and preview provisioning, the maintainer should:
 
-1. Select the personal project's organization, region and cost limits. Create
-   distinct empty development and preview projects through the authorized account.
-2. Apply the reviewed schema to each empty project. Verify ownership policies and
-   SQL regression tests using synthetic accounts. Never restore a production data
+1. Use the selected personal organization and production parent above. Choose
+   isolated branches of that project or distinct empty standalone projects, with
+   explicit cost limits. Branches incur their own compute and usage charges.
+   Local development needs neither. Do not create hosted resources without cost approval.
+2. For an empty standalone project, apply the reviewed schema. A dashboard
+   branch derives its schema from the parent's migration history or a schema dump:
+   inspect the resulting schema before applying anything and never blindly replay
+   the nine baseline files into a populated branch. Keep "Include data" disabled.
+   Verify ownership policies and SQL regression tests using synthetic accounts. Never restore a production data
    dump into a preview project. Confirm the hosted PostgreSQL major version and
    align the local test runtime before treating version parity as established.
 3. Register each public project reference in `config/environments.json`. Keep keys
@@ -176,8 +202,12 @@ EXPO_PUBLIC_SUPABASE_KEY=<that-target-public-client-key>
 EAS profiles select their corresponding target. `release-test` deliberately uses
 production to test the production runtime and must follow production controls.
 It is not a sandbox for destructive tests. OTA channel choice also follows the
-target; a preview update cannot become a production update merely by changing
-its channel after testing.
+target. Use the guarded `npm run update:preview` or `npm run update:candidate`
+commands inside the matching `eas env:exec`; only the manual promotion workflow
+can publish through the supported production path. Expo config discovery runs
+in a child process and cannot validate raw EAS channel arguments. Direct raw
+EAS publishing is outside this guard; keep publishing access restricted and
+follow [RELEASE_SAFETY.md](RELEASE_SAFETY.md).
 
 Set the same four names separately on Cloudflare's production and preview build
 triggers. Keep `EXPO_NO_DOTENV=1`, `EXPO_NO_TELEMETRY=1` and Node 22 in hosted builds.
@@ -212,6 +242,8 @@ by that integration check.
 ## References
 
 - [Supabase local development configuration](https://supabase.com/docs/guides/local-development/cli/config) defines the local service settings and callback allowlist.
+- [Supabase branching](https://supabase.com/docs/guides/deployment/branching) explains isolated instances, separate credentials and branches without production data.
+- [Supabase branch billing](https://supabase.com/docs/guides/platform/manage-your-usage/branching) describes usage charges; branches are not covered by compute credits or the spend cap.
 - [Supabase database migrations](https://supabase.com/docs/guides/local-development/database-migrations) describes fresh-local replay and deployment history.
 - [Cloudflare Workers Builds configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/) documents build variables and `WORKERS_CI_BRANCH`.
 - [Expo environment variables](https://docs.expo.dev/guides/environment-variables/) explains public values embedded in app bundles.
