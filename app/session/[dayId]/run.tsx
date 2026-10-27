@@ -1,7 +1,8 @@
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, AppState, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInDown, ReduceMotion } from 'react-native-reanimated';
 
 import { ExerciseMedia } from '@/components/ExerciseMedia';
@@ -48,6 +49,7 @@ import { workouts } from '@/lib/session/workout';
 import { signalWorkoutCompletion } from '@/lib/session/completion-motion';
 import type { SavedWorkout, WorkoutTiming } from '@/lib/session/workout-store';
 import type { SetLog, Units } from '@/lib/types';
+import { SetEntry } from '@/lib/session/set-entry';
 import { draftMeasurement } from '@/lib/session/set-values';
 
 const sameDraft = (a: SetDraft | null, b: SetDraft | null) =>
@@ -92,6 +94,8 @@ export default function SessionRun() {
   const userId = useUserId();
   const { profile } = useAuth();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [workout, setWorkout] = useState<SavedWorkout | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -143,6 +147,17 @@ export default function SessionRun() {
     : Math.max(0, Math.floor((timestamp - (active?.startedAtMs ?? timestamp)) / 1000));
   const finished =
     !loading && active != null && queue.length > 0 && cursor >= queue.length;
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const show = Keyboard.addListener(showEvent, () => setKeyboardOpen(true));
+    const hide = Keyboard.addListener(hideEvent, () => setKeyboardOpen(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -330,9 +345,8 @@ export default function SessionRun() {
   const displayedSuggestion = latestWeightKg == null ? suggestion : {
     ...suggestion, weightKg: latestWeightKg, source: 'session' as const, sourceExerciseId: entry?.item.exercise_id ?? null,
   };
-  const weightText = workWeight ?? (defaultWeightKg == null ? '' : String(Math.round(kgToDisplay(defaultWeightKg, units) * 10) / 10));
-  const enteredWeight = Number(weightText.trim().replace(',', '.'));
-  const validWeight = weightText.trim() !== '' && Number.isFinite(enteredWeight) && enteredWeight >= 0;
+  const weightText = workWeight ?? (defaultWeightKg == null ? '' : SetEntry.formatDecimal(kgToDisplay(defaultWeightKg, units)));
+  const enteredWeight = SetEntry.weightFromText(weightText);
   const withRecordedSet = (target: QueueEntry, value: SetDraft) => {
     const next = new Map(recordedSets);
     const set = setLogFromDraft(target, value, units);
@@ -391,7 +405,7 @@ export default function SessionRun() {
     return [...next.values()];
   };
   const completeSet = async () => {
-    if (!entry || !active || busy || paused || !validWeight) return;
+    if (!entry || !active || busy || paused || enteredWeight == null) return;
     const seed: SetDraft = {
       reps: entry.item.seconds != null ? 0 : latestSet?.reps ?? known?.last_reps ?? entry.item.reps_high ?? 10,
       ...(entry.item.seconds != null ? { seconds: entry.item.seconds } : {}),
@@ -668,7 +682,8 @@ export default function SessionRun() {
     && deferred.observed.some(set => set.plan_item_id === entry.item.id && set.set_index === entry.set);
 
   return (
-    <Screen scroll={false} style={{ padding: space.lg }}>
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <Screen scroll={false} style={{ paddingHorizontal: space.lg, paddingBottom: keyboardOpen ? space.sm : insets.bottom + space.md }}>
       <View style={styles.header}>
         <View style={{ flex: 1, gap: 4 }}>
           <Overline>
@@ -748,6 +763,7 @@ export default function SessionRun() {
             restLabel={blockDuration != null && endsBlock ? 'Block complete · recover' : undefined}
             readyLabel={blockDuration != null && endsBlock ? nextEntry ? 'Next block' : 'Finish session' : undefined}
             feedback={exerciseComplete ? <ExerciseWeightProgressCard
+              compact
               progress={exerciseWeightProgress(matchingFeedbackSets, comparableHistory ? suggestion.previousWeightKg : null)}
               units={units} isBodyweight={draft.asBodyweight} setsCompleted={matchingFeedbackSets.length}
               historyAvailable={comparableHistory} /> : undefined}
@@ -756,7 +772,7 @@ export default function SessionRun() {
         </View>
       ) : (
         <>
-          <ScrollView style={styles.flex} contentContainerStyle={styles.workContent} showsVerticalScrollIndicator={false}>
+          <ScrollView style={styles.flex} contentContainerStyle={styles.workContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
           <View key={entry.key} style={styles.body}>
             {exercise?.media_refs.start ? (
               <ExerciseMedia exercise={exercise} style={styles.media} />
@@ -797,7 +813,7 @@ export default function SessionRun() {
             <Button
               title={isWarmup ? 'Done' : 'Complete set'}
               loading={busy}
-              disabled={paused || (!isWarmup && !validWeight)}
+              disabled={paused || (!isWarmup && enteredWeight == null)}
               onPress={() => {
                 if (isWarmup) {
                   advanceWarmup();
@@ -817,12 +833,14 @@ export default function SessionRun() {
       )}
       </Animated.View>
     </Screen>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   center: { alignItems: 'center', justifyContent: 'center' },
-  flex: { flex: 1 },
+  flex: { flex: 1, minHeight: 0 },
+  footer: { flexShrink: 0, paddingTop: space.lg },
   header: { flexDirection: 'row', alignItems: 'center', gap: space.lg },
   body: { flex: 1, justifyContent: 'center', gap: space.md },
   workContent: { flexGrow: 1, paddingVertical: space.md },
@@ -844,5 +862,4 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   partnerName: { ...type.body, fontWeight: '600' },
-  footer: { paddingTop: space.lg },
 });

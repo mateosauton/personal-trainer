@@ -23,6 +23,38 @@ interface Props {
   autoFocus?: boolean;
 }
 
+/** Shared numeric keyboard setup. Decimal and number pads have no return key on iOS. */
+export function numericDoneProps(accessoryId: string, decimal = true) {
+  const showsAccessory = Platform.OS === 'ios';
+  return {
+    keyboardType: decimal ? ('decimal-pad' as const) : ('number-pad' as const),
+    inputMode: decimal ? ('decimal' as const) : ('numeric' as const),
+    returnKeyType: 'done' as const,
+    onSubmitEditing: () => Keyboard.dismiss(),
+    inputAccessoryViewID: showsAccessory ? accessoryId : undefined,
+  };
+}
+
+/** The Done bar above an iOS numeric pad. Android dismisses with the system back control. */
+export function DoneAccessory({ nativeID }: { nativeID: string }) {
+  if (Platform.OS !== 'ios') return null;
+  return (
+    <InputAccessoryView nativeID={nativeID}>
+      <View style={styles.accessory}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Done"
+          onPress={Keyboard.dismiss}
+          hitSlop={12}
+          style={({ pressed }) => [styles.done, pressed && { opacity: 0.6 }]}
+        >
+          <Body style={styles.doneLabel}>Done</Body>
+        </Pressable>
+      </View>
+    </InputAccessoryView>
+  );
+}
+
 /**
  * A number entry that can be got out of.
  *
@@ -41,7 +73,6 @@ export function NumberField({
 }: Props) {
   // InputAccessoryView needs a stable id shared by the input and the bar.
   const accessoryId = `number-field-${useId()}`;
-  const showsAccessory = Platform.OS === 'ios';
 
   return (
     <>
@@ -52,31 +83,13 @@ export function NumberField({
           onChangeText={onChangeText}
           placeholder={placeholder}
           placeholderTextColor={colors.faint}
-          keyboardType="decimal-pad"
-          inputMode="decimal"
-          returnKeyType="done"
           accessibilityLabel={accessibilityLabel}
           autoFocus={autoFocus}
-          onSubmitEditing={Keyboard.dismiss}
-          inputAccessoryViewID={showsAccessory ? accessoryId : undefined}
+          {...numericDoneProps(accessoryId)}
         />
         {unit ? <Text style={styles.unit}>{unit}</Text> : null}
       </View>
-
-      {showsAccessory ? (
-        <InputAccessoryView nativeID={accessoryId}>
-          <View style={styles.accessory}>
-            <Pressable
-              accessibilityRole="button"
-              onPress={Keyboard.dismiss}
-              hitSlop={12}
-              style={({ pressed }) => [styles.done, pressed && { opacity: 0.6 }]}
-            >
-              <Body style={styles.doneLabel}>Done</Body>
-            </Pressable>
-          </View>
-        </InputAccessoryView>
-      ) : null}
+      <DoneAccessory nativeID={accessoryId} />
     </>
   );
 }
