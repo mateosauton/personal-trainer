@@ -4,9 +4,10 @@ This document tracks the unfinished work in
 [#8](https://github.com/mateosauton/personal-trainer/issues/8),
 [#22](https://github.com/mateosauton/personal-trainer/issues/22) and
 [#39](https://github.com/mateosauton/personal-trainer/issues/39).
-Source changes from #49 are merged. Open PRs #60 and #61 remain separate
-candidates. No native build, hosted migration, store submission or production
-publication was performed during the issue triage.
+Source changes from #49 are merged. PRs #60 and #61 are also merged
+(`5cc2671`, `fa5c8b3`) and are no longer separate candidates. No native
+build, hosted migration, store submission or production publication was
+performed during the issue triage.
 
 ## Implementation handoff
 

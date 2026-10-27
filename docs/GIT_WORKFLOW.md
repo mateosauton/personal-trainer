@@ -40,12 +40,13 @@ a phone without unnecessary decisions or lost progress?
 ## 1. What exists, and what is proposed
 
 Historical audit on 2026-10-22 against the checkout and connected GitHub API,
-before the environment-safety and recovery work below was incorporated:
+before the environment-safety and recovery work below was incorporated.
+PRs #60 and #61 from that audit merged on 2026-10-23:
 
 | Area | Observed state | Recommended policy |
 | --- | --- | --- |
 | Integration branch | Current remote `master` is `5f349d2e7cc71d153df591d15b087ed99d82a7c2`. | Keep `master` releasable. Use short `codex/<issue-number>-<slug>` branches and PRs. |
-| Work in progress | PR #49 is merged. Open PRs #60 and #61 prepare environment safety and recovery changes. | Check those candidates before starting overlapping work. Prepared issue branches alone do not mean implementation has started. |
+| Work in progress | PR #49 is merged. PRs #60 and #61 merged on 2026-10-23 (`5cc2671` environment safety, `fa5c8b3` recovery). | Build on those merges before overlapping work. Prepared issue branches alone do not mean implementation has started. |
 | Merge enforcement | GitHub reports `protected: false`, required checks off, and no rulesets. The detailed protection endpoint returns 403 for this connector. | Configure and verify an enforced PR/check rule. |
 | Native publication | Remote `master` contains `checks.yml`, with manual publication after checks and a tested SHA, build ID, and platform. | Follow the device checklist and publish only the verified platform. A source merge is separate from native publication. |
 | Hosted web | Repository configuration builds Cloudflare assets; the release notes describe `master` as its production trigger. | Recheck hosted trigger settings before changing release behavior. Git cannot prove those settings. |
