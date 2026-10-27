@@ -112,7 +112,7 @@ See [Supabase's architecture](https://supabase.com/docs/guides/getting-started/a
 | Expo delivery | [app.json](../app.json), [eas.json](../eas.json) | EAS project `aa04a2aa-93a1-4e8f-ad57-84ed3e8c2bf5`; fingerprint runtime compatibility; separate build profiles and update channels. |
 | Web hosting | [wrangler.jsonc](../wrangler.jsonc) | Cloudflare is the only web host. Worker `personal-trainer` serves static `dist/` with a single-page fallback. Build runs checks before export. Hosted triggers remain external configuration. |
 | Web testing address | [Cloudflare runbook](CLOUDFLARE_RELEASE.md) | `https://personal-trainer.sautonmateo.workers.dev`; the runbook contains prior deployment evidence, not a live version check for this document. |
-| Database/Auth/Storage | [Supabase client](../lib/db/supabase.ts), [migrations](../supabase/migrations/), [baseline manifest](../supabase/migration-baseline.json) | URL/key come from build configuration. The manifest records a historical production reference; its history mappings remain unverified. Region, backups, live project identity and applied state need separate evidence. |
+| Database/Auth/Storage | [Supabase client](../lib/db/supabase.ts), [migrations](../supabase/migrations/), [baseline manifest](../supabase/migration-baseline.json) | URL/key come from build configuration. The manifest maps every checked-in migration to project `asbudyijvunpnhrhsubm`, verified 2026-10-27. Region, backups, and hosted Auth/Storage behavior still need their own evidence. |
 | Account-deletion backend | [function adapter](../supabase/functions/delete-account/index.js), [function config](../supabase/config.toml) | An authenticated Edge Function performs server-only Auth/Storage admin operations. Source presence is not a deployment or hosted verification result. |
 | Exercise assets | [catalog builder](../scripts/build-catalog.mjs), [media provider](../lib/media/provider.ts) | Bundled metadata references remote images. Current source image URLs use upstream `@main`, so remote content is mutable. |
 | CI | [candidate workflow](../.github/workflows/checks.yml) | GitHub checks and a gated native publish job in this checkout. Its presence does not prove the remote default branch has adopted it. |
@@ -496,11 +496,10 @@ sending events to a new service.
 `npm run check:web` runs TypeScript, Jest and disposable database checks. The
 candidate CI additionally exports a web bundle with mock public configuration.
 Database scripts cover migrations, ownership, replay, ordering, timed writes
-and exports. New baseline tooling pins nine historical files by hash and
-rehearses fresh-schema and baseline-plus-new-migrations paths, comparing
-schema/permissions and preserving fixtures. Production-version mappings remain
-null. These are source-baseline checks, not a production restore or permission
-to push SQL. PGlite's single connection cannot prove concurrent transaction
+and exports. Baseline tooling pins every migration file by hash and
+rehearses a fresh schema against an upgrade from the reconciled production
+history, comparing schema/permissions and preserving fixtures. These checks
+are not a production restore or permission to push SQL. PGlite's single connection cannot prove concurrent transaction
 races. The ordering harness supports separate-connection local PostgreSQL
 checks; installed phone flows remain separate evidence.
 

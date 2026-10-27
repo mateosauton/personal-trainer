@@ -1,14 +1,7 @@
--- Onboarding now asks who you are, not just how you train: name, photo and
--- height join the profile. Height is stored in cm and converted for display,
--- the same way bodyweight is stored in kg.
-
 alter table profiles
   add column if not exists height_cm  numeric,
   add column if not exists avatar_url text;
 
--- Avatars live in Storage rather than the profiles row: the bucket is public
--- so the app can render a plain URL, but writes stay scoped to the owner by
--- pathing every object under <uid>/.
 insert into storage.buckets (id, name, public)
 values ('avatars', 'avatars', true)
 on conflict (id) do nothing;

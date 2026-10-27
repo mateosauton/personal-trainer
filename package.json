@@ -79,7 +79,7 @@
     "export:web": "EXPO_NO_DOTENV=1 npx eas-cli@23.2.0 env:exec production 'node scripts/verify-environment.cjs --distribution --environment production && npx expo export --platform web' --non-interactive",
     "docs:verify": "node scripts/verify-docs.mjs",
     "test:migrations": "node --test scripts/test-migration-baseline.cjs",
-    "migrations:check": "node scripts/migration-baseline.cjs",
+    "migrations:check": "node scripts/migration-baseline.cjs && node scripts/migration-baseline.cjs --history supabase/production-history.json",
     "env:check": "node scripts/verify-environment.cjs --distribution",
     "build:web:check": "node scripts/check-web-bundle.cjs",
     "cloudflare:preview": "node scripts/deploy-preview.cjs",

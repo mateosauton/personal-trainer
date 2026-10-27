@@ -1,6 +1,6 @@
 # Account isolation
 
-Migration `0006_workout_reference_ownership.sql` tightens two existing write policies. A session must use a plan day owned by its user. A set with a plan-item reference must match that item's exercise, session day and owner. Owner reads/deletes stay unchanged; null references remain valid for historical logs whose items were deleted.
+Migration `20261006084911_workout_reference_ownership.sql` (previously recorded as `0006`) tightens two existing write policies. A session must use a plan day owned by its user. A set with a plan-item reference must match that item's exercise, session day and owner. Owner reads/deletes stay unchanged; null references remain valid for historical logs whose items were deleted.
 
 The migration does not modify existing records and does not depend on the calendar or progression migrations. The existing production policies matched the original permissive rules on October 6; a read-only preflight found zero foreign-plan sessions and zero inconsistent set references.
 

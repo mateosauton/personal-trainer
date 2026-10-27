@@ -1,6 +1,6 @@
 # Ordered set writes
 
-Migration `0007_ordered_set_writes.sql` is a backend release boundary. Do not apply it alone: it revokes direct set mutations and the old four-argument progression RPC. Deploy only after the matching app uses all of this protocol, incompatible clients are retired, and production changes have explicit approval.
+Migration `20261006110122_ordered_set_writes.sql` (previously recorded as `0007`) is a backend release boundary. It revokes direct set mutations and the old four-argument progression RPC. It is already in the reconciled production history. Do not apply it again. A replacement still has to ship with the matching client protocol.
 
 ## Client protocol
 

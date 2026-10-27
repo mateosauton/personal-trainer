@@ -47,7 +47,11 @@ async function database() {
       alter table storage.objects enable row level security;
       create function storage.foldername(text) returns text[] language sql immutable as $$select string_to_array($1,'/')$$;`);
     const migrate = (name) => db.exec(readFileSync(path.join(__dirname, '../supabase/migrations', name), 'utf8'));
-    await migrate('0001_init.sql'); await migrate('0002_profile_identity.sql');
+    await migrate('20260826224459_init.sql');
+    await migrate('20260826224944_slim_exercise_catalog.sql');
+    await migrate('20260826225022_catalog_is_client_side.sql');
+    await migrate('20260826230843_lock_down_handle_new_user.sql');
+    await migrate('20260827072028_profile_identity.sql');
     await db.exec('grant usage on schema public,auth to anon,authenticated; grant select,insert,update,delete on all tables in schema public to anon,authenticated');
     const fixture = async () => {
       const f = Object.fromEntries(['owner','plan','day','block','item','legacy'].map((key) => [key,randomUUID()]));
@@ -62,8 +66,8 @@ async function database() {
     };
     const a = await fixture(), b = await fixture();
     const historical = (await db.query('select to_jsonb(l) as data from set_logs l order by id')).rows;
-    await migrate('0003_correctness_foundation.sql'); await migrate('0004_save_plan_rpc.sql');
-    await migrate('0005_session_progress_rpc.sql'); await migrate('0006_workout_reference_ownership.sql');
+    await migrate('20260831213153_correctness_foundation.sql'); await migrate('20261006061419_save_plan_rpc.sql');
+    await migrate('20261006071539_session_progress_rpc.sql'); await migrate('20261006084911_workout_reference_ownership.sql');
     const fresh = async (owner=a) => {
       await db.exec('reset role'); const id = randomUUID();
       await db.query('insert into sessions(id,user_id,plan_day_id,local_day) values($1,$2,$3,current_date)',[id,owner.owner,owner.day]);
@@ -81,10 +85,10 @@ async function database() {
       assert.equal((await db.query('select reps from set_logs where session_id=$1',[session])).rows[0].reps,12,'late old request overwrote the correction');
       return;
     }
-    await migrate('0007_ordered_set_writes.sql');
+    await migrate('20261006110122_ordered_set_writes.sql');
     assert.deepEqual((await db.query('select to_jsonb(l) as data from set_logs l order by id')).rows,historical,'historical sets/times must not change');
     for (const name of readdirSync(path.join(__dirname, '../supabase/migrations'))
-      .filter((name) => name.endsWith('.sql') && name > '0007_ordered_set_writes.sql').sort()) {
+      .filter((name) => name.endsWith('.sql') && name > '20261006110122_ordered_set_writes.sql').sort()) {
       await migrate(name);
     }
     const event = '2026-10-06T09:00:00Z', origin = randomUUID(), otherOrigin = randomUUID();

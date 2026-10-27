@@ -1,6 +1,6 @@
 # Session progression
 
-Migration `0005_session_progress_rpc.sql` and the matching client deploy together. Production has not been migrated. Back up the public tables, verify the existing correctness migration, retire old native clients, apply the migration, and verify authenticated RPC and native flows before releasing.
+Migration `20261006071539_session_progress_rpc.sql` (previously recorded as `0005`) shipped with the matching client. It is already in the reconciled production history. Do not apply it again. A change to this RPC still needs a backup, an authenticated check, and a client that understands the receipt.
 
 A completed workout has one private receipt. The RPC verifies ownership, locks the account, compares the exercise baselines, updates progression and saves the receipt in one transaction. The summary reads an existing receipt before calculating anything. A concurrent baseline change causes a bounded reload/retry, rather than overwriting newer state. The summary loads its original plan day, even if the active plan changed.
 

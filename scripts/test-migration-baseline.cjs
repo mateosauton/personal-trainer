@@ -26,11 +26,47 @@ test('pins deployed migration bytes and rejects changed history', () => {
   const { readBaseline } = require('./migration-baseline.cjs');
   const root = path.resolve(__dirname, '..');
   const baseline = readBaseline(root);
-  assert.equal(baseline.migrations.length, 9);
+  assert.equal(baseline.migrations.length, 18);
   const changed = structuredClone(baseline);
   changed.migrations[0].sha256 = '0'.repeat(64);
   assert.throws(() => readBaseline(root, changed), /checksum mismatch/);
 });
+
+test('reconciled production history has no pending migrations', () => {
+  const { readFileSync } = require('node:fs');
+  const { readBaseline, planUpgrade, migrationFiles } = require('./migration-baseline.cjs');
+  const root = path.resolve(__dirname, '..');
+  const baseline = readBaseline(root);
+  const history = JSON.parse(readFileSync(path.join(root, 'supabase/production-history.json'), 'utf8'));
+  const files = migrationFiles(root);
+  assert.deepEqual(baseline.migrations.map(({ file }) => file), files);
+  for (const migration of baseline.migrations) {
+    assert.equal(migration.file.split('_')[0], migration.productionVersion);
+  }
+  assert.deepEqual(planUpgrade(baseline, history, files), []);
+  assert.deepEqual(cliPending(files, history.map(({ version }) => version)), []);
+});
+
+// Same two-pointer walk as Supabase CLI findPendingMigrations (lexical versions).
+function cliPending(files, remoteVersions) {
+  remoteVersions = [...remoteVersions].sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+  const local = [...files].sort((a, b) => a.split('_')[0] < b.split('_')[0] ? -1 : a.split('_')[0] > b.split('_')[0] ? 1 : 0);
+  const missing = [];
+  const unapplied = [];
+  let i = 0;
+  let j = 0;
+  while (i < remoteVersions.length && j < local.length) {
+    const remote = remoteVersions[i];
+    const version = local[j].split('_')[0];
+    if (remote === version) { i += 1; j += 1; }
+    else if (remote < version) { missing.push(remote); i += 1; }
+    else { unapplied.push(local[j]); j += 1; }
+  }
+  if (j === local.length) missing.push(...remoteVersions.slice(i));
+  assert.deepEqual(missing, [], 'remote versions missing locally');
+  assert.deepEqual(unapplied, [], 'local versions out of order relative to remote history');
+  return local.slice(remoteVersions.length);
+}
 
 test('rejects duplicate migration history and conflicting local versions', () => {
   const { planUpgrade } = require('./migration-baseline.cjs');

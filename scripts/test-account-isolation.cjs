@@ -21,7 +21,11 @@ const { PGlite } = require(require.resolve('@electric-sql/pglite', {
       alter table storage.objects enable row level security;
       create function storage.foldername(text) returns text[] language sql immutable as $$select string_to_array($1,'/')$$;`);
     const migrate = (name) => db.exec(readFileSync(path.join(__dirname,'../supabase/migrations',name),'utf8'));
-    await migrate('0001_init.sql'); await migrate('0002_profile_identity.sql');
+    await migrate('20260826224459_init.sql');
+    await migrate('20260826224944_slim_exercise_catalog.sql');
+    await migrate('20260826225022_catalog_is_client_side.sql');
+    await migrate('20260826230843_lock_down_handle_new_user.sql');
+    await migrate('20260827072028_profile_identity.sql');
     await db.exec(`grant usage on schema public, auth, storage to anon, authenticated;
       grant select, insert, update, delete on all tables in schema public to anon, authenticated;
       grant select, insert, update, delete on storage.objects to anon, authenticated;`);
@@ -39,10 +43,10 @@ const { PGlite } = require(require.resolve('@electric-sql/pglite', {
       return f;
     };
     const a=await fixture(), b=await fixture();
-    await migrate('0003_correctness_foundation.sql');
-    await migrate('0004_save_plan_rpc.sql');
-    await migrate('0005_session_progress_rpc.sql');
-    if (!process.env.SKIP_WORKOUT_OWNERSHIP_FIX) await migrate('0006_workout_reference_ownership.sql');
+    await migrate('20260831213153_correctness_foundation.sql');
+    await migrate('20261006061419_save_plan_rpc.sql');
+    await migrate('20261006071539_session_progress_rpc.sql');
+    if (!process.env.SKIP_WORKOUT_OWNERSHIP_FIX) await migrate('20261006084911_workout_reference_ownership.sql');
     const as = async (user,role='authenticated') => {
       await db.exec('reset role');
       await db.query("select set_config('request.jwt.claim.sub',$1,false)",[user]);

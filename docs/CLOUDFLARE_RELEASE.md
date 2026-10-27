@@ -104,11 +104,11 @@ privacy-policy and terms URLs.
 
 ## Verify and promote
 
-Keep [migration baseline reconciliation](MIGRATION_BASELINE.md) separate from
-web publication. The current source includes private avatars, session calculation
-context, training-preference RPCs and home-timezone migrations after the pinned
-nine-file baseline. Local migration checks do not prove these changes exist in
-production. Verify the target's schema and paired private-photo client before
+Keep [migration baseline](MIGRATION_BASELINE.md) separate from web publication.
+Private avatars, session calculation context, training-preference RPCs,
+home timezone, idempotent session start, and recovery context are in the
+reconciled production history. Confirm the linked dry run is empty before
+releasing a newer schema, and verify the paired private-photo client before
 releasing dependent UI. Account deletion also requires its Edge Function; see
 [privacy controls](PRIVACY_CONTROLS.md). Never use an actual account deletion as
 a deployment smoke test.
