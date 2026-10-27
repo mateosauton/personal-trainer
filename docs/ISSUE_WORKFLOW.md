@@ -75,8 +75,8 @@ baseline is `5f349d2`.
 
 Before implementation, fetch `origin/master` and update the branch to current
 master. Finish and merge an overlapping prerequisite before building its
-follow-up. PR #61 owns recovery work and PR #60 owns environment setup. Preserve
-their changes when continuing related issues.
+follow-up. Merged PR #61 contains the recovery work and merged PR #60 contains
+the environment setup. Preserve those changes when continuing related issues.
 
 Open focused PRs into `master`, link the issue and follow the existing Summary
 and Testing template. Keep commits and PR messages short. Merge source changes
