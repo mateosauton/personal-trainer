@@ -80,11 +80,11 @@ Native updates require a manually dispatched promotion of an already tested
 update group. A master push runs checks and may deploy the Cloudflare web app;
 it does not publish a native OTA. Follow the [native release runbook](docs/RELEASE_SAFETY.md).
 
-GitHub publishing uses the repository's `EXPO_TOKEN` secret. Cloudflare and
-Vercel builds use `npm run build:web` with the Supabase public values and Google
-sign-in flag mirrored from EAS production into their build environments. These
-hosts do not need an Expo access token. Local production exports use
-`npm run export:web` to fetch EAS values directly.
+GitHub publishing uses the repository's `EXPO_TOKEN` secret. Cloudflare builds
+use `npm run build:web` with the Supabase public values and Google sign-in flag
+mirrored from EAS production into the build environment. Cloudflare does not
+need an Expo access token. Local production exports use `npm run export:web`
+to fetch EAS values directly.
 
 ## Authentication
 
@@ -98,7 +98,7 @@ credentials, redirect URLs, Apple capability, and native rebuild requirements.
 
 ## The hosted build
 
-The web testing app is hosted on Cloudflare:
+Cloudflare is the only web host for the testing app:
 [Open Office Gym](https://personal-trainer.sautonmateo.workers.dev).
 It stays available when the local Expo server is off. Users still sign in to
 Supabase to access their own data. Expo/EAS handles native app distribution.
@@ -109,8 +109,8 @@ exporting the website. `dist/` is served at the domain root, with an SPA fallbac
 for direct links and browser refreshes. See [Cloudflare release steps](docs/CLOUDFLARE_RELEASE.md)
 for build variables, previews, verification, and rollback.
 
-The existing Vercel, GitHub Pages, and jsDelivr deployments are legacy test
-mirrors. Cloudflare is the primary web testing URL.
+Vercel, GitHub Pages, and jsDelivr were earlier test mirrors. Use the
+Cloudflare URL above; the repository no longer configures a Vercel deployment.
 
 ## Driving the UI without a device
 
