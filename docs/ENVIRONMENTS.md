@@ -171,10 +171,11 @@ run. Existing tests roll back their fixtures.
 ## Migrations and hosted setup
 
 The repository contains 18 migrations. `supabase/migration-baseline.json` pins
-every file byte for byte and maps each one to the production version recorded
+every file byte for byte and maps each one to the reconciled production version
 for `asbudyijvunpnhrhsubm`. A fresh local database applies all 18 in lexical
-version order, which is also the order production applied them. The checked-in
-history has no pending migration.
+version order, which is the order production applied them. The checked-in
+history has no pending migration after the four version-key updates in
+[migration baseline](MIGRATION_BASELINE.md).
 
 Run the existing baseline and database checks without modifying their manifest
 to manufacture a match:

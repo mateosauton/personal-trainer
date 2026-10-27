@@ -25,12 +25,27 @@ could not apply them in lexical order:
 | `0006` | `20261006084911` | `workout_reference_ownership` |
 | `0007` | `20261006110122` | `ordered_set_writes` |
 
-On 2026-10-27T07:26:04Z only `schema_migrations.version` was updated for those
-four rows, and only where the name and statement checksum still matched.
-Statements were not rewritten. Initialization SQL was not replayed. No
-application table was modified. A second `list_migrations` matched
-`supabase/production-history.json`. `previousVersion` on those manifest rows
-keeps the short key.
+That version-only update was applied where the name and statement checksum
+still matched, and `list_migrations` then matched
+`supabase/production-history.json`. Statements were not rewritten.
+Initialization SQL was not replayed. No application table was modified.
+The four keys were then restored to `previousVersion` so the current `master`
+filenames still match production until this branch is merged. Re-apply this
+update as part of the merge, before any `db push`:
+
+```sql
+update supabase_migrations.schema_migrations
+set version = case version
+  when '0003' then '20260831213153'
+  when '0005' then '20261006071539'
+  when '0006' then '20261006084911'
+  when '0007' then '20261006110122'
+end
+where (version = '0003' and name = 'correctness_foundation')
+   or (version = '0005' and name = 'session_progress_rpc')
+   or (version = '0006' and name = 'workout_reference_ownership')
+   or (version = '0007' and name = 'ordered_set_writes');
+```
 
 ```sh
 npm run migrations:check
