@@ -332,13 +332,13 @@ for `delete-account`, a [source baseline](../supabase/migration-baseline.json),
 and [read-only planning script](../scripts/migration-baseline.cjs). Supabase CLI
 is still unpinned; config presence does not establish a working full local stack.
 
-The baseline pins nine historical source files, not the entire current schema.
-The reviewed snapshot has four newer SQL files. All baseline `productionVersion`
-fields and `productionHistoryVerifiedAt` remain null. Therefore an ordinary
-production `db push` is blocked pending the reconciliation in
+The baseline now pins the full reconciled history, not only the original nine
+files. `productionVersion` and `productionHistoryVerifiedAt` are filled from
+the 2026-10-27 production statement capture described in
 [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md). A checksum pass establishes local
-bytes only. The planner deliberately refuses missing production mappings;
-never fill them from filenames or use `--include-all` to force initialization.
+bytes. The planner still refuses missing production mappings. Do not invent
+those mappings from filenames alone, and do not use `--include-all` to force
+initialization.
 
 Available local checks are:
 
@@ -378,7 +378,7 @@ payload fixtures, current requests, replay/idempotency, stale writes, two-accoun
 isolation, and upgrade with pending work.
 
 Before production SQL, inspect backup/restore readiness, affected counts,
-constraints and locking/transaction behavior. `0003_correctness_foundation.sql`
+constraints and locking/transaction behavior. `20260831213153_correctness_foundation.sql`
 needs duplicate-active-plan preflight and changes historical completion;
 follow [Supabase operations](../supabase/README.md) for that backfill. Never
 rerun an applied historical migration to repair history.
@@ -386,7 +386,7 @@ rerun an applied historical migration to repair history.
 Existing breaking migrations need additional checks before CLI use.
 
 There is an existing breaking exception to the expansion-first sequence:
-`0007_ordered_set_writes.sql` revokes direct set mutations and the old
+`20261006110122_ordered_set_writes.sql` revokes direct set mutations and the old
 four-argument progression RPC. It must not be treated as an additive migration
 or applied automatically to an unverified production baseline. Hold that
 cutover until the matching versioned client is installed, incompatible clients

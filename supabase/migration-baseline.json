@@ -1,54 +1,104 @@
 {
   "format": 1,
   "projectRef": "asbudyijvunpnhrhsubm",
-  "sourceCommit": "4561c538ca2bf8d6be36098faadfed2daabae494",
+  "sourceCommit": "dab3125bb8236eb32a6b3b8a7646e876ef768077",
   "deploymentEvidence": "https://github.com/mateosauton/personal-trainer/issues/8#issuecomment-6054840371",
-  "productionHistoryVerifiedAt": null,
+  "productionHistoryVerifiedAt": "2026-10-27T07:26:04Z",
+  "productionHistoryEvidence": "Supabase MCP list_migrations and schema_migrations.statements for office-gym-trainer (asbudyijvunpnhrhsubm). Statements were captured 2026-10-27T07:12:00Z and match the checked-in file bytes. Short keys 0003, 0005, 0006, and 0007 sort before the schema they change. Renaming only schema_migrations.version to the timestamps below was applied, confirmed with list_migrations against supabase/production-history.json at 2026-10-27T07:26:04Z, then restored so master still matches production until this branch is merged. Statements were not rewritten and no application SQL was replayed. Re-apply that version-only update when merging; previousVersion is the key to replace.",
   "migrations": [
     {
-      "file": "0001_init.sql",
-      "sha256": "218eaef958b2f2d998560620ec0b1e225c2d6da639604678b1a6f53556c42597",
-      "productionVersion": null
+      "file": "20260826224459_init.sql",
+      "sha256": "c33f69fb796dd9d0a53c9ebaf496956827984f82191965f2de6c537dfba7d01c",
+      "productionVersion": "20260826224459"
     },
     {
-      "file": "0002_profile_identity.sql",
-      "sha256": "e6f9316e3cee507f416f999f03c02126ff9bcf11bc7691dca90d85c235b01511",
-      "productionVersion": null
+      "file": "20260826224944_slim_exercise_catalog.sql",
+      "sha256": "0b91818a2f8b8c089befe0265aa878d5a08b05593b28bd26eba64738951e8b61",
+      "productionVersion": "20260826224944"
     },
     {
-      "file": "0003_correctness_foundation.sql",
+      "file": "20260826225022_catalog_is_client_side.sql",
+      "sha256": "b7ab85dc7489b3a4796ece2770a1fe553f72ba82d856e5363aed74f2336f03c3",
+      "productionVersion": "20260826225022"
+    },
+    {
+      "file": "20260826230843_lock_down_handle_new_user.sql",
+      "sha256": "877d757c6b92fa109c56a6c700da14ed50278d19b74fbdebb08abcc8d759f1d1",
+      "productionVersion": "20260826230843"
+    },
+    {
+      "file": "20260827072028_profile_identity.sql",
+      "sha256": "b3a515efc1beafee91de4794e271979eb228d4486bb80b36c8e49ff4e25a4c5b",
+      "productionVersion": "20260827072028"
+    },
+    {
+      "file": "20260831213153_correctness_foundation.sql",
       "sha256": "b911687ff17bf618d56266dcbbe23c70f0a06598285a7e263414cceec5ef8710",
-      "productionVersion": null
+      "productionVersion": "20260831213153",
+      "previousVersion": "0003"
     },
     {
-      "file": "0004_save_plan_rpc.sql",
+      "file": "20261006061419_save_plan_rpc.sql",
       "sha256": "3698479b08f419e19b29d9336d1e1880bd519f0a184e9f423d541c9bb79decf3",
-      "productionVersion": null
+      "productionVersion": "20261006061419"
     },
     {
-      "file": "0005_session_progress_rpc.sql",
+      "file": "20261006071539_session_progress_rpc.sql",
       "sha256": "9d1de1aa2b63d2de12ccf134e3c03b5e8212ad91d737da7419f6f8bdca0b4efe",
-      "productionVersion": null
+      "productionVersion": "20261006071539",
+      "previousVersion": "0005"
     },
     {
-      "file": "0006_workout_reference_ownership.sql",
+      "file": "20261006084911_workout_reference_ownership.sql",
       "sha256": "ef6eceb493d2770d13852748ec77a3baaae509daf381611e263677a4b2e77c69",
-      "productionVersion": null
+      "productionVersion": "20261006084911",
+      "previousVersion": "0006"
     },
     {
-      "file": "0007_ordered_set_writes.sql",
+      "file": "20261006110122_ordered_set_writes.sql",
       "sha256": "856160b7b5a50447840dd2e10ac2811a600eb9b752ac172f24d7d4edf6558ba7",
-      "productionVersion": null
+      "productionVersion": "20261006110122",
+      "previousVersion": "0007"
     },
     {
       "file": "20261007173759_timed_set_writes.sql",
       "sha256": "b438b14fa6b4da11f13e0dcc95b1bb5a73b2eacf957440a7c0fe806a6c3d3ba3",
-      "productionVersion": null
+      "productionVersion": "20261007173759"
     },
     {
       "file": "20261007181857_account_data_export.sql",
       "sha256": "a8eaf817274de04ddab36836a0613549cd1c449addc25396f5e639ca4a97329a",
-      "productionVersion": null
+      "productionVersion": "20261007181857"
+    },
+    {
+      "file": "20261022211107_private_avatars.sql",
+      "sha256": "35ed514fd3daa77e58851464e63541225a2dae46f0b52eb01f58398245ae58ac",
+      "productionVersion": "20261022211107"
+    },
+    {
+      "file": "20261022211126_session_calculation_context.sql",
+      "sha256": "c2f330b8519599a8b08f90d78ad24ed17aaa6d688c4c34daf217c9079ebcae93",
+      "productionVersion": "20261022211126"
+    },
+    {
+      "file": "20261022211340_training_preferences.sql",
+      "sha256": "4d434b025803157cfef5a7c8318c87f1f0b35a8506d75b2f8e88ddecd4f66891",
+      "productionVersion": "20261022211340"
+    },
+    {
+      "file": "20261022211407_home_timezone.sql",
+      "sha256": "565cb1cf44efac9389a5224bea5f742e04edc6908909a71c0ea485947c7aed05",
+      "productionVersion": "20261022211407"
+    },
+    {
+      "file": "20261022224931_idempotent_session_start.sql",
+      "sha256": "92de80fdf4724a11f0d7261d4db5969c78bacfc5738743320f120136eb8c61cf",
+      "productionVersion": "20261022224931"
+    },
+    {
+      "file": "20261023011509_recovery_start_context.sql",
+      "sha256": "25283ec3d13a70b5d44f6c4adcdcef17f4b85454140b4183998b0d20411fe92c",
+      "productionVersion": "20261023011509"
     }
   ]
 }

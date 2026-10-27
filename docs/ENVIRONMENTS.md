@@ -170,13 +170,12 @@ run. Existing tests roll back their fixtures.
 
 ## Migrations and hosted setup
 
-The repository now contains 15 migrations. The original nine deployed-source
-files remain pinned byte for byte by `supabase/migration-baseline.json`. Six
-later migrations make avatars private, preserve workout calculation context,
-add atomic training-preference/exercise-swap RPCs, capture a stable home timezone,
-and add idempotent session starts with immutable recovery context. A fresh local
-database applies all 15 in filename order. An existing database needs its actual
-history reconciled before any upgrade.
+The repository contains 18 migrations. `supabase/migration-baseline.json` pins
+every file byte for byte and maps each one to the reconciled production version
+for `asbudyijvunpnhrhsubm`. A fresh local database applies all 18 in lexical
+version order, which is the order production applied them. The checked-in
+history has no pending migration after the four version-key updates in
+[migration baseline](MIGRATION_BASELINE.md).
 
 Run the existing baseline and database checks without modifying their manifest
 to manufacture a match:
@@ -187,9 +186,9 @@ npm run test:migrations
 npm run test:db
 ```
 
-The database suite compares fresh creation with an upgrade from the pinned
-nine-file baseline, checks data preservation and schema equivalence, and runs
-the SQL regressions across all 15 migrations. It uses PGlite with test
+The database suite compares fresh creation with an upgrade from the full
+production baseline, checks data preservation and schema equivalence, and runs
+the SQL regressions across all 18 migrations. It uses PGlite with test
 Auth/Storage definitions. Lifecycle and set-ordering checks also use a disposable
 PostgreSQL 17 service in CI to verify concurrent requests. See [CI.md](CI.md)
 for the loopback-only connection variables and local fallback. These checks do
@@ -197,11 +196,9 @@ not establish hosted GoTrue, Storage or Edge Function behavior. Use
 `npm run db:local:test` for SQL regressions inside real local Supabase and verify
 Auth/Storage through their service APIs separately.
 
-Production's recorded versions have not been reconciled with the legacy
-`0001` through `0007` source names. The baseline manifest deliberately retains
-null `productionVersion` and verification-time fields. Follow
-[migration baseline reconciliation](MIGRATION_BASELINE.md) before a hosted
-upgrade; a passing fresh database test does not make `supabase db push` safe.
+Follow [migration baseline](MIGRATION_BASELINE.md) before a hosted upgrade.
+`npm run migrations:check` must report an empty pending list for the checked-in
+history, and a linked dry run must list only migrations that are actually new.
 
 Hosted previews remain optional and blocked. If a hosted branch is authorized
 later, the maintainer should:

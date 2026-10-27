@@ -1,0 +1,74 @@
+[
+  {
+    "version": "20260826224459",
+    "name": "init"
+  },
+  {
+    "version": "20260826224944",
+    "name": "slim_exercise_catalog"
+  },
+  {
+    "version": "20260826225022",
+    "name": "catalog_is_client_side"
+  },
+  {
+    "version": "20260826230843",
+    "name": "lock_down_handle_new_user"
+  },
+  {
+    "version": "20260827072028",
+    "name": "profile_identity"
+  },
+  {
+    "version": "20260831213153",
+    "name": "correctness_foundation"
+  },
+  {
+    "version": "20261006061419",
+    "name": "save_plan_rpc"
+  },
+  {
+    "version": "20261006071539",
+    "name": "session_progress_rpc"
+  },
+  {
+    "version": "20261006084911",
+    "name": "workout_reference_ownership"
+  },
+  {
+    "version": "20261006110122",
+    "name": "ordered_set_writes"
+  },
+  {
+    "version": "20261007173759",
+    "name": "timed_set_writes"
+  },
+  {
+    "version": "20261007181857",
+    "name": "account_data_export"
+  },
+  {
+    "version": "20261022211107",
+    "name": "private_avatars"
+  },
+  {
+    "version": "20261022211126",
+    "name": "session_calculation_context"
+  },
+  {
+    "version": "20261022211340",
+    "name": "training_preferences"
+  },
+  {
+    "version": "20261022211407",
+    "name": "home_timezone"
+  },
+  {
+    "version": "20261022224931",
+    "name": "idempotent_session_start"
+  },
+  {
+    "version": "20261023011509",
+    "name": "recovery_start_context"
+  }
+]

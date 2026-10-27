@@ -13,9 +13,12 @@ const { PGlite } = require('@electric-sql/pglite');
       create function auth.uid() returns uuid language sql stable as
       $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;`);
     const migrate = name => db.exec(readFileSync(path.join(__dirname, '../supabase/migrations', name), 'utf8'));
-    await migrate('0001_init.sql');
-    await migrate('0005_session_progress_rpc.sql');
-    await migrate('0006_workout_reference_ownership.sql');
+    await migrate('20260826224459_init.sql');
+    await migrate('20260826224944_slim_exercise_catalog.sql');
+    await migrate('20260826225022_catalog_is_client_side.sql');
+    await migrate('20260826230843_lock_down_handle_new_user.sql');
+    await migrate('20261006071539_session_progress_rpc.sql');
+    await migrate('20261006084911_workout_reference_ownership.sql');
     await db.exec('grant usage on schema public,auth to authenticated; grant select,insert,update,delete on all tables in schema public to authenticated');
     const a = randomUUID(), b = randomUUID(), plan = randomUUID(), day = randomUUID(), historical = randomUUID();
     await db.query('insert into auth.users values ($1),($2)', [a,b]);

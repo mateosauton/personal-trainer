@@ -152,7 +152,7 @@ new plans so recommendations remain reproducible after changes.
 [journal](../lib/session/set-journal.ts) saves owner, origin, revision, payload,
 expected server version and event time before the [outbox](../lib/session/outbox.ts)
 sends it. [Sync](../lib/session/sync.ts) binds transport to the account.
-[Versioned SQL](../supabase/migrations/0007_ordered_set_writes.sql) and its
+[Versioned SQL](../supabase/migrations/20261006110122_ordered_set_writes.sql) and its
 [timed extension](../supabase/migrations/20261007173759_timed_set_writes.sql)
 check server writes. [Ordering](ORDERED_SET_WRITES.md) and
 [journal documentation](SET_WRITE_JOURNAL.md) explain the recovery model.
@@ -290,10 +290,10 @@ session storage.
 
 ### D08. Enforce transactions and ownership in Postgres
 
-**In code; transaction reason documented.** [save_plan](../supabase/migrations/0004_save_plan_rpc.sql)
+**In code; transaction reason documented.** [save_plan](../supabase/migrations/20261006061419_save_plan_rpc.sql)
 retires a plan and inserts its replacement hierarchy atomically, deriving owner
-from `auth.uid()`. [RLS](../supabase/migrations/0001_init.sql) and
-[reference checks](../supabase/migrations/0006_workout_reference_ownership.sql)
+from `auth.uid()`. [RLS](../supabase/migrations/20260826224459_init.sql) and
+[reference checks](../supabase/migrations/20261006084911_workout_reference_ownership.sql)
 restrict access. Some specialized set/progression RPCs use `SECURITY DEFINER`;
 their contracts require explicit identity/reference checks and restricted grants.
 

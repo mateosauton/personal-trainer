@@ -1,7 +1,7 @@
 # Supabase operations
 
 Apply migrations in lexical order with the Supabase CLI or SQL Editor. Before
-`0003_correctness_foundation.sql`, capture a database backup and run:
+`20260831213153_correctness_foundation.sql`, capture a database backup and run:
 
 ```sql
 select user_id, count(*)
@@ -17,7 +17,7 @@ Resolve every returned row before creating the unique active-plan index.
 with five or more logged sets complete, which changes historical streaks and
 rotation. Record the backup identifier and row count before applying it.
 
-After applying `0003` and `0004`, verify as an authenticated test user:
+After applying the correctness and save-plan migrations, verify as an authenticated test user:
 
 ```sql
 select public.save_plan('{"name":"Verification","split":"Full","weeks":4,"days":[{"name":"Day 1","focus":"Full","blocks":[]}]}'::jsonb);

@@ -158,12 +158,13 @@ keep the evidence tied to its source and migration head. OAuth callbacks and
 Edge Function behavior need separate verification. Pulling EAS variables
 configures the app client, not those services.
 
-The [baseline manifest](../supabase/migration-baseline.json) pins nine historical
-source migrations. Its production version mappings and verification timestamp
-are still null. `npm run migrations:check` checks source hashes only. An ordinary
-linked `supabase db push` is not an approved next step until the history mapping,
-restore rehearsal and dry run in [migration baseline](MIGRATION_BASELINE.md) are
-complete. Keep local fixtures, development data and production history distinct.
+The [baseline manifest](../supabase/migration-baseline.json) pins all 18 source
+migrations to the production versions in
+[production history](../supabase/production-history.json). `npm run migrations:check`
+checks those hashes and the read-only upgrade plan. A linked `supabase db push`
+still needs the dry run in [migration baseline](MIGRATION_BASELINE.md) before it
+applies anything. Keep local fixtures, development data and production history
+distinct.
 
 ## 3. Classify work before branching
 
@@ -279,7 +280,7 @@ git diff --check
 tests, the focused Jest suite and database suites. The current `test:db` chain
 includes lifecycle, historical ownership/progression/ordering and session-context checks,
 `test:migrations`, and `test-database.cjs`. The last checks both a fresh schema
-and an upgrade from the pinned nine-file baseline with existing account,
+and an upgrade from the pinned production baseline with existing account,
 plan, timed-set and receipt fixtures. It compares resulting columns, functions,
 grants, constraints, policies, indexes and RLS flags, and runs SQL regressions.
 These are local test definitions, not a claim that every current check passes.
