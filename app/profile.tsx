@@ -2,7 +2,7 @@ import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Keyboard, Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { Attribution } from '@/components/Attribution';
@@ -10,12 +10,13 @@ import { AccountPrivacy } from '@/components/AccountPrivacy';
 import { useAvatar } from '@/lib/useAvatar';
 import { NumberField } from '@/components/NumberField';
 import { TrainingPreferences } from '@/components/TrainingPreferences';
-import { Button, Card, Chip, Display, Muted, Overline, Screen } from '@/components/ui';
+import { Body, Button, Card, Chip, Display, Muted, Overline, Screen } from '@/components/ui';
 import { notify } from '@/lib/alerts';
 import { useAuth, useUserId } from '@/lib/auth';
 import { updateProfile, uploadAvatar } from '@/lib/db/queries';
 import { colors, radius, space, type, webFocusRing } from '@/lib/theme';
-import { cmToDisplay, displayToCm, displayToKg, heightUnit, kgToDisplay } from '@/lib/units';
+import { MeasurementDrafts } from '@/lib/measurement-drafts';
+import { heightUnit } from '@/lib/units';
 import type { Units } from '@/lib/types';
 
 export default function ProfileTab() {
@@ -23,25 +24,16 @@ export default function ProfileTab() {
   const router = useRouter();
   const { profile, refreshProfile, signOut } = useAuth();
 
-  const units: Units = profile?.units ?? 'kg';
   const [name, setName] = useState(profile?.display_name ?? '');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
-  const [bodyweight, setBodyweight] = useState(
-    profile?.bodyweight_kg != null
-      ? String(Math.round(kgToDisplay(profile.bodyweight_kg, units) * 10) / 10)
-      : '',
-  );
-  const [height, setHeight] = useState(
-    profile?.height_cm != null
-      ? String(Math.round(cmToDisplay(profile.height_cm, units)))
-      : '',
-  );
+  const [measurements, setMeasurements] = useState(() => MeasurementDrafts.fromCanonical(
+    profile?.units ?? 'kg',
+    profile?.bodyweight_kg ?? null,
+    profile?.height_cm ?? null,
+  ));
   const [saving, setSaving] = useState(false);
-
-  const number = (value: string) => {
-    const parsed = Number.parseFloat(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  };
+  const [notice, setNotice] = useState<{ kind: 'saved' } | { kind: 'error'; message: string; retry: boolean } | null>(null);
+  const savingRef = useRef(false);
 
   const pickPhoto = async () => {
     Haptics.selectionAsync();
@@ -60,39 +52,46 @@ export default function ProfileTab() {
   };
 
   const save = async () => {
+    if (savingRef.current) return;
+    const committed = MeasurementDrafts.commit(measurements);
+    if (!committed.ok) {
+      setNotice({ kind: 'error', message: committed.reason, retry: false });
+      return;
+    }
     Keyboard.dismiss();
+    savingRef.current = true;
     setSaving(true);
+    setNotice(null);
     try {
-      const bw = number(bodyweight);
-      const h = number(height);
       const avatarUrl = photoUri ? await uploadAvatar(userId, photoUri) : undefined;
       await updateProfile(userId, {
         display_name: name.trim() || null,
-        bodyweight_kg: bw == null ? null : displayToKg(bw, units),
-        height_cm: h == null ? null : displayToCm(h, units),
+        units: measurements.units,
+        bodyweight_kg: committed.massKg,
+        height_cm: committed.lengthCm,
         ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
       });
       await refreshProfile();
       setPhotoUri(null);
+      setNotice({ kind: 'saved' });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
-      notify('Could not save', e instanceof Error ? e.message : 'Try again.');
+      setNotice({ kind: 'error', message: e instanceof Error ? e.message : 'Try again.', retry: true });
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
 
-  const setUnits = async (next: Units) => {
+  const switchUnits = (next: Units) => {
     Haptics.selectionAsync();
-    // Both measurements are stored metric, so only the displayed number changes.
-    if (profile?.bodyweight_kg != null) {
-      setBodyweight(String(Math.round(kgToDisplay(profile.bodyweight_kg, next) * 10) / 10));
+    const switched = MeasurementDrafts.switchUnits(measurements, next);
+    if (switched.blockedReason) {
+      setNotice({ kind: 'error', message: switched.blockedReason, retry: false });
+      return;
     }
-    if (profile?.height_cm != null) {
-      setHeight(String(Math.round(cmToDisplay(profile.height_cm, next))));
-    }
-    await updateProfile(userId, { units: next });
-    await refreshProfile();
+    setMeasurements(switched.draft);
+    setNotice(null);
   };
 
   const signedAvatar = useAvatar(profile?.avatar_url ?? null, userId);
@@ -144,30 +143,45 @@ export default function ProfileTab() {
           <Overline>Measurements</Overline>
           <View style={styles.row}>
             {(['kg', 'lb'] as Units[]).map((u) => (
-              <Chip key={u} label={u.toUpperCase()} selected={units === u} onPress={() => setUnits(u)} />
+              <Chip key={u} label={u.toUpperCase()} selected={measurements.units === u} onPress={() => switchUnits(u)} />
             ))}
           </View>
         </View>
         <Overline>Bodyweight</Overline>
         <NumberField
-          value={bodyweight}
-          onChangeText={setBodyweight}
+          value={measurements.massText}
+          onChangeText={(text) => {
+            setNotice(null);
+            setMeasurements(MeasurementDrafts.editMass(measurements, text));
+          }}
           placeholder="—"
-          unit={units}
+          unit={measurements.units}
           accessibilityLabel="Bodyweight"
         />
         <Overline>Height</Overline>
         <NumberField
-          value={height}
-          onChangeText={setHeight}
+          value={measurements.lengthText}
+          onChangeText={(text) => {
+            setNotice(null);
+            setMeasurements(MeasurementDrafts.editLength(measurements, text));
+          }}
           placeholder="—"
-          unit={heightUnit(units)}
+          unit={heightUnit(measurements.units)}
           accessibilityLabel="Height"
         />
         <Muted>Bodyweight works out effective load on pull-ups, dips and push-ups.</Muted>
+        {notice?.kind === 'error' ? (
+          <Body accessibilityRole="alert" style={styles.error}>{notice.message}</Body>
+        ) : null}
       </Card>
 
-      <Button title="Save" onPress={save} loading={saving} style={{ marginTop: space.xl }} />
+      <Button
+        title={notice?.kind === 'error' && notice.retry ? 'Retry' : 'Save'}
+        onPress={save}
+        loading={saving}
+        style={{ marginTop: space.xl }}
+      />
+      {notice?.kind === 'saved' ? <Muted accessibilityLiveRegion="polite">Saved</Muted> : null}
       <TrainingPreferences key={userId} />
       <AccountPrivacy owner={userId} />
       <Button variant="ghost" title="Sign out" onPress={() => { void signOut().catch((error: unknown) => notify('Could not sign out', error instanceof Error ? error.message : 'Please retry.')); }} style={{ marginTop: space.sm }} />
@@ -180,8 +194,8 @@ export default function ProfileTab() {
 const styles = StyleSheet.create({
   topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   close: { minHeight: 44, paddingHorizontal: 0 },
-  row: { flexDirection: 'row', gap: space.sm, alignItems: 'center' },
-  labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  row: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, alignItems: 'center' },
+  labelRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: space.sm },
   avatar: {
     alignSelf: 'center',
     width: 96,
@@ -197,6 +211,7 @@ const styles = StyleSheet.create({
   },
   avatarImage: { width: '100%', height: '100%' },
   avatarHint: { textAlign: 'center', color: colors.muted },
+  error: { color: colors.danger, ...type.small },
   textInput: {
     ...type.body,
     color: colors.text,

@@ -1,9 +1,9 @@
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View,
+  AccessibilityInfo, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, TextInput, View,
 } from 'react-native';
 import Animated, { FadeIn, ReduceMotion, SlideInLeft, SlideInRight, SlideOutLeft, SlideOutRight, withDelay } from 'react-native-reanimated';
 
@@ -20,7 +20,8 @@ import { OFFICE_EQUIPMENT } from '@/lib/plan/preferences';
 import { deviceTimeZone } from '@/lib/calendar-days';
 import { generateOfficeGymPlan } from '@/lib/plan/office-gym';
 import { colors, radius, space, type, webFocusRing } from '@/lib/theme';
-import { displayToCm, displayToKg, heightUnit } from '@/lib/units';
+import { MeasurementDrafts } from '@/lib/measurement-drafts';
+import { heightUnit } from '@/lib/units';
 import { getStepDirection, motion, type StepDirection } from '@/lib/motion';
 import type { Equipment, Goal, Level, Units } from '@/lib/types';
 
@@ -48,6 +49,9 @@ const LIMITATIONS = [
 const STEPS = ['you', 'goal', 'level', 'days', 'length', 'equipment', 'body', 'limits'] as const;
 type Step = (typeof STEPS)[number];
 
+/** When the footer would leave less than this, scroll the whole shell instead of covering answers. */
+const MIN_QUESTION_HEIGHT = 96;
+
 /** The three things the build screen reports, in the order they happen. */
 const BUILD_STAGES = ['Saving your photo', 'Building your plan', 'Saving your profile'] as const;
 
@@ -63,16 +67,32 @@ export default function Onboarding() {
   const [experience, setExperience] = useState<Level>('intermediate');
   const [days, setDays] = useState(4);
   const [minutes, setMinutes] = useState(45);
-  const [units, setUnits] = useState<Units>('kg');
-  const [bodyweight, setBodyweight] = useState('');
-  const [height, setHeight] = useState('');
+  const [measurements, setMeasurements] = useState(() => MeasurementDrafts.fromCanonical('kg', null, null));
   const [limits, setLimits] = useState<string[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([...GYM_EQUIPMENT]);
   const [stage, setStage] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [shellHeight, setShellHeight] = useState(0);
+  const [headerHeight, setHeaderHeight] = useState(0);
+  const [footerHeight, setFooterHeight] = useState(0);
+  const submitting = useRef(false);
+  const announcedStep = useRef<number | null>(null);
 
   const step: Step = STEPS[index];
   const building = stage != null;
+  const [scrollShell, setScrollShell] = useState(false);
+  useEffect(() => {
+    if (scrollShell || shellHeight === 0) return;
+    if (shellHeight - headerHeight - footerHeight < MIN_QUESTION_HEIGHT) setScrollShell(true);
+  }, [footerHeight, headerHeight, scrollShell, shellHeight]);
+
+  useEffect(() => {
+    if (announcedStep.current === index) return;
+    const previous = announcedStep.current;
+    announcedStep.current = index;
+    if (previous == null) return;
+    AccessibilityInfo.announceForAccessibility(`Step ${index + 1} of ${STEPS.length}`);
+  }, [index]);
 
   const toggle = <T,>(list: T[], value: T, set: (next: T[]) => void) => {
     Haptics.selectionAsync();
@@ -98,12 +118,19 @@ export default function Onboarding() {
     }
   };
 
-  const parse = (value: string) => {
-    const parsed = Number.parseFloat(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  };
-
   const finish = async () => {
+    if (submitting.current) return;
+    const committed = MeasurementDrafts.commit(measurements);
+    if (!committed.ok) {
+      setError(committed.reason);
+      const bodyIndex = STEPS.indexOf('body');
+      if (index !== bodyIndex) {
+        setDirection(getStepDirection(index, bodyIndex));
+        setIndex(bodyIndex);
+      }
+      return;
+    }
+    submitting.current = true;
     Keyboard.dismiss();
     setError(null);
     setStage(0);
@@ -119,8 +146,6 @@ export default function Onboarding() {
       }
 
       setStage(1);
-      const bw = parse(bodyweight);
-      const h = parse(height);
       const plan = generateOfficeGymPlan({
         userId,
         goal,
@@ -143,9 +168,9 @@ export default function Onboarding() {
         equipment,
         home_timezone: deviceTimeZone(),
         limitations: limits,
-        units,
-        bodyweight_kg: bw == null ? null : displayToKg(bw, units),
-        height_cm: h == null ? null : displayToCm(h, units),
+        units: measurements.units,
+        bodyweight_kg: committed.massKg,
+        height_cm: committed.lengthCm,
         onboarded_at: new Date().toISOString(),
       });
 
@@ -154,12 +179,14 @@ export default function Onboarding() {
       // racing it with a replace() is what used to strand the app mid-move.
       await refreshProfile();
     } catch (e) {
+      submitting.current = false;
       setStage(null);
       setError(e instanceof Error ? e.message : 'Could not build your plan');
     }
   };
 
   const next = () => {
+    if (submitting.current) return;
     Keyboard.dismiss();
     Haptics.selectionAsync();
     if (index === STEPS.length - 1) return finish();
@@ -167,24 +194,20 @@ export default function Onboarding() {
     setIndex(index + 1);
   };
 
+  const switchUnits = (nextUnits: Units) => {
+    Haptics.selectionAsync();
+    const switched = MeasurementDrafts.switchUnits(measurements, nextUnits);
+    if (switched.blockedReason) {
+      setError(switched.blockedReason);
+      return;
+    }
+    setError(null);
+    setMeasurements(switched.draft);
+  };
+
   if (building) return <Building stage={stage} name={name.trim()} />;
 
-  return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={styles.flex}
-    >
-      <Screen scroll={false} style={{ padding: space.lg }}>
-        <View style={styles.top}>
-          <ProgressBar value={(index + 1) / STEPS.length} />
-          <Overline style={{ marginTop: space.md }}>
-            Step {index + 1} of {STEPS.length}
-          </Overline>
-        </View>
-
-        {/* Anywhere off a field puts the keyboard away, so the Continue button
-            is never something the user has to fish for. */}
-        <Pressable style={styles.flex} onPress={Keyboard.dismiss} accessible={false}>
+  const question = (
           <Animated.View
             key={step}
             entering={(direction === 'forward' ? SlideInRight : SlideInLeft)
@@ -195,7 +218,7 @@ export default function Onboarding() {
             exiting={(direction === 'forward' ? SlideOutLeft : SlideOutRight)
               .duration(motion.fast)
               .reduceMotion(ReduceMotion.System)}
-            style={styles.body}
+            style={styles.question}
           >
             {step === 'you' && (
               <Question title={'First up —\nwho are you?'} hint="Both are optional.">
@@ -261,7 +284,7 @@ export default function Onboarding() {
 
             {step === 'days' && (
               <Question title={'How many days\na week?'} hint="You can change this later.">
-                <View style={styles.row}>
+                <View testID="onboarding-days" style={styles.wrap}>
                   {[2, 3, 4, 5, 6].map((d) => (
                     <Chip
                       key={d}
@@ -280,7 +303,7 @@ export default function Onboarding() {
 
             {step === 'length' && (
               <Question title={'How long is\na session?'} hint="Shorter sessions cut rest and the finisher.">
-                <View style={styles.row}>
+                <View testID="onboarding-length" style={styles.wrap}>
                   {[30, 45, 60].map((m) => (
                     <Chip
                       key={m}
@@ -312,33 +335,36 @@ export default function Onboarding() {
                 title={'Your size?'}
                 hint="Bodyweight is used for pull-ups, dips and push-ups."
               >
-                <View style={styles.row}>
+                <View style={styles.wrap}>
                   {(['kg', 'lb'] as Units[]).map((u) => (
                     <Chip
                       key={u}
                       label={u.toUpperCase()}
-                      selected={units === u}
-                      onPress={() => {
-                        Haptics.selectionAsync();
-                        setUnits(u);
-                      }}
+                      selected={measurements.units === u}
+                      onPress={() => switchUnits(u)}
                     />
                   ))}
                 </View>
                 <Overline>Bodyweight</Overline>
                 <NumberField
-                  value={bodyweight}
-                  onChangeText={setBodyweight}
-                  placeholder={units === 'kg' ? '78' : '172'}
-                  unit={units}
+                  value={measurements.massText}
+                  onChangeText={(text) => {
+                    setError(null);
+                    setMeasurements(MeasurementDrafts.editMass(measurements, text));
+                  }}
+                  placeholder={measurements.units === 'kg' ? '78' : '172'}
+                  unit={measurements.units}
                   accessibilityLabel="Bodyweight"
                 />
                 <Overline>Height</Overline>
                 <NumberField
-                  value={height}
-                  onChangeText={setHeight}
-                  placeholder={units === 'kg' ? '180' : '71'}
-                  unit={heightUnit(units)}
+                  value={measurements.lengthText}
+                  onChangeText={(text) => {
+                    setError(null);
+                    setMeasurements(MeasurementDrafts.editLength(measurements, text));
+                  }}
+                  placeholder={measurements.units === 'kg' ? '180' : '71'}
+                  unit={heightUnit(measurements.units)}
                   accessibilityLabel="Height"
                 />
                 <Muted>Skip either if you&rsquo;d rather not — you can add them in Profile.</Muted>
@@ -360,27 +386,99 @@ export default function Onboarding() {
               </Question>
             )}
           </Animated.View>
-        </Pressable>
+  );
 
-        {error ? <Body style={styles.error}>{error}</Body> : null}
+  const header = (
+    <View
+      testID="onboarding-header"
+      style={styles.top}
+      onLayout={(event) => {
+        const next = event.nativeEvent.layout.height;
+        setHeaderHeight((current) => current === next ? current : next);
+      }}
+    >
+      <ProgressBar value={(index + 1) / STEPS.length} />
+      <Overline style={{ marginTop: space.md }} accessibilityLiveRegion="polite">
+        Step {index + 1} of {STEPS.length}
+      </Overline>
+    </View>
+  );
 
-        <View style={styles.actions}>
+  const footer = (
+    <View
+      testID="onboarding-footer"
+      onLayout={(event) => {
+        const next = event.nativeEvent.layout.height;
+        setFooterHeight((current) => current === next ? current : next);
+      }}
+    >
+      {error ? <Body accessibilityRole="alert" style={styles.error}>{error}</Body> : null}
+      <View testID="onboarding-actions" style={styles.actions}>
+        <Button
+          title={index === STEPS.length - 1 ? 'Build my plan' : 'Continue'}
+          onPress={next}
+        />
+        {index > 0 ? (
           <Button
-            title={index === STEPS.length - 1 ? 'Build my plan' : 'Continue'}
-            onPress={next}
+            variant="ghost"
+            icon="back"
+            title="Back"
+            onPress={() => {
+              Keyboard.dismiss();
+              setDirection(getStepDirection(index, index - 1));
+              setIndex(index - 1);
+            }}
           />
-          {index > 0 ? (
-            <Button
-              variant="ghost"
-              icon="back"
-              title="Back"
-              onPress={() => {
-                Keyboard.dismiss();
-                setDirection(getStepDirection(index, index - 1));
-                setIndex(index - 1);
-              }}
-            />
-          ) : null}
+        ) : null}
+      </View>
+    </View>
+  );
+
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={styles.flex}
+    >
+      <Screen scroll={false} style={styles.shell}>
+        <View
+          testID="onboarding-shell"
+          style={styles.flex}
+          onLayout={(event) => {
+            const next = event.nativeEvent.layout.height;
+            setShellHeight((current) => current === next ? current : next);
+          }}
+        >
+          {!scrollShell ? (
+            <>
+              {header}
+              {/* Dragging the question dismisses the keyboard so Continue stays in reach. */}
+              <ScrollView
+                testID="onboarding-question-scroll"
+                style={styles.questionScroll}
+                contentContainerStyle={styles.questionContent}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+              >
+                <Pressable onPress={Keyboard.dismiss} accessible={false}>
+                  {question}
+                </Pressable>
+              </ScrollView>
+              {footer}
+            </>
+          ) : (
+            <ScrollView
+              testID="onboarding-shell-scroll"
+              contentContainerStyle={styles.shellContent}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+            >
+              {header}
+              <Pressable onPress={Keyboard.dismiss} accessible={false}>
+                {question}
+              </Pressable>
+              {footer}
+            </ScrollView>
+          )}
         </View>
       </Screen>
     </KeyboardAvoidingView>
@@ -455,6 +553,7 @@ function Option({
   return (
     <Pressable
       accessibilityRole="radio"
+      accessibilityLabel={label}
       accessibilityState={{ selected }}
       onPress={onPress}
       style={({ pressed }) => [
@@ -474,9 +573,12 @@ function Option({
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
+  shell: { paddingHorizontal: space.lg },
   top: { gap: space.xs },
-  body: { flex: 1, justifyContent: 'center' },
-  row: { flexDirection: 'row', gap: space.sm },
+  questionScroll: { flex: 1, minHeight: 0, overflow: 'hidden' },
+  questionContent: { paddingBottom: space.md },
+  question: { overflow: 'hidden' },
+  shellContent: { flexGrow: 1, paddingBottom: space.md },
   wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
   numberChip: { minWidth: 56, alignItems: 'center' },
   avatar: {
