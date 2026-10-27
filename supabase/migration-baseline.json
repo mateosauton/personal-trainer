@@ -1,7 +1,7 @@
 {
   "format": 1,
   "projectRef": "asbudyijvunpnhrhsubm",
-  "sourceCommit": "4561c538ca2bf8d6be36098faadfed2daabae494",
+  "sourceCommit": "dab3125bb8236eb32a6b3b8a7646e876ef768077",
   "deploymentEvidence": "https://github.com/mateosauton/personal-trainer/issues/8#issuecomment-6054840371",
   "productionHistoryVerifiedAt": "2026-10-27T07:26:04Z",
   "productionHistoryEvidence": "Supabase MCP list_migrations and schema_migrations.statements for office-gym-trainer (asbudyijvunpnhrhsubm). Statements were captured 2026-10-27T07:12:00Z and match the checked-in file bytes. Short keys 0003, 0005, 0006, and 0007 sorted before the schema they change; on 2026-10-27T07:26:04Z only schema_migrations.version was renamed to the timestamps in previousVersion's replacements. Statements were not rewritten and no application SQL was replayed. A second list_migrations matched supabase/production-history.json.",
