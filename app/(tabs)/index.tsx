@@ -26,8 +26,8 @@ import {
 import { colors, space, type } from '@/lib/theme';
 import { formatHeight, formatWeight } from '@/lib/units';
 import { workouts } from '@/lib/session/workout';
+import { workoutDurationSeconds, type SavedWorkout } from '@/lib/session/workout-store';
 import { takeTrainedDayMotion } from '@/lib/session/completion-motion';
-import type { SavedWorkout } from '@/lib/session/workout-store';
 import { useDashboard } from '@/lib/useDashboard';
 
 /**
@@ -56,9 +56,14 @@ export default function Home() {
     todayTotals,
     lastLoadKg,
     loading,
+    usingCachedPlan,
     error,
     reload,
   } = useDashboard(userId, bodyweightKg, profile?.home_timezone);
+  const onWorkoutArchived = useCallback(() => {
+    setResumeAttempt((attempt) => attempt + 1);
+    reload();
+  }, [reload]);
 
   useEffect(() => {
     if (loading || error) return;
@@ -111,10 +116,11 @@ export default function Home() {
         }
         onPress={() =>
           router.push({
-            pathname: '/session/[dayId]/run',
+            pathname: ownWorkout.endedAtMs != null ? '/session/[dayId]/summary' : '/session/[dayId]/run',
             params: {
               dayId: ownWorkout.day.id,
               sessionId: ownWorkout.sessionId,
+              ...(ownWorkout.endedAtMs != null ? { elapsed: String(workoutDurationSeconds(ownWorkout)) } : {}),
             },
           })
         }
@@ -148,14 +154,14 @@ export default function Home() {
   if (loading) {
     return (
       <Screen scroll={false}>
-        <SyncRecovery userId={userId} />
+        <SyncRecovery userId={userId} onArchived={onWorkoutArchived} />
         {resumeCard}
         <ActivityIndicator color={colors.accent} />
       </Screen>
     );
   }
 
-  if (error || !plan || !nextDay) {
+  if (!plan || !nextDay) {
     return (
       <Screen>
         <Header
@@ -163,7 +169,7 @@ export default function Home() {
           avatarUrl={profile?.avatar_url ?? null}
           subtitle={subtitle}
         />
-        <SyncRecovery userId={userId} />
+        <SyncRecovery userId={userId} onArchived={onWorkoutArchived} />
         {resumeCard}
         <Card style={{ marginTop: space.xl, gap: space.md }}>
           <Overline>No plan yet</Overline>
@@ -205,9 +211,17 @@ export default function Home() {
         subtitle={subtitle}
       />
 
-      <SyncRecovery userId={userId} />
+      <SyncRecovery userId={userId} onArchived={onWorkoutArchived} />
       {resumeCard}
-      <View style={{ marginTop: space.xl }}>
+      {(usingCachedPlan || error) && (
+        <Card style={{ marginTop: space.lg, gap: space.sm }}>
+          <Muted>{usingCachedPlan
+            ? 'Using your saved plan. History will load when you reconnect.'
+            : 'Your plan is ready. Training history could not be loaded.'}</Muted>
+          <Button title="Retry connection" variant="ghost" onPress={reload} />
+        </Card>
+      )}
+      {!usingCachedPlan && !error && <View style={{ marginTop: space.xl }}>
         <Streak
           streak={streak}
           today={today}
@@ -215,7 +229,7 @@ export default function Home() {
           trainedDays={trainedDays}
           completion={streakCompletion?.ownerId === userId ? streakCompletion : null}
         />
-      </View>
+      </View>}
 
       {trainedToday && (
         <Card style={styles.today}>

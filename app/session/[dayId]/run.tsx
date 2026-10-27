@@ -31,7 +31,6 @@ import {
   type ProgressRow,
 } from '@/lib/db/queries';
 import {
-  flushOutbox,
   bootstrapSetBaselines,
   stageLegacyRestRecovery,
   pendingSyncCount,
@@ -283,7 +282,6 @@ export default function SessionRun() {
     setFinishError(null);
     const elapsed = Math.max(1, activeElapsed(active.endedAtMs ?? Date.now()));
     void queueCompletion(userId, sessionId, elapsed)
-      .then(() => flushOutbox())
       .then(() => {
         if (!cancelled) {
           if (freshFinish.current) signalWorkoutCompletion(userId, sessionId);

@@ -1,5 +1,21 @@
 # Releases: artifacts, environments, verification, and recovery
 
+## Current operating procedures
+
+Use [environment isolation](ENVIRONMENTS.md), [release safety](RELEASE_SAFETY.md)
+and [CI](CI.md) for this checkout's operating procedures. They supersede dated
+workflow snapshots and environment proposals below where those differ.
+Production remains on the existing Supabase project `asbudyijvunpnhrhsubm`;
+local development uses the disposable local stack. Hosted development and
+preview builds remain blocked while their isolated backend references are
+unregistered; no additional paid backend has been provisioned.
+
+The supported production native path publishes a guarded release-test candidate,
+then manually promotes that exact phone-tested update group after checking
+actual EAS build/runtime/backend evidence. It does not regenerate the tested
+bundle, and merging source does not publish a native update. The separate
+[open release gates](OPEN_RELEASE_GATES.md) still need their recorded evidence.
+
 Office Gym succeeds when someone can open their phone, understand their next
 exercise, use equipment their gym actually has, and finish without losing sets.
 A release must preserve that journey, including interrupted and offline sessions.

@@ -16,9 +16,9 @@ import {
 } from '@/components/ui';
 import { useAuth, useUserId } from '@/lib/auth';
 import { getExercise } from '@/lib/catalog';
-import { getActivePlan, getProgress, startSession } from '@/lib/db/queries';
-import type { SavedWorkout } from '@/lib/session/workout-store';
-import { workouts } from '@/lib/session/workout';
+import { getActivePlan, getProgress, type ProgressRow } from '@/lib/db/queries';
+import { planCache } from '@/lib/session/plan-cache';
+import { startWorkout } from '@/lib/session/sync';
 import { prefetchUrls } from '@/lib/media/provider';
 import { formatClock, getBlockDurationSeconds } from '@/lib/plan/timing';
 import { colors, space, type } from '@/lib/theme';
@@ -29,12 +29,12 @@ export default function SessionOverview() {
   const { dayId } = useLocalSearchParams<{ dayId: string }>();
   const userId = useUserId();
   const { profile } = useAuth();
-  const pendingStart = useRef<SavedWorkout | null>(null);
   const router = useRouter();
   const identity = `${userId}:${dayId}`;
   const currentIdentity = useRef(identity);
   currentIdentity.current = identity;
   const mounted = useRef(true);
+  const planReadVersion = useRef(0);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -43,6 +43,8 @@ export default function SessionOverview() {
   }, []);
 
   const [day, setDay] = useState<PlanDay | null>(null);
+  const [progress, setProgress] = useState<ProgressRow[]>([]);
+  const [usingCachedPlan, setUsingCachedPlan] = useState(false);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [swapping, setSwapping] = useState(false);
@@ -51,32 +53,67 @@ export default function SessionOverview() {
 
   useEffect(() => {
     let cancelled = false;
+    const version = ++planReadVersion.current;
+    const isCurrentRead = () => !cancelled && version === planReadVersion.current;
     setLoading(true);
     setError(null);
     setStartError(null);
     setStarting(false);
-    getActivePlan(userId)
-      .then((plan) => {
-        if (cancelled) return;
-        const found = plan?.days.find((d) => d.id === dayId) ?? null;
-        setDay(found);
-        if (found) {
-          // Warm the remote stills now so the first set is never a grey box.
-          const exercises = found.blocks
-            .flatMap((b) => b.items)
-            .map((i) => getExercise(i.exercise_id))
-            .filter((e): e is NonNullable<typeof e> => e != null);
-          Image.prefetch(prefetchUrls(exercises)).catch(() => {});
-        }
-      })
+    setSwapping(false);
+    setDay(null);
+    setProgress([]);
+    setUsingCachedPlan(false);
+    (async () => {
+      const cached = await planCache.read(userId).catch(() => null);
+      if (!isCurrentRead()) return;
+      const cachedDay = cached?.plan.days.find((candidate) => candidate.id === dayId);
+      if (cached && cachedDay) {
+        setDay(cachedDay);
+        setProgress(cached.progress);
+        setUsingCachedPlan(true);
+        setLoading(false);
+      }
+      // A cached prescription can start while either refresh request is stalled.
+      const [planResult, progressResult] = await Promise.allSettled([
+        getActivePlan(userId), getProgress(userId),
+      ]);
+      if (!isCurrentRead()) return;
+      let plan = planResult.status === 'fulfilled' ? planResult.value : cached?.plan;
+      if (planResult.status === 'rejected' && !plan) throw planResult.reason;
+      let progressRows = progressResult.status === 'fulfilled'
+        ? [...progressResult.value.values()] : cached?.progress ?? [];
+      let showCachedPlan = planResult.status === 'rejected';
+      let accepted: boolean | null = null;
+      if (planResult.status === 'fulfilled') {
+        if (!plan) accepted = await planCache.clear(userId, cached).catch(() => null);
+        else if (progressResult.status === 'fulfilled')
+          accepted = await planCache.write(userId, plan, progressRows, undefined, cached).catch(() => null);
+      }
+      if (!isCurrentRead()) return;
+      if (accepted === false) {
+        const winner = await planCache.read(userId);
+        if (!isCurrentRead()) return;
+        plan = winner?.plan ?? null;
+        progressRows = winner?.progress ?? [];
+        showCachedPlan = winner !== null;
+      }
+      const found = plan?.days.find((d) => d.id === dayId) ?? null;
+      setDay(found);
+      setProgress(progressRows);
+      setUsingCachedPlan(showCachedPlan);
+      if (found) {
+        const exercises = found.blocks.flatMap((b) => b.items)
+          .map((i) => getExercise(i.exercise_id))
+          .filter((e): e is NonNullable<typeof e> => e != null);
+        Image.prefetch(prefetchUrls(exercises)).catch(() => {});
+      }
+    })()
       .catch((e) => {
-        if (!cancelled)
-          setError(
-            e instanceof Error ? e.message : 'Could not load the session',
-          );
+        if (isCurrentRead())
+          setError(e instanceof Error ? e.message : 'Could not load the session');
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (isCurrentRead()) setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -109,56 +146,22 @@ export default function SessionOverview() {
   }
 
   const begin = async () => {
+    if (starting || swapping) return;
     const isCurrent = () =>
       mounted.current && currentIdentity.current === identity;
     setStarting(true);
     setStartError(null);
     try {
-      if (swapping) return;
-      const saved = await workouts.read(userId);
+      const saved = await startWorkout(userId, day, {
+        units: profile?.units ?? 'kg',
+        bodyweightKg: profile?.bodyweight_kg ?? null,
+        homeTimezone: profile?.home_timezone,
+        progress,
+      });
       if (!isCurrent()) return;
-      if (saved) {
-        router.replace({
-          pathname: '/session/[dayId]/run',
-          params: { dayId: saved.day.id, sessionId: saved.sessionId },
-        });
-        return;
-      }
-      let candidate = pendingStart.current;
-      if (
-        !candidate ||
-        candidate.ownerId !== userId ||
-        candidate.day.id !== day.id
-      ) {
-        const progress = await getProgress(userId);
-        if (!isCurrent()) return;
-        const startedAtMs = Date.now();
-        const sessionId = await startSession(userId, day.id, { units: profile?.units ?? 'kg', bodyweightKg: profile?.bodyweight_kg ?? null }, day);
-        candidate = {
-          version: 1,
-          ownerId: userId,
-          sessionId,
-          day,
-          units: profile?.units ?? 'kg',
-          bodyweightKg: profile?.bodyweight_kg ?? null,
-          progress: [...progress.values()],
-          cursor: 0,
-          phase: 'work',
-          draft: null,
-          savedDraft: null,
-          restUntilMs: null,
-          startedAtMs,
-          endedAtMs: null,
-        };
-        pendingStart.current = candidate;
-      }
-      // Keep the created session recoverable even if its account changed while starting.
-      const persisted = await workouts.create(candidate);
-      if (!isCurrent()) return;
-      pendingStart.current = null;
       router.replace({
         pathname: '/session/[dayId]/run',
-        params: { dayId: persisted.day.id, sessionId: persisted.sessionId },
+        params: { dayId: saved.day.id, sessionId: saved.sessionId },
       });
     } catch (e) {
       if (!isCurrent()) return;
@@ -169,15 +172,35 @@ export default function SessionOverview() {
     }
   };
   const reloadDay = async () => {
-    const activePlan = await getActivePlan(userId);
-    if (!mounted.current || currentIdentity.current !== identity) return;
+    // A successful template swap supersedes the overview's earlier background read.
+    const version = ++planReadVersion.current;
+    const isCurrentRead = () => mounted.current && currentIdentity.current === identity
+      && version === planReadVersion.current;
+    let activePlan = await getActivePlan(userId);
+    if (!isCurrentRead()) return;
+    const cached = await planCache.read(userId).catch(() => null);
+    if (!isCurrentRead()) return;
+    let rows = cached?.progress ?? progress;
+    const accepted = activePlan
+      ? await planCache.write(userId, activePlan, rows, undefined, cached).catch(() => null)
+      : await planCache.clear(userId, cached).catch(() => null);
+    if (!isCurrentRead()) return;
+    if (accepted === false) {
+      const winner = await planCache.read(userId);
+      if (!isCurrentRead()) return;
+      activePlan = winner?.plan ?? null;
+      rows = winner?.progress ?? [];
+    }
     setDay(activePlan?.days.find((candidate) => candidate.id === dayId) ?? null);
+    setProgress(rows);
+    setUsingCachedPlan(accepted === false);
   };
   const taken = new Set(day.blocks.flatMap((block) => block.items.map((item) => item.exercise_id)));
   const targetSeconds = day.blocks.reduce((sum, block) => sum + (getBlockDurationSeconds(block) ?? 0), 0);
 
   return (
     <Screen>
+      {usingCachedPlan && <Muted style={{ marginBottom: space.md }}>Using your saved plan. Your workout will sync when you reconnect.</Muted>}
       <Overline>Up next</Overline>
       <Display style={{ marginTop: space.sm }}>{day.name}</Display>
       <Muted style={{ marginTop: space.sm }}>{day.focus}</Muted>

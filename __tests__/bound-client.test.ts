@@ -3,9 +3,10 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 it('keeps a queued write bound to the captured access token', async () => {
-  const previous = { url: process.env.EXPO_PUBLIC_SUPABASE_URL, key: process.env.EXPO_PUBLIC_SUPABASE_KEY };
-  process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
-  process.env.EXPO_PUBLIC_SUPABASE_KEY = 'test-publishable-key';
+  const previous = { environment: process.env.EXPO_PUBLIC_APP_ENV, url: process.env.EXPO_PUBLIC_SUPABASE_URL, key: process.env.EXPO_PUBLIC_SUPABASE_KEY };
+  process.env.EXPO_PUBLIC_APP_ENV = 'mock';
+  process.env.EXPO_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:54321';
+  process.env.EXPO_PUBLIC_SUPABASE_KEY = 'sb_publishable_LOCAL_TEST_FIXTURE_ONLY';
   const previousFetch = global.fetch;
   const fetch = jest.fn().mockResolvedValue({ ok: true, status: 201, statusText: 'Created', text: async () => '[]', headers: { get: () => null } });
   global.fetch = fetch;
@@ -18,6 +19,8 @@ it('keeps a queued write bound to the captured access token', async () => {
     expect(headers.get('Authorization')).toBe('Bearer captured-token-A');
   } finally {
     global.fetch = previousFetch;
+    if (previous.environment === undefined) delete process.env.EXPO_PUBLIC_APP_ENV;
+    else process.env.EXPO_PUBLIC_APP_ENV = previous.environment;
     if (previous.url === undefined) delete process.env.EXPO_PUBLIC_SUPABASE_URL;
     else process.env.EXPO_PUBLIC_SUPABASE_URL = previous.url;
     if (previous.key === undefined) delete process.env.EXPO_PUBLIC_SUPABASE_KEY;
@@ -26,9 +29,10 @@ it('keeps a queued write bound to the captured access token', async () => {
 });
 
 it('cancels an actual database request when sync expires', async () => {
-  const previous = { url: process.env.EXPO_PUBLIC_SUPABASE_URL, key: process.env.EXPO_PUBLIC_SUPABASE_KEY };
-  process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
-  process.env.EXPO_PUBLIC_SUPABASE_KEY = 'test-publishable-key';
+  const previous = { environment: process.env.EXPO_PUBLIC_APP_ENV, url: process.env.EXPO_PUBLIC_SUPABASE_URL, key: process.env.EXPO_PUBLIC_SUPABASE_KEY };
+  process.env.EXPO_PUBLIC_APP_ENV = 'mock';
+  process.env.EXPO_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:54321';
+  process.env.EXPO_PUBLIC_SUPABASE_KEY = 'sb_publishable_LOCAL_TEST_FIXTURE_ONLY';
   const previousFetch = global.fetch;
   const controller = new AbortController();
   const fetch = jest.fn((_url, options) => new Promise((_resolve, reject) => {
@@ -46,6 +50,8 @@ it('cancels an actual database request when sync expires', async () => {
     await expect(write).rejects.toMatchObject({ message: expect.stringContaining('Request aborted') });
   } finally {
     global.fetch = previousFetch;
+    if (previous.environment === undefined) delete process.env.EXPO_PUBLIC_APP_ENV;
+    else process.env.EXPO_PUBLIC_APP_ENV = previous.environment;
     if (previous.url === undefined) delete process.env.EXPO_PUBLIC_SUPABASE_URL;
     else process.env.EXPO_PUBLIC_SUPABASE_URL = previous.url;
     if (previous.key === undefined) delete process.env.EXPO_PUBLIC_SUPABASE_KEY;

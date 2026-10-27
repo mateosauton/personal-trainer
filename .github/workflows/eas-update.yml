@@ -1,0 +1,103 @@
+name: Promote tested native update
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full current master SHA of the tested candidate update
+        required: true
+        type: string
+      platform:
+        description: Platform tested on a physical phone
+        required: true
+        type: choice
+        options: [android, ios]
+      candidate_group:
+        description: Single-platform release-test update group exported with production environment
+        required: true
+        type: string
+      tested_build:
+        description: EAS release-test device build used for the phone test
+        required: true
+        type: string
+      production_build:
+        description: EAS production binary currently installed by the target users
+        required: true
+        type: string
+      phone_tested:
+        description: I tested this exact group on this build and checked backend compatibility
+        required: true
+        default: false
+        type: boolean
+      evidence_url:
+        description: GitHub issue or PR with phone test results and backend compatibility evidence
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Serialize both platforms. Never cancel a publisher with an ambiguous remote write.
+concurrency:
+  group: native-production-release
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: github.ref == 'refs/heads/master'
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: recovery-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      EXPO_NO_DOTENV: '1'
+      PT_LIFECYCLE_DB_URL: postgresql://postgres:recovery-test@127.0.0.1:5432/postgres
+      PT_ORDERING_DB_URL: postgresql://postgres:recovery-test@127.0.0.1:5432/postgres
+      RELEASE_SHA: ${{ inputs.source_sha }}
+      RELEASE_PLATFORM: ${{ inputs.platform }}
+      RELEASE_GROUP: ${{ inputs.candidate_group }}
+      RELEASE_TEST_BUILD: ${{ inputs.tested_build }}
+      RELEASE_PRODUCTION_BUILD: ${{ inputs.production_build }}
+      RELEASE_PHONE_TESTED: ${{ inputs.phone_tested }}
+      RELEASE_EVIDENCE: ${{ inputs.evidence_url }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Validate dispatch before loading credentials
+        run: node --input-type=module -e 'import { releaseInputs } from "./scripts/release-policy.mjs"; releaseInputs(process.env)'
+      - run: npm ci
+      - run: npm run check:web
+      - uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
+        with:
+          eas-version: 23.2.0
+          token: ${{ secrets.EXPO_TOKEN }}
+      - name: Verify metadata and promote the exact tested bundle
+        run: eas env:exec production 'node scripts/release-native.mjs' --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      - name: Preserve release receipt, including uncertain writes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/native-release.json
+          if-no-files-found: ignore
+          retention-days: 90

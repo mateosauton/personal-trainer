@@ -1,5 +1,13 @@
 # Architecture and infrastructure
 
+Implementation update: the preference, privacy, session-context, calendar and
+migration-baseline changes described as local candidates below are now in
+`master` at `5f349d2`. This branch adds environment routing and release guards.
+Use [ENVIRONMENTS.md](ENVIRONMENTS.md) for the selected production project and
+isolated local development, and [RELEASE_SAFETY.md](RELEASE_SAFETY.md) for the
+current tested-group promotion path. Source history does not establish which
+app builds or database migrations are deployed. The original audit basis follows.
+
 Reviewed 2026-10-22. This document describes the working checkout at `5e2d317`
 plus uncommitted changes inspected during this review. The shared checkout
 received further implementation work while these guides were being written;

@@ -4,7 +4,8 @@ import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from '
 import Svg, { Path } from 'react-native-svg';
 
 import type { SocialProvider } from '@/lib/social-auth';
-import { radius, space, type } from '@/lib/theme';
+import { canUseBrowserOAuth } from '@/lib/social-auth-availability';
+import { colors, radius, space, type } from '@/lib/theme';
 
 interface Props {
   disabled: boolean;
@@ -34,6 +35,7 @@ export function SocialSignInButtons({ disabled, loading, onPress }: Props) {
   const googleEnabled = process.env.EXPO_PUBLIC_GOOGLE_SIGN_IN_ENABLED === '1';
   const appleEnabled = process.env.EXPO_PUBLIC_APPLE_SIGN_IN_ENABLED === '1';
   const [nativeAppleAvailable, setNativeAppleAvailable] = useState(false);
+  const browserOAuthAvailable = canUseBrowserOAuth();
 
   useEffect(() => {
     if (!appleEnabled || Platform.OS !== 'ios') return;
@@ -46,19 +48,22 @@ export function SocialSignInButtons({ disabled, loading, onPress }: Props) {
 
   if (!googleEnabled && !appleEnabled) return null;
 
-  const providerButton = (provider: SocialProvider) => (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`Continue with ${provider === 'google' ? 'Google' : 'Apple'}`}
-      accessibilityState={{ disabled, busy: loading === provider }}
-      disabled={disabled}
-      onPress={() => { if (!disabled) onPress(provider); }}
-      style={({ pressed }) => [styles.button, disabled && styles.disabled, pressed && styles.pressed]}
-    >
-      {loading === provider ? <ActivityIndicator color="#1F1F1F" /> : <ProviderLogo provider={provider} />}
-      <Text style={styles.label}>Continue with {provider === 'google' ? 'Google' : 'Apple'}</Text>
-    </Pressable>
-  );
+  const providerButton = (provider: SocialProvider) => {
+    const buttonDisabled = disabled || !browserOAuthAvailable;
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Continue with ${provider === 'google' ? 'Google' : 'Apple'}`}
+        accessibilityState={{ disabled: buttonDisabled, busy: loading === provider }}
+        disabled={buttonDisabled}
+        onPress={() => { if (!buttonDisabled) onPress(provider); }}
+        style={({ pressed }) => [styles.button, buttonDisabled && styles.disabled, pressed && styles.pressed]}
+      >
+        {loading === provider ? <ActivityIndicator color="#1F1F1F" /> : <ProviderLogo provider={provider} />}
+        <Text style={styles.label}>Continue with {provider === 'google' ? 'Google' : 'Apple'}</Text>
+      </Pressable>
+    );
+  };
 
   return (
     <View style={styles.group}>
@@ -76,12 +81,18 @@ export function SocialSignInButtons({ disabled, loading, onPress }: Props) {
           />
         </View>
       ) : providerButton('apple'))}
+      {!browserOAuthAvailable && (googleEnabled || (appleEnabled && Platform.OS !== 'ios')) && (
+        <Text style={styles.notice}>
+          In Expo Go, use email and password. {googleEnabled ? 'Google' : 'Apple'} sign-in is available in the installed app.
+        </Text>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   group: { gap: space.md },
+  notice: { ...type.small, color: colors.muted },
   button: {
     minHeight: 56,
     borderRadius: radius.pill,

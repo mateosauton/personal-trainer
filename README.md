@@ -16,27 +16,42 @@ Built with Expo / React Native (runs in Expo Go, no Xcode needed) and Supabase.
 
 ## Running it
 
-```bash
-npm install
-npx eas-cli@23.2.0 login
-npm run env:pull       # development values from EAS into .env.local
-npx expo start --lan
+Use Node 22 and `npm ci`. Start an isolated local Supabase stack with Docker
+for local web development:
+
+```sh
+npm ci
+npm run db:local:start
+npm run db:local:seed
+npm run db:local:env
+npm run web
 ```
 
-Scan the QR with the iPhone Camera app and open in [Expo Go](https://apps.apple.com/app/expo-go/id982107779).
-Your phone and this machine must be on the same Wi-Fi.
+The environment command preserves an existing `.env.local`; move it intentionally
+before switching backends. See [environment setup](docs/ENVIRONMENTS.md) for local
+accounts, ports, database checks, native-device limits, and hosted provisioning.
+Hosted development and preview builds remain blocked until their distinct
+Supabase project references are registered. No command falls back to production.
 
-```bash
-npm test        # plan generation, progression, load maths, session queue
-npm run lint    # tsc --noEmit
-npm run catalog # rebuild lib/data/exercises.json from source datasets
+```sh
+npm run check:web        # TypeScript, safety, app and database regressions
+npm run build:web:check  # synthetic Metro check in .expo/web-check; never deploy
+npm run db:local:test    # SQL integration tests on the local stack
+npm run catalog         # rebuild the exercise catalog
 ```
 
 ## Environment variables
 
-Manage app configuration in [the Expo project's environment settings](https://expo.dev/accounts/mrsauron/projects/office-gym-trainer/environment-variables).
-Each EAS environment, `development`, `preview`, and `production`, needs these
-project variables with **plain text** visibility:
+[config/environments.json](config/environments.json) binds each hosted target to
+one distinct Supabase project. Both `APP_ENV` and `EXPO_PUBLIC_APP_ENV` are
+required and must match. The public URL must match that registered backend;
+the public key must be a publishable key or matching legacy anon key. Service
+keys and public developer-login credentials are rejected for distribution.
+
+EAS profiles, Cloudflare branch context and Vercel environment context must
+agree with the target. `eas.json` pins markers for each native profile; OTA
+commands also require a supported channel and explicit EAS environment. See
+[environment setup](docs/ENVIRONMENTS.md) before pulling hosted values.
 
 | Variable | Value |
 | --- | --- |
@@ -47,26 +62,23 @@ project variables with **plain text** visibility:
 Google's flag is set to `1` in the EAS `development`, `preview`, and `production`
 environments. Apple stays unset until its provider configuration is complete.
 
-The app reads these through `process.env.EXPO_PUBLIC_*`. They are public in
-the bundle; never use a Supabase service-role key or secret key here.
-
-`eas.json` selects the matching environment for each build profile. EAS Update
-uses `--environment production`, and the web export command fetches production
-values through `eas env:exec`. It disables local dotenv loading so local testing
-credentials cannot enter the hosted export. See [Expo's EAS environment guide](https://docs.expo.dev/eas/environment-variables/).
-
-```bash
-npm run env:pull             # development
-npm run env:pull:preview     # preview
-npm run env:pull:production  # production
-npm run export:web          # production web bundle in dist/
+```sh
+npm run env:pull             # isolated development values into .env.local
+npm run env:pull:preview     # isolated preview values into .env.local
+npm run env:pull:production  # production; use a separate checkout deliberately
+npm run env:check           # validate injected values for distribution
+npm run export:web          # fetch and validate production, then export dist/
 ```
 
-Pulls replace `.env.local`. Keep local test-login overrides in
-`.env.development.local`, and keep provider-specific tokens outside that pull
-target. Restart Expo after switching environments. `.env.example` is a template
-for offline setup; `.env.test` contains only mock settings. Actual values are
-gitignored and managed in EAS.
+EAS pulls replace `.env.local`. Local development overrides belong in
+`.env.development.local`; remove them before distribution. Restart Expo after
+switching backends. `.env.example` is a template; `.env.test` holds only the
+explicit mock fixture. Public variables ship in the bundle. Real env files
+and server credentials must remain outside Git.
+
+Native updates require a manually dispatched promotion of an already tested
+update group. A master push runs checks and may deploy the Cloudflare web app;
+it does not publish a native OTA. Follow the [native release runbook](docs/RELEASE_SAFETY.md).
 
 GitHub publishing uses the repository's `EXPO_TOKEN` secret. Cloudflare builds
 use `npm run build:web` with the Supabase public values and Google sign-in flag
@@ -107,7 +119,7 @@ when there is no phone (or no route to Supabase) to hand:
 
 ```bash
 node tools/dev/mock-supabase.mjs 54321 &          # GoTrue + the PostgREST slice this app uses
-EXPO_NO_DOTENV=1 EXPO_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 EXPO_PUBLIC_SUPABASE_KEY=mock npx expo start --web --port 8081 &
+EXPO_NO_DOTENV=1 APP_ENV=mock EXPO_PUBLIC_APP_ENV=mock EXPO_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 EXPO_PUBLIC_SUPABASE_KEY=sb_publishable_LOCAL_TEST_FIXTURE_ONLY npx expo start --web --port 8081 &
 node tools/dev/drive.mjs session ./shots            # screenshots a whole flow
 ```
 

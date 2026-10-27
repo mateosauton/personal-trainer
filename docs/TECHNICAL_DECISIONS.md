@@ -1,5 +1,12 @@
 # Technical decisions and change management
 
+The environment and release decision is now recorded in
+[ADR 0001](decisions/0001-environment-release-safety.md). Its implementation uses
+the existing production project, isolated local development, guarded candidate
+publishing and verified update-group promotion. [ENVIRONMENTS.md](ENVIRONMENTS.md)
+and [RELEASE_SAFETY.md](RELEASE_SAFETY.md) record the current operational boundaries
+and outstanding hosted-preview and device checks.
+
 Reviewed against the local checkout on 2026-10-22. This guide explains the choices
 the code makes, their effect on each subsystem, and a proposed process for
 changing them. It does not establish which migrations or builds run in production.

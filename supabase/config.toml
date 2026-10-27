@@ -1,4 +1,51 @@
-project_id = "office-gym-trainer"
+# Disposable local services only. This is not a hosted project reference.
+project_id = "office-gym-trainer-local"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+# Local test runtime. Confirm the hosted major version separately before upgrades.
+major_version = 17
+
+[db.seed]
+enabled = false
+
+[studio]
+enabled = true
+port = 54323
+api_url = "http://127.0.0.1"
+
+[inbucket]
+enabled = true
+port = 54324
+
+[storage]
+enabled = true
+file_size_limit = "10MiB"
+
+[auth]
+enabled = true
+site_url = "http://localhost:8081"
+additional_redirect_urls = ["http://localhost:8081/", "http://localhost:8081/reset-password", "http://127.0.0.1:8081/", "http://127.0.0.1:8081/reset-password", "officegym://", "officegym://reset-password"]
+jwt_expiry = 3600
+enable_signup = true
+enable_anonymous_sign_ins = false
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+# Mail stays inside the local inbox, including recovery and confirmation links.
+enable_confirmations = true
+
+[analytics]
+enabled = false
 
 [functions.delete-account]
 # Platform validation plus getUser in the handler before any admin operation.

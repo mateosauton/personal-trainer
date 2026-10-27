@@ -10,35 +10,72 @@ Supabase remains the backend. Native releases use Expo/EAS.
 - Repository: `mateosauton/personal-trainer`, production branch `master`.
 - Root directory: `/`.
 - Node: 22, selected by `.nvmrc`.
-- Deploy command: `npx wrangler deploy`.
-- Preview command: `npx wrangler versions upload`.
+- Production deploy command: `npx wrangler deploy`.
+- Preview deploy command: `npm run cloudflare:preview`.
+- Cloudflare Build command: empty. The preview gate must run before Wrangler.
 - Exclude `master`, `gh-pages`, and `cdn` from non-production builds.
 
-Wrangler runs `npm run check:web && npm run build:web`, so failed TypeScript
-checks or tests prevent both deployment and preview upload. The export writes
+When Wrangler runs, its custom build executes `npm run check:web && npm run build:web`.
+Failed TypeScript, unit, database or migration checks prevent deployment and
+preview upload. The export writes
 `dist/`. Keep `expo.web.output` as `single` and the SPA fallback enabled in
 `wrangler.jsonc`. Do not run the GitHub Pages base-path script for Cloudflare.
 
-Set these build-time variables for production and preview builds:
+Configure the commands above separately on their triggers; keep the production
+command and branch filters unchanged. The preview command is a repository-owned
+gate in `scripts/deploy-preview.cjs`:
 
-- `EXPO_PUBLIC_SUPABASE_URL`: the intended Supabase project URL.
-- `EXPO_PUBLIC_SUPABASE_KEY`: that project's publishable key.
-- `EXPO_PUBLIC_GOOGLE_SIGN_IN_ENABLED=1`.
-- `EXPO_NO_DOTENV=1`: use configured build variables rather than local files.
-- `EXPO_NO_TELEMETRY=1`.
-- `NODE_VERSION=22`.
+- If `config/environments.json` explicitly sets `preview.projectRef` to `null`,
+  it logs `SKIP_PREVIEW` and exits successfully before invoking Wrangler or its
+  build. It exports no app assets, uploads no version and creates no preview URL.
+- With a registered preview backend, it validates the preview environment and
+  invokes `wrangler versions upload`. Invalid configuration and failed builds or
+  uploads remain errors. Production backend values never substitute for preview.
 
-The Google flag is set and read back on both production and non-production
-build triggers. Omit `EXPO_PUBLIC_APPLE_SIGN_IN_ENABLED`; Apple setup is skipped.
+A successful check with `SKIP_PREVIEW` means publishing was intentionally skipped.
+It provides no hosted app, callback, mobile-browser or phone verification.
+GitHub's core checks and synthetic bundle check still verify the source separately.
+The wrapper's provider status must be confirmed on the actual Cloudflare build;
+local gate tests alone do not establish that hosted result.
 
-Only enable `EXPO_NO_DOTENV` after both public Supabase variables are configured.
-The two public values are mirrored from the EAS production environment into
-the Cloudflare build triggers. Local dotenv loading is disabled; actual env
-files are gitignored. Never put a service-role key or other server credential in `EXPO_PUBLIC_*`, Wrangler assets, or a committed env file.
+Set these build-time variables separately on production and on a provisioned preview:
 
-Previews using the production project share production data. Use a dedicated
-test account for verification. A fully isolated preview needs its own Supabase
-project and migrations; a different hostname alone does not isolate data.
+| Variable | Production (`master`) | Every other branch |
+| --- | --- | --- |
+| `APP_ENV` | `production` | `preview` |
+| `EXPO_PUBLIC_APP_ENV` | `production` | `preview` |
+| `EXPO_PUBLIC_SUPABASE_URL` | Registered production URL | Registered, isolated preview URL |
+| `EXPO_PUBLIC_SUPABASE_KEY` | Production public key | Preview public key |
+| `EXPO_PUBLIC_GOOGLE_SIGN_IN_ENABLED` | `1`, with the verified production provider | Enable after isolated provider/callback setup |
+| `EXPO_NO_DOTENV` | `1` | `1` |
+| `EXPO_NO_TELEMETRY` | `1` | `1` |
+| `NODE_VERSION` | `22` | `22` |
+
+The shared guard checks Cloudflare's `WORKERS_CI_BRANCH` independently: `master`
+requires production and any other branch requires preview. Renaming production
+values to preview does not pass. Never put a service-role key or developer-login
+credentials in build variables or assets.
+
+The existing Google flag was read back on both triggers while they shared the
+production backend. Recheck the provider on a new isolated preview before
+enabling its button. Omit `EXPO_PUBLIC_APPLE_SIGN_IN_ENABLED`; Apple setup is skipped.
+
+**Migration prerequisite:** read-only inspection on 2026-10-22 found both
+Cloudflare triggers pointed at the production project and had no environment
+markers. Production markers have since been configured and verified for the
+existing `asbudyijvunpnhrhsubm` project. Preview publication remains blocked until
+an isolated preview backend (a branch or project) is verified, registered in
+`config/environments.json`, and configured on the preview trigger. Production
+builds use the explicit markers above. Existing deployed versions keep their
+old configuration until replaced. Follow [ENVIRONMENTS.md](ENVIRONMENTS.md).
+
+The explicit-null preview state takes the skip path above. Direct
+`npm run build:web` still rejects an unprovisioned or production-routed preview;
+the gate does not weaken the distribution environment guard.
+
+`npm run build:web:check` uses synthetic public values only to validate Metro
+in CI; its `.expo/web-check` output must never be deployed. Hosted builds use
+the guarded `npm run build:web` and real target-specific public configuration.
 
 ## Authentication
 
@@ -52,13 +89,13 @@ passes its platform's redirect explicitly, so the native Site URL can remain
 `officegym://`. Add exact callbacks for a preview before testing email links
 there. Do not allow every `workers.dev` domain.
 
-Google production build `d76ce734-ecb7-49ff-b96e-a7ab507a2a86` succeeded from
-pinned `master` commit `4189aa33f926b40359d1ff05ca9f08f94707df77`, deploying
+The earlier Google production build `d76ce734-ecb7-49ff-b96e-a7ab507a2a86`
+succeeded from pinned `master` commit `4189aa33f926b40359d1ff05ca9f08f94707df77`, deploying
 version `fcabc071-f9f7-4c07-b7a6-0a8178f65bcb`. TypeScript, 55 test suites with
 527 tests, web export, and deployment passed.
 
-The live `/sign-in` screen shows Google and email, with Apple hidden. Google
-sign-in with an existing account requested only name, profile picture, and email,
+That release's `/sign-in` verification showed Google and email, with Apple hidden.
+Google sign-in with an existing account requested only name, profile picture, and email,
 returned to Home, removed the callback code from the URL, and preserved Home
 after reload. Google onboarding with a new account and physical native Google
 authentication remain unverified. Native validation requires a fresh binary.
@@ -67,9 +104,20 @@ privacy-policy and terms URLs.
 
 ## Verify and promote
 
-1. Push a source branch and open a PR. Confirm its Cloudflare preview build and
-   the GitHub checks pass for the exact commit.
-2. Open the preview and test sign-in, onboarding, plan creation, workout logging,
+Keep [migration baseline reconciliation](MIGRATION_BASELINE.md) separate from
+web publication. The current source includes private avatars, session calculation
+context, training-preference RPCs and home-timezone migrations after the pinned
+nine-file baseline. Local migration checks do not prove these changes exist in
+production. Verify the target's schema and paired private-photo client before
+releasing dependent UI. Account deletion also requires its Edge Function; see
+[privacy controls](PRIVACY_CONTROLS.md). Never use an actual account deletion as
+a deployment smoke test.
+
+1. Push a source branch and open a PR. Inspect Cloudflare's result and logs for
+   the exact commit alongside GitHub checks. `SKIP_PREVIEW` leaves the hosted
+   checks below pending; it is not a deployment to open or test.
+2. Once an isolated preview is configured and actually uploaded, open its URL
+   and test sign-in, onboarding, plan creation, workout logging,
    timed exercises, refresh/resume, and JSON data export with a test account.
 3. Check direct navigation to `/sign-in` and `/reset-password`. Exercise email
    confirmation and recovery callbacks; inspect browser console errors.
@@ -90,5 +138,4 @@ npx wrangler rollback <previous-version-id>
 
 Confirm the expected app loads after rollback, then revert the source change
 through a PR so the next automatic build does not deploy it again. Rolling back
-static assets does not undo Supabase data or migrations. This release changes
-no database schema.
+static assets does not undo Supabase data or migrations. The isolation and safety changes introduce no database migration.

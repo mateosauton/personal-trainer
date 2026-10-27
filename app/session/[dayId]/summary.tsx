@@ -1,6 +1,6 @@
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import Animated, { FadeIn, FadeInDown, ReduceMotion } from 'react-native-reanimated';
 
@@ -18,7 +18,6 @@ import {
 } from '@/components/ui';
 import { notify } from '@/lib/alerts';
 import { useAuth, useUserId } from '@/lib/auth';
-import { getExercise } from '@/lib/catalog';
 import {
   applySessionProgress,
   getSessionProgressResult,
@@ -26,22 +25,23 @@ import {
   getProgress,
   getSessionSetSnapshot,
   getSessionCalculationContext,
-  type ProgressRow,
   type SessionSummaryLine,
 } from '@/lib/db/queries';
 import {
   failedSyncCount,
   flushOutbox,
+  getLocalSessionReceipt,
+  queueCompletion,
   pendingSyncCount,
 } from '@/lib/session/sync';
 import { workouts } from '@/lib/session/workout';
+import { finalizeWorkout } from '@/lib/session/finalize';
 import { buildOfflineSummary } from '@/lib/session/offline-summary';
 import { claimCompletionMotion, isFreshWorkoutCompletion } from '@/lib/session/completion-motion';
-import { nextLoad } from '@/lib/progression';
-import { sessionTotals } from '@/lib/stats';
+import { clientForAccessToken } from '@/lib/db/supabase';
 import { colors, space, type } from '@/lib/theme';
 import { motion } from '@/lib/motion';
-import { effectiveLoadKg, estimateOneRepMax, formatWeight } from '@/lib/units';
+import { formatWeight } from '@/lib/units';
 import type { Units } from '@/lib/types';
 
 export default function SessionSummary() {
@@ -52,7 +52,7 @@ export default function SessionSummary() {
     celebrate?: string;
   }>();
   const userId = useUserId();
-  const { profile } = useAuth();
+  const { profile, session } = useAuth();
   const router = useRouter();
 
   const [lines, setLines] = useState<SessionSummaryLine[]>([]);
@@ -60,28 +60,30 @@ export default function SessionSummary() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+
+  const routeDurationS = Number.parseInt(elapsed ?? '0', 10) || 0;
+  const [durationS, setDurationS] = useState(routeDurationS);
+  const [syncState, setSyncState] = useState<'pending' | 'review' | null>(null);
   const [contextUnknown, setContextUnknown] = useState(false);
   const [animateIntro, setAnimateIntro] = useState(false);
   const [animatePr, setAnimatePr] = useState(false);
-
-  const durationS = Number.parseInt(elapsed ?? '0', 10) || 0;
+  const identity = `${userId}:${sessionId}`;
+  const currentIdentity = useRef(identity);
+  currentIdentity.current = identity;
   const profileUnits = profile?.units ?? 'kg';
   const [units, setUnits] = useState<Units>(profileUnits);
-  const [capturedDurationS, setCapturedDurationS] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setSyncMessage(null);
-    setContextUnknown(false);
-    setCapturedDurationS(null);
-    setAnimateIntro(false);
-    setAnimatePr(false);
-    let provisional: ReturnType<typeof buildOfflineSummary> = null;
-    const freshFinish = celebrate === '1' && isFreshWorkoutCompletion(userId, sessionId);
+    let polling: ReturnType<typeof setInterval> | undefined;
+    let refreshing = false;
     let revealed = false;
+    const freshFinish = celebrate === '1' && isFreshWorkoutCompletion(userId, sessionId);
+    const controller = new AbortController();
+    const guard = () => {
+      if (cancelled || currentIdentity.current !== identity || controller.signal.aborted)
+        throw Object.assign(new Error('Workout summary closed.'), { name: 'AbortError' });
+    };
     const revealSummary = () => {
       if (!revealed) {
         revealed = true;
@@ -89,198 +91,135 @@ export default function SessionSummary() {
       }
       setLoading(false);
     };
-
-    (async () => {
-      const local = await workouts.read(userId);
-      if (cancelled) return;
-      const captured = local?.sessionId === sessionId ? local : null;
-      provisional = buildOfflineSummary(captured, userId, sessionId);
-      if (provisional) {
-        setLines(provisional.lines);
-        setUnits(provisional.units);
-        setCapturedDurationS(provisional.durationS);
-        setContextUnknown(captured?.calculationContextKnown === false);
-        setSyncMessage('Saved on this device. Syncing your workout before confirming personal records and next loads.');
-        revealSummary();
-      }
-      // A failed send leaves operations queued even though flush resolves.
-      // Never derive future loads from a partial server view of this workout.
-      await flushOutbox();
-      if ((await failedSyncCount(sessionId)) > 0) {
-        throw new Error(
-          'Some sets could not sync. Retry workout sync from Home before saving this summary.',
-        );
-      }
-      if ((await pendingSyncCount(sessionId)) > 0) {
-        throw new Error(
-          'Your workout is still syncing. Reconnect and retry to see all your sets.',
-        );
-      }
-      if (cancelled) return;
-      const calculation = captured && captured.calculationContextKnown !== false
-        ? { units: captured.units, bodyweightKg: captured.bodyweightKg ?? null }
-        : await getSessionCalculationContext(sessionId, userId);
-      if (cancelled) return;
-      const calculationUnits = calculation?.units ?? profileUnits;
-      const bodyweightKg = calculation?.bodyweightKg ?? null;
-      setContextUnknown(calculation === null);
-      const previous = await getSessionProgressResult(sessionId);
-      if (cancelled) return;
-      if (previous !== null) {
-        setUnits(calculationUnits);
-        await workouts.clear(userId, sessionId);
-        if (cancelled) return;
-        setLines(previous);
-        setSyncMessage(null);
-        revealSummary();
-        return;
-      }
-      setUnits(calculationUnits);
-      const day = await getSessionPlanDay(sessionId, userId);
-      if (!day)
-        throw new Error(
-          'Could not load the original workout day. Please retry.',
-        );
-      const itemById = new Map(
-        (day?.blocks ?? []).flatMap((b) =>
-          b.items.map((i) => [i.id, { item: i, block: b }]),
-        ),
-      );
-
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        // A stale snapshot retry must refresh sets as well as progression.
-        const [snapshot, progress] = await Promise.all([
-          getSessionSetSnapshot(sessionId),
-          getProgress(userId),
-        ]);
-        if (cancelled) return;
-        const logs = snapshot.logs;
-        const grouped = new Map<string, typeof logs>();
-        for (const log of logs) {
-          const list = grouped.get(log.exercise_id) ?? [];
-          list.push(log);
-          grouped.set(log.exercise_id, list);
-        }
-        const built: SessionSummaryLine[] = [];
-        const updates: ProgressRow[] = [];
-
-        for (let [exerciseId, sets] of grouped) {
-          const exercise = getExercise(exerciseId);
-          const allSets = sets;
-          const hasTimed = allSets.some(s => s.seconds != null || itemById.get(s.plan_item_id ?? '')?.item.seconds != null);
-          const seconds = allSets.reduce((sum, s) => sum + (s.seconds ?? 0), 0);
-          sets = sets.filter(s => s.seconds == null && itemById.get(s.plan_item_id ?? '')?.item.seconds == null);
-          const loads = sets.map((s) => effectiveLoadKg(s, bodyweightKg));
-          const { volumeKg } = sessionTotals(sets, bodyweightKg);
-          const topLoadKg = loads.reduce<number | null>(
-            (best, l) => (l != null && (best == null || l > best) ? l : best),
-            null,
-          );
-
-          const e1rm = sets.reduce((best, s, i) => {
-            const load = loads[i];
-            if (load == null || !s.reps) return best;
-            return Math.max(best, estimateOneRepMax(load, s.reps));
-          }, 0);
-
-          const known = progress.get(exerciseId);
-          const context = itemById.get(sets[0]?.plan_item_id ?? '');
-          const workingLoad = sets[0]?.is_bodyweight
-            ? sets[0].added_load_kg
-            : sets[0]?.weight_kg ?? null;
-
-          const verdict =
-            context && exercise && calculation
-              ? nextLoad(
-                  sets.map((s) => ({ reps: s.reps, rpe: s.rpe })),
-                  context.item.reps_high,
-                  context.item.reps_low,
-                  exercise.pattern,
-                  workingLoad,
-                  {
-                    last_weight_kg: known?.last_weight_kg ?? null,
-                    miss_streak: known?.miss_streak ?? 0,
-                  },
-                  calculationUnits,
-                )
-              : null;
-
-          const isPr =
-            topLoadKg != null &&
-            (known?.best_weight_kg == null || topLoadKg > known.best_weight_kg);
-
-          built.push({
-            exerciseId,
-            name: exercise?.name ?? exerciseId,
-            sets: allSets.length,
-            ...(hasTimed ? { seconds } : {}),
-            volumeKg,
-            topLoadKg,
-            verdict: verdict?.verdict ?? null,
-            isPr,
-          });
-
-          // Warm-ups carry no load and should never move a working weight.
-          if (context && context.block.kind !== 'warmup' && calculation) {
-            updates.push({
-              exercise_id: exerciseId,
-              last_weight_kg: verdict?.last_weight_kg ?? workingLoad,
-              last_reps: sets[sets.length - 1].reps,
-              best_weight_kg: isPr
-                ? topLoadKg
-                : (known?.best_weight_kg ?? null),
-              best_e1rm: Math.max(e1rm, known?.best_e1rm ?? 0) || null,
-              miss_streak: verdict?.miss_streak ?? 0,
-            });
-          }
-        }
-
-        if (!cancelled) {
-          let saved: SessionSummaryLine[];
-          try {
-            saved = await applySessionProgress(
-              sessionId,
-              updates.map((row) => ({
-                exercise_id: row.exercise_id,
-                state: progress.get(row.exercise_id) ?? null,
-              })),
-              updates,
-              built,
-              snapshot.versions,
-            );
-          } catch (error) {
-            if ((error as { code?: string }).code === '40001' && attempt < 2)
-              continue;
-            throw error;
-          }
-          if (cancelled) return;
-          await workouts.clear(userId, sessionId);
-          if (cancelled) return;
-          setLines(saved);
-          setSyncMessage(null);
-          revealSummary();
-          const freshPr = freshFinish && saved.some((line) => line.isPr)
-            && claimCompletionMotion(userId, sessionId, 'pr');
-          setAnimatePr(freshPr);
-          if (freshPr) {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          }
+    const showConfirmed = (confirmed: SessionSummaryLine[], confirmedUnits: Units, seconds: number) => {
+      guard();
+      setLines(confirmed);
+      setUnits(confirmedUnits);
+      setDurationS(seconds);
+      setSyncState(null);
+      revealSummary();
+      const freshPr = freshFinish && confirmed.some(line => line.isPr)
+        && claimCompletionMotion(userId, sessionId, 'pr');
+      setAnimatePr(freshPr);
+      if (freshPr) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (polling !== undefined) clearInterval(polling);
+      polling = undefined;
+    };
+    const refreshLocalReceipt = async () => {
+      if (refreshing || cancelled) return;
+      refreshing = true;
+      try {
+        guard();
+        const receipt = await getLocalSessionReceipt(userId, sessionId);
+        guard();
+        if (receipt) {
+          setContextUnknown(receipt.calculationContextKnown === false);
+          showConfirmed(receipt.lines, receipt.units, receipt.durationS);
           return;
         }
+        const failed = await failedSyncCount(sessionId);
+        guard();
+        setSyncState(failed > 0 ? 'review' : 'pending');
+      } finally { refreshing = false; }
+    };
+    setLoading(true);
+    setError(null);
+    setSyncState(null);
+    setContextUnknown(false);
+    setAnimateIntro(false);
+    setAnimatePr(false);
+    setDurationS(routeDurationS);
+
+    (async () => {
+      const receipt = await getLocalSessionReceipt(userId, sessionId);
+      guard();
+      if (receipt) {
+        setContextUnknown(receipt.calculationContextKnown === false);
+        showConfirmed(receipt.lines, receipt.units, receipt.durationS);
+        return;
       }
-    })().catch((error: unknown) => {
-      if (!cancelled) {
-        const message = error instanceof Error ? error.message : 'Could not load your workout. Please retry.';
-        if (provisional) setSyncMessage(`Saved on this device. ${message} Personal records and next loads will be confirmed after sync.`);
-        else setError(message);
+      const local = await workouts.read(userId);
+      guard();
+      const captured = local?.ownerId === userId && local.sessionId === sessionId ? local : null;
+      if (captured?.endedAtMs != null) {
+        const observed = buildOfflineSummary(captured, userId, sessionId);
+        setLines(observed?.lines ?? []);
+        setUnits(captured.units);
+        setContextUnknown(captured.calculationContextKnown === false);
+        const seconds = Math.max(1, observed?.durationS ?? routeDurationS);
+        setDurationS(seconds);
+        setSyncState('pending');
+        revealSummary();
+        polling = setInterval(() => { void refreshLocalReceipt().catch(() => undefined); }, 5000);
+        void refreshLocalReceipt().catch(() => undefined);
+        // Sync owns finalization and keeps the snapshot until its receipt is durable.
+        void (async () => {
+          try {
+            await queueCompletion(userId, sessionId, seconds);
+            guard();
+            await flushOutbox();
+          } catch {
+            // The preview remains available while durable recovery retries.
+          } finally {
+            await refreshLocalReceipt().catch(() => undefined);
+          }
+        })();
+        return;
+      }
+
+      await flushOutbox();
+      guard();
+      if ((await failedSyncCount(sessionId)) > 0)
+        throw new Error('Some sets could not sync. Retry workout sync from Home before saving this summary.');
+      guard();
+      if ((await pendingSyncCount(sessionId)) > 0)
+        throw new Error('Your workout is still syncing. Reconnect and retry to see all your sets.');
+      guard();
+      const client = session?.access_token ? clientForAccessToken(session.access_token) : undefined;
+      const calculation = captured && captured.calculationContextKnown !== false
+        ? { units: captured.units, bodyweightKg: captured.bodyweightKg ?? null }
+        : await getSessionCalculationContext(sessionId, userId, client, controller.signal);
+      guard();
+      const calculationUnits = calculation?.units ?? profileUnits;
+      setContextUnknown(calculation === null);
+      const previous = await getSessionProgressResult(sessionId, client, controller.signal);
+      guard();
+      if (previous !== null) {
+        await workouts.clear(userId, sessionId, captured ?? undefined);
+        guard();
+        showConfirmed(previous, calculationUnits, routeDurationS);
+        return;
+      }
+      const day = await getSessionPlanDay(sessionId, userId, client, controller.signal);
+      guard();
+      if (!day) throw new Error('Could not load the original workout day. Please retry.');
+      const saved = await finalizeWorkout({ ownerId: userId, sessionId, day, units: calculationUnits,
+        bodyweightKg: calculation?.bodyweightKg ?? null, calculationContextKnown: calculation !== null,
+      }, {
+        guard,
+        getReceipt: async () => previous,
+        getSnapshot: (id, signal) => getSessionSetSnapshot(id, client, signal),
+        getProgress: (owner, signal) => getProgress(owner, client, signal),
+        applyProgress: (id, expected, updates, result, versions, signal) =>
+          applySessionProgress(id, expected, updates, result, versions, client, signal),
+      }, controller.signal);
+      guard();
+      await workouts.clear(userId, sessionId, captured ?? undefined);
+      guard();
+      showConfirmed(saved, calculationUnits, routeDurationS);
+    })().catch((failure: unknown) => {
+      if (!cancelled && currentIdentity.current === identity) {
+        setError(failure instanceof Error ? failure.message : 'Could not load your workout. Please retry.');
         setLoading(false);
       }
     });
 
     return () => {
       cancelled = true;
+      controller.abort();
+      if (polling !== undefined) clearInterval(polling);
     };
-  }, [sessionId, userId, dayId, profile?.bodyweight_kg, profileUnits, retry, celebrate]);
+  }, [sessionId, userId, dayId, profileUnits, session?.access_token, retry, celebrate]);
 
   const save = async () => {
     setSaving(true);
@@ -335,12 +274,12 @@ export default function SessionSummary() {
         <Display style={{ marginTop: space.sm }}>Nice work.</Display>
       </Animated.View>
       {contextUnknown ? <Muted style={{ marginTop: space.md }}>Original calculation details were not recorded for this workout. Bodyweight estimates and next-load recommendations are unavailable.</Muted> : null}
-      {syncMessage ? (
-        <Card style={{ marginTop: space.lg, gap: space.md }}>
-          <Body>{syncMessage}</Body>
-          <Button title="Sync summary" variant="surface" onPress={() => setRetry(value => value + 1)} />
-        </Card>
-      ) : null}
+      {syncState ? <Card style={{ marginTop: space.lg, gap: space.md }}>
+        <Body>{syncState === 'review'
+          ? 'Some saved sets need review. Open Home to resolve them.'
+          : 'Saved on this device. Waiting to sync.'}</Body>
+        <Button title="Sync summary" variant="surface" onPress={() => setRetry(value => value + 1)} />
+      </Card> : null}
 
       <Animated.View
         entering={animateIntro ? FadeIn.duration(motion.base).reduceMotion(
@@ -351,7 +290,7 @@ export default function SessionSummary() {
           <View style={styles.stats}>
             <Stat
               label="Minutes"
-              value={`${Math.max(1, Math.round((capturedDurationS ?? durationS) / 60))}`}
+              value={`${Math.max(1, Math.round(durationS / 60))}`}
             />
             <Stat label="Sets" value={`${totalSets}`} />
             <Stat label="Volume" value={formatWeight(totalVolume, units)} />

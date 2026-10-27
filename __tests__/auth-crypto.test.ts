@@ -24,6 +24,7 @@ jest.mock('expo-crypto', () => ({
 
 const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
 const originalEncoder = Object.getOwnPropertyDescriptor(globalThis, 'TextEncoder');
+const previousEnvironment = process.env.EXPO_PUBLIC_APP_ENV;
 const previousUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const previousKey = process.env.EXPO_PUBLIC_SUPABASE_KEY;
 const setCrypto = (value: unknown) => Object.defineProperty(globalThis, 'crypto', { configurable: true, writable: true, value });
@@ -33,14 +34,17 @@ beforeEach(() => {
   mockPlatform.OS = 'ios';
   setCrypto(undefined);
   Object.defineProperty(globalThis, 'TextEncoder', { configurable: true, writable: true, value: TextEncoder });
-  process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://audit.example.invalid';
-  process.env.EXPO_PUBLIC_SUPABASE_KEY = 'synthetic-publishable-key';
+  process.env.EXPO_PUBLIC_APP_ENV = 'mock';
+  process.env.EXPO_PUBLIC_SUPABASE_URL = 'http://127.0.0.1:54321';
+  process.env.EXPO_PUBLIC_SUPABASE_KEY = 'sb_publishable_LOCAL_TEST_FIXTURE_ONLY';
 });
 afterEach(() => {
   if (originalCrypto) Object.defineProperty(globalThis, 'crypto', originalCrypto);
   else Reflect.deleteProperty(globalThis, 'crypto');
   if (originalEncoder) Object.defineProperty(globalThis, 'TextEncoder', originalEncoder);
   else Reflect.deleteProperty(globalThis, 'TextEncoder');
+  if (previousEnvironment === undefined) delete process.env.EXPO_PUBLIC_APP_ENV;
+  else process.env.EXPO_PUBLIC_APP_ENV = previousEnvironment;
   if (previousUrl === undefined) delete process.env.EXPO_PUBLIC_SUPABASE_URL;
   else process.env.EXPO_PUBLIC_SUPABASE_URL = previousUrl;
   if (previousKey === undefined) delete process.env.EXPO_PUBLIC_SUPABASE_KEY;
