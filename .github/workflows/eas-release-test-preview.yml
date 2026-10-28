@@ -1,0 +1,364 @@
+name: Release-test device install
+
+# Manual internal install for a physical device. This is not production promotion.
+#
+# preview and development are unprovisioned in config/environments.json, so the
+# env guard rejects those profiles. This workflow publishes the release-test
+# profile and the release-test channel with the production EAS environment.
+# release-test extends production and intentionally contacts the production
+# Supabase project. It does not promote the production channel and it does not
+# read phone_tested evidence.
+#
+# iOS can fail with an Apple distribution-certificate 403 before an install
+# link exists. Android is the default and the path to dispatch for an APK.
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Device platform. Android is the install path. iOS may fail with an Apple distribution-certificate 403.
+        required: true
+        type: choice
+        default: android
+        options:
+          - android
+          - ios
+      mode:
+        description: >
+          build uploads a release-test binary. update publishes a release-test
+          OTA. both lists finished release-test builds and publishes an update
+          when one for that platform completed in the last 14 days; otherwise
+          it builds.
+        required: true
+        type: choice
+        default: both
+        options:
+          - build
+          - update
+          - both
+      message:
+        description: Optional release-test update message. Defaults to the commit SHA. Ignored when the run only builds.
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+# Do not cancel a publisher that may already have started a remote write.
+concurrency:
+  group: native-release-test-${{ inputs.platform }}
+  cancel-in-progress: false
+
+jobs:
+  install:
+    name: Release-test ${{ inputs.platform }} ${{ inputs.mode }}
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      EXPO_NO_DOTENV: "1"
+      RELEASE_PLATFORM: ${{ inputs.platform }}
+      RELEASE_MODE: ${{ inputs.mode }}
+      RELEASE_MESSAGE: ${{ inputs.message }}
+    steps:
+      - name: Check out master commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
+        with:
+          eas-version: 23.2.0
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build or publish the release-test install
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$RELEASE_PLATFORM" in
+            android|ios) ;;
+            *) echo "platform must be android or ios" >&2; exit 1 ;;
+          esac
+          case "$RELEASE_MODE" in
+            build|update|both) ;;
+            *) echo "mode must be build, update, or both" >&2; exit 1 ;;
+          esac
+
+          if [ -z "${RELEASE_MESSAGE//[[:space:]]/}" ]; then
+            RELEASE_MESSAGE="Release-test ${RELEASE_PLATFORM} ${GITHUB_SHA}"
+          fi
+          OFFICE_GYM_RELEASE_MESSAGE=$(printf '%s' "$RELEASE_MESSAGE" | tr '\r\n' '  ' | sed 's/[[:space:]]\{1,\}/ /g; s/^ //; s/ $//')
+          export OFFICE_GYM_RELEASE_MESSAGE
+          case "$OFFICE_GYM_RELEASE_MESSAGE" in
+            ""|-*)
+              echo "Update message must be nonempty and cannot start with '-'." >&2
+              exit 1
+              ;;
+          esac
+
+          if [ "$RELEASE_PLATFORM" = "android" ]; then
+            BUILD_INNER='node scripts/verify-environment.cjs --distribution --environment production && npx eas-cli@23.2.0 build --platform android --profile release-test --non-interactive --json'
+            UPDATE_INNER='node scripts/publish-update.cjs --channel release-test --environment production --platform android --message "$OFFICE_GYM_RELEASE_MESSAGE"'
+          else
+            BUILD_INNER='node scripts/verify-environment.cjs --distribution --environment production && npx eas-cli@23.2.0 build --platform ios --profile release-test --non-interactive --json'
+            UPDATE_INNER='node scripts/publish-update.cjs --channel release-test --environment production --platform ios --message "$OFFICE_GYM_RELEASE_MESSAGE"'
+          fi
+          case "${BUILD_INNER}${UPDATE_INNER}" in
+            *"--profile preview"*|*"--channel preview"*|*"--environment preview"*)
+              echo "Refusing to publish the unprovisioned preview environment." >&2
+              exit 1
+              ;;
+          esac
+
+          LOG_FILE="$RUNNER_TEMP/release-test-command.log"
+          LIST_FILE="$RUNNER_TEMP/release-test-builds.json"
+          LINK_FILE="$RUNNER_TEMP/release-test-link.txt"
+          ACTION_FILE="$RUNNER_TEMP/release-test-action.txt"
+          : > "$LOG_FILE"
+          : > "$LINK_FILE"
+
+          if [ "$RELEASE_MODE" = "both" ]; then
+            npx eas-cli@23.2.0 build:list \
+              --platform "$RELEASE_PLATFORM" \
+              --build-profile release-test \
+              --status finished \
+              --limit 5 \
+              --non-interactive \
+              --json > "$LIST_FILE"
+            node --input-type=module - "$LIST_FILE" "$ACTION_FILE" <<'EOF'
+          import { readFileSync, writeFileSync } from 'node:fs';
+
+          const recentMs = 14 * 24 * 60 * 60 * 1000;
+          const [listFile, actionFile] = process.argv.slice(2);
+          const builds = asArray(parseJson(readFileSync(listFile, 'utf8')));
+          const now = Date.now();
+          const usable = builds.filter((build) => isRecentFinished(build, now, recentMs));
+          usable.sort((left, right) => stamp(right) - stamp(left));
+          if (usable.length === 0) {
+            writeFileSync(actionFile, 'build\n');
+            console.error('No finished release-test build for this platform completed in the last 14 days. Starting a build.');
+            process.exit(0);
+          }
+          const selected = usable[0];
+          writeFileSync(actionFile, 'update\n');
+          console.error(`Recent finished release-test build ${selected.id || '(no id)'} is still within 14 days. Publishing an update.`);
+
+          function asArray(value) {
+            if (Array.isArray(value)) return value;
+            if (value && Array.isArray(value.builds)) return value.builds;
+            return [];
+          }
+
+          function parseJson(text) {
+            const starts = [];
+            if (text.startsWith('[') || text.startsWith('{')) starts.push(0);
+            for (let index = 0; index < text.length; index += 1) {
+              if (text[index] === '\n' && (text[index + 1] === '[' || text[index + 1] === '{')) starts.push(index + 1);
+            }
+            for (let index = starts.length - 1; index >= 0; index -= 1) {
+              try {
+                return JSON.parse(text.slice(starts[index]));
+              } catch {
+                // Keep scanning. CLI notices can precede the JSON payload.
+              }
+            }
+            throw new Error('eas build:list did not return JSON.');
+          }
+
+          function stamp(build) {
+            const value = Date.parse(build.completedAt || build.createdAt || '');
+            return Number.isFinite(value) ? value : 0;
+          }
+
+          function isRecentFinished(build, now, windowMs) {
+            if (String(build.status || '').toLowerCase() !== 'finished') return false;
+            if (build.buildProfile && build.buildProfile !== 'release-test') return false;
+            const expiration = Date.parse(build.expirationDate || '');
+            if (Number.isFinite(expiration) && expiration <= now) return false;
+            const created = stamp(build);
+            return created > 0 && now - created <= windowMs;
+          }
+          EOF
+          elif [ "$RELEASE_MODE" = "build" ]; then
+            printf 'build\n' > "$ACTION_FILE"
+          else
+            printf 'update\n' > "$ACTION_FILE"
+          fi
+
+          RAN_MODE=$(tr -d '[:space:]' < "$ACTION_FILE")
+          case "$RAN_MODE" in
+            build|update) ;;
+            *) echo "Could not decide release-test action." >&2; exit 1 ;;
+          esac
+          echo "Release-test action: ${RAN_MODE} (${RELEASE_PLATFORM}, requested ${RELEASE_MODE}, ${GITHUB_SHA})"
+
+          run_logged() {
+            local inner="$1"
+            local status=0
+            set +e
+            set +o pipefail
+            EXPO_NO_DOTENV=1 npx eas-cli@23.2.0 env:exec production "$inner" --non-interactive 2>&1 | tee -a "$LOG_FILE"
+            status=${PIPESTATUS[0]}
+            set -o pipefail
+            set -e
+            return "$status"
+          }
+
+          command_status=0
+          if [ "$RAN_MODE" = "build" ]; then
+            run_logged "$BUILD_INNER" || command_status=$?
+          else
+            run_logged "$UPDATE_INNER" || command_status=$?
+          fi
+
+          node --input-type=module - "$LOG_FILE" "$LIST_FILE" "$LINK_FILE" "$RAN_MODE" "$command_status" <<'EOF'
+          import { appendFileSync, readFileSync, existsSync } from 'node:fs';
+
+          const [logFile, listFile, linkFile, ranMode, commandStatus] = process.argv.slice(2);
+          const app = JSON.parse(readFileSync('app.json', 'utf8')).expo;
+          const lines = [];
+          const seen = new Set();
+
+          function add(label, url) {
+            if (typeof url !== 'string' || !/^https:\/\/(?:u\.)?expo\.dev\//.test(url)) return;
+            const clean = url.replace(/[.,);]+$/, '');
+            if (seen.has(clean)) return;
+            seen.add(clean);
+            lines.push(`- ${label}: ${clean}`);
+          }
+
+          if (existsSync(listFile) && ranMode === 'update') {
+            try {
+              const now = Date.now();
+              const usable = asArray(parseJson(readFileSync(listFile, 'utf8'))).filter((build) => isRecentFinished(build, now, 14 * 24 * 60 * 60 * 1000));
+              usable.sort((left, right) => stamp(right) - stamp(left));
+              const existing = usable[0];
+              if (existing) {
+                add('Existing release-test build', pageUrl(existing));
+                add('Existing release-test artifact', existing.artifacts?.applicationArchiveUrl || existing.artifacts?.buildUrl);
+              }
+            } catch (error) {
+              console.error(`Could not read the build list for the summary: ${error.message}`);
+            }
+          }
+
+          const log = existsSync(logFile) ? readFileSync(logFile, 'utf8') : '';
+          try {
+            const payload = parseJson(log);
+            for (const build of asArray(payload)) {
+              add('Build', pageUrl(build));
+              add('Install artifact', build.artifacts?.applicationArchiveUrl || build.artifacts?.buildUrl);
+            }
+          } catch {
+            // Text logs from eas update have no JSON payload.
+          }
+          for (const match of log.matchAll(/https:\/\/(?:u\.)?expo\.dev\/[^\s"'<>)\\]+/g)) {
+            const url = match[0];
+            if (url.includes('/updates/') || url.includes('u.expo.dev')) add('Update', url);
+            else if (url.includes('/builds/')) add('Build', url);
+            else if (url.includes('/artifacts/')) add('Install artifact', url);
+            else add('EAS', url);
+          }
+
+          if (app.owner && app.slug) {
+            const root = `https://expo.dev/accounts/${app.owner}/projects/${app.slug}`;
+            add(ranMode === 'update' ? 'Release-test updates' : 'Release-test builds', ranMode === 'update' ? `${root}/updates` : `${root}/builds`);
+          }
+
+          appendFileSync(linkFile, lines.length > 0 ? `${lines.join('\n')}\n` : '');
+
+          const summary = [];
+          summary.push('## Release-test device install');
+          summary.push('');
+          summary.push('Internal **release-test** install. It uses the production EAS environment and the production Supabase project. It does not promote the production channel.');
+          summary.push('');
+          summary.push(`- Platform: \`${process.env.RELEASE_PLATFORM}\``);
+          summary.push(`- Requested mode: \`${process.env.RELEASE_MODE}\``);
+          summary.push(`- Ran: \`${ranMode}\``);
+          summary.push('- Profile: `release-test`');
+          summary.push('- Channel: `release-test`');
+          summary.push(`- Commit: \`${process.env.GITHUB_SHA}\``);
+          summary.push(`- Result: ${commandStatus === '0' ? 'succeeded' : `failed (exit ${commandStatus})`}`);
+          if (process.env.RELEASE_PLATFORM === 'ios') {
+            summary.push('');
+            summary.push('iOS can fail with an Apple distribution-certificate 403 before an install link exists. Android is the supported install path.');
+          }
+          if (ranMode === 'update') {
+            summary.push('');
+            summary.push('An update reaches a device only after a matching release-test binary is installed. Use the build link if this phone does not already have that binary.');
+          }
+          summary.push('');
+          summary.push('### Links');
+          summary.push(lines.length > 0 ? lines.join('\n') : '- No EAS URL was captured. Check the step log for an expo.dev link.');
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary.join('\n')}\n`);
+
+          function asArray(value) {
+            if (Array.isArray(value)) return value;
+            if (value && Array.isArray(value.builds)) return value.builds;
+            if (value && typeof value === 'object') return [value];
+            return [];
+          }
+
+          function parseJson(text) {
+            const starts = [];
+            if (text.startsWith('[') || text.startsWith('{')) starts.push(0);
+            for (let index = 0; index < text.length; index += 1) {
+              if (text[index] === '\n' && (text[index + 1] === '[' || text[index + 1] === '{')) starts.push(index + 1);
+            }
+            for (let index = starts.length - 1; index >= 0; index -= 1) {
+              try {
+                return JSON.parse(text.slice(starts[index]));
+              } catch {
+                // Keep scanning.
+              }
+            }
+            throw new Error('No JSON payload.');
+          }
+
+          function stamp(build) {
+            const value = Date.parse(build.completedAt || build.createdAt || '');
+            return Number.isFinite(value) ? value : 0;
+          }
+
+          function isRecentFinished(build, now, windowMs) {
+            if (String(build.status || '').toLowerCase() !== 'finished') return false;
+            if (build.buildProfile && build.buildProfile !== 'release-test') return false;
+            const expiration = Date.parse(build.expirationDate || '');
+            if (Number.isFinite(expiration) && expiration <= now) return false;
+            const created = stamp(build);
+            return created > 0 && now - created <= windowMs;
+          }
+
+          function pageUrl(build) {
+            const owner = build.project?.ownerAccount?.name;
+            const slug = build.project?.slug;
+            if (owner && slug && build.id) return `https://expo.dev/accounts/${owner}/projects/${slug}/builds/${build.id}`;
+            return '';
+          }
+          EOF
+
+          if [ "$command_status" -ne 0 ]; then
+            echo "Release-test ${RAN_MODE} failed with exit ${command_status}." >&2
+            exit "$command_status"
+          fi
+
+      - name: Upload release-test link
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-test-link-${{ github.run_id }}
+          path: ${{ runner.temp }}/release-test-link.txt
+          if-no-files-found: ignore
+          retention-days: 30
