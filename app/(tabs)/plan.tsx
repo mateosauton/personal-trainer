@@ -4,14 +4,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Calendar } from '@/components/Calendar';
-import { ExerciseMedia } from '@/components/ExerciseMedia';
 import { GymRoutineCard } from '@/components/GymRoutineCard';
-import { PlanExpansion, PlanExpansionChevron } from '@/components/PlanExpansion';
+import { PlanExpansion } from '@/components/PlanExpansion';
 import { Body, Button, Card, Display, Heading, Muted, Overline, Screen } from '@/components/ui';
 import { useAuth, useUserId } from '@/lib/auth';
 import { getExercise } from '@/lib/catalog';
 import { getSetLogsForSessions } from '@/lib/db/queries';
-import { bodyPartLabel, estimateDay } from '@/lib/plan/estimate';
+import { estimateDay, planScreenSummary, planScreenTitle, sessionCardMeta, sessionCardTitle } from '@/lib/plan/estimate';
 import { isGymRoutine } from '@/lib/plan/gym-routine';
 import { sessionTotals, type Totals } from '@/lib/stats';
 import { colors, space, type } from '@/lib/theme';
@@ -19,9 +18,9 @@ import { formatWeight } from '@/lib/units';
 import { useDashboard, type HistorySession } from '@/lib/useDashboard';
 
 /**
- * The plan and the record of it, on one screen. History was its own tab, which
- * meant what you did and what you are meant to do never appeared together;
- * here a trained day on the calendar opens the session that filled it.
+ * Plan opens on the session list (Figma PL03 / PL04). A day heading expands
+ * its blocks; Start and View both open that next session. The calendar and
+ * the PPL switch stay on the same screen, below the list.
  */
 export default function PlanTab() {
   const userId = useUserId();
@@ -93,14 +92,23 @@ export default function PlanTab() {
     );
   }
 
+  const routine = isGymRoutine(plan);
+  const logged = usingCachedPlan || error ? null : sessions.length;
+  const openSession = (dayId: string) => router.push(`/session/${dayId}`);
+
   return (
     <Screen ref={scrollRef}>
-      <Overline>Your plan</Overline>
-      <Display style={{ marginTop: space.sm }}>{plan.name}</Display>
+      <Overline>Office Gym</Overline>
+      <Display style={{ marginTop: space.sm }}>{planScreenTitle(routine)}</Display>
       <Muted style={{ marginTop: space.sm }}>
-        {isGymRoutine(plan) ? `${plan.days.length}-session rotation` : `${plan.days.length} days a week`}
-        {' · '}{plan.weeks} week block{!usingCachedPlan && !error ? ` · ${sessions.length} logged` : ''}
+        {planScreenSummary(plan.days.length, plan.weeks, logged, routine)}
       </Muted>
+      {routine ? (
+        <Muted style={{ marginTop: space.sm }}>
+          47 min target · Push A → Pull A → Legs A → Push B → Pull B → Legs B.
+          Take rest days between sessions.
+        </Muted>
+      ) : null}
       {(usingCachedPlan || error) && (
         <Card style={{ marginTop: space.lg, gap: space.sm }}>
           <Muted>{usingCachedPlan
@@ -109,85 +117,26 @@ export default function PlanTab() {
           <Button title="Retry connection" variant="ghost" onPress={reload} />
         </Card>
       )}
-      {isGymRoutine(plan) ? (
-        <Muted style={{ marginTop: space.sm }}>
-          47 min target · Push A → Pull A → Legs A → Push B → Pull B → Legs B.
-          Take rest days between sessions.
-        </Muted>
-      ) : <GymRoutineCard userId={userId} onActivated={reload} />}
 
-      {!usingCachedPlan && !error && <View
-        style={{ marginTop: space.xl }}
-        onLayout={(e) => {
-          calendarY.current = e.nativeEvent.layout.y;
-        }}
-      >
-        <Calendar today={today} trainedDays={trainedDays} selected={selected} onSelect={setSelected} />
-      </View>}
-
-      {selected && daySessions.length > 0 ? (
-        <Card style={styles.dayCard}>
-          <Overline>{format(new Date(`${selected}T00:00:00`), 'EEEE d MMMM')}</Overline>
-          {daySessions.map((session) => (
-            <View key={session.id} style={{ gap: 2 }}>
-              <Body style={styles.strong}>{session.plan_days?.name ?? 'Session'}</Body>
-              <Muted>
-                {session.plan_days?.focus ?? '—'}
-                {session.duration_s ? ` · ${Math.round(session.duration_s / 60)} min` : ''}
-                {session.rpe ? ` · RPE ${session.rpe}` : ''}
-              </Muted>
-            </View>
-          ))}
-          {selectedTotals ? (
-            <View style={styles.stats}>
-              <Stat label="Sets" value={`${selectedTotals.sets}`} />
-              <Stat label="Reps" value={`${selectedTotals.reps}`} />
-              <Stat
-                label="Volume"
-                value={selectedTotals.volumeKg > 0 ? formatWeight(selectedTotals.volumeKg, units) : '—'}
-              />
-            </View>
-          ) : null}
-        </Card>
-      ) : null}
-
-      <Muted style={{ marginTop: space.sm }}>Calendar and history use {homeTimezone}, including while travelling.</Muted>
-      <Overline style={{ marginTop: space.xxl }}>Sessions in this plan</Overline>
-
-      <View style={{ gap: space.lg, marginTop: space.lg }}>
+      <View style={{ gap: space.md, marginTop: space.xl }} testID="plan-sessions">
         {plan.days.map((day) => {
           const isNext = day.id === nextDay?.id;
           const open = expanded === day.id;
           const estimate = estimateDay(day);
-          const work = day.blocks.filter((b) => b.kind !== 'warmup');
-          const cover = getExercise(work[0]?.items[0]?.exercise_id ?? '');
+          const title = sessionCardTitle(day.name, day.day_index, isNext);
 
           return (
-            <Card key={day.id} style={isNext ? styles.nextCard : undefined}>
+            <Card key={day.id}>
               <Pressable
                 onPress={() => setExpanded((current) => current === day.id ? null : day.id)}
                 accessibilityRole="button"
                 accessibilityState={{ expanded: open }}
-                accessibilityLabel={`${day.name} details`}
-                style={styles.cardHead}
+                accessibilityLabel={`${title} details`}
+                style={{ gap: 2 }}
               >
-                {cover ? <ExerciseMedia exercise={cover} style={styles.thumb} /> : null}
-                <View style={{ flex: 1, gap: 2 }}>
-                  <Overline style={isNext ? { color: colors.accent } : undefined}>
-                    {isNext ? 'Up next' : `Day ${day.day_index + 1}`}
-                  </Overline>
-                  <Body style={styles.dayName}>{day.name}</Body>
-                  <Muted numberOfLines={2}>{bodyPartLabel(estimate.bodyParts)}</Muted>
-                </View>
-                <PlanExpansionChevron expanded={open} />
+                <Body style={styles.dayName}>{title}</Body>
+                <Muted>{sessionCardMeta(estimate.minutes, estimate.blocks, estimate.sets)}</Muted>
               </Pressable>
-
-              <View style={styles.stats}>
-                <Stat label="Reps" value={`${estimate.reps}`} />
-                <Stat label="Est. min" value={`${estimate.minutes}`} />
-                <Stat label="Blocks" value={`${estimate.blocks}`} />
-                <Stat label="Sets" value={`${estimate.sets}`} />
-              </View>
 
               <PlanExpansion expanded={open}>
                 <View style={{ gap: space.lg, paddingTop: space.lg }}>
@@ -224,17 +173,63 @@ export default function PlanTab() {
                   ))}
                 </View>
               </PlanExpansion>
-
-              <Button
-                title={isNext ? 'Start this session' : 'View session'}
-                variant={isNext ? 'accent' : 'surface'}
-                onPress={() => router.push(`/session/${day.id}`)}
-                style={{ marginTop: space.lg }}
-              />
             </Card>
           );
         })}
       </View>
+
+      {nextDay ? (
+        <View style={{ marginTop: space.xl, gap: space.xs }}>
+          <Button title="Start this session" onPress={() => openSession(nextDay.id)} />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="View session"
+            onPress={() => openSession(nextDay.id)}
+            style={styles.textAction}
+          >
+            <Muted>View session</Muted>
+          </Pressable>
+        </View>
+      ) : null}
+      {routine ? null : <GymRoutineCard userId={userId} onActivated={reload} variant="link" />}
+
+      {!usingCachedPlan && !error && <View
+        style={{ marginTop: space.xl }}
+        onLayout={(e) => {
+          calendarY.current = e.nativeEvent.layout.y;
+        }}
+        testID="plan-calendar"
+      >
+        <Calendar today={today} trainedDays={trainedDays} selected={selected} onSelect={setSelected} />
+      </View>}
+
+      {selected && daySessions.length > 0 ? (
+        <Card style={styles.dayCard}>
+          <Overline>{format(new Date(`${selected}T00:00:00`), 'EEEE d MMMM')}</Overline>
+          {daySessions.map((session) => (
+            <View key={session.id} style={{ gap: 2 }}>
+              <Body style={styles.strong}>{session.plan_days?.name ?? 'Session'}</Body>
+              <Muted>
+                {session.plan_days?.focus ?? '—'}
+                {session.duration_s ? ` · ${Math.round(session.duration_s / 60)} min` : ''}
+                {session.rpe ? ` · RPE ${session.rpe}` : ''}
+              </Muted>
+            </View>
+          ))}
+          {selectedTotals ? (
+            <View style={styles.stats}>
+              <Stat label="Sets" value={`${selectedTotals.sets}`} />
+              <Stat label="Reps" value={`${selectedTotals.reps}`} />
+              <Stat
+                label="Volume"
+                value={selectedTotals.volumeKg > 0 ? formatWeight(selectedTotals.volumeKg, units) : '—'}
+              />
+            </View>
+          ) : null}
+        </Card>
+      ) : null}
+
+      <Muted style={{ marginTop: space.sm }}>Calendar and history use {homeTimezone}, including while travelling.</Muted>
 
       {sessions.length > 0 ? (
         <>
@@ -282,10 +277,8 @@ const Stat = ({ label, value }: { label: string; value: string }) => (
 const styles = StyleSheet.create({
   center: { alignItems: 'center', justifyContent: 'center' },
   dayCard: { marginTop: space.lg, gap: space.md },
-  nextCard: { borderColor: colors.accent },
-  cardHead: { flexDirection: 'row', gap: space.md, alignItems: 'center' },
-  thumb: { width: 64, height: 64 },
   dayName: { ...type.heading },
+  textAction: { minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   stats: { flexDirection: 'row', gap: space.md, marginTop: space.lg },
   strong: { ...type.body, fontWeight: '700' },
   itemRow: { flexDirection: 'row', justifyContent: 'space-between', gap: space.md },

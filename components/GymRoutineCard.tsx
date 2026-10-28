@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { Pressable, View } from 'react-native';
 
 import { Body, Button, Card, Heading, Muted, Overline } from '@/components/ui';
 import { savePlan } from '@/lib/db/queries';
@@ -9,9 +10,11 @@ import { confirm } from '@/lib/alerts';
 import { workouts } from '@/lib/session/workout';
 import { space } from '@/lib/theme';
 
-export function GymRoutineCard({ userId, onActivated }: {
+export function GymRoutineCard({ userId, onActivated, variant = 'card' }: {
   userId: string;
   onActivated: () => void;
+  /** `link` is the PL03 text action. The card is the no-plan and promotion layout. */
+  variant?: 'card' | 'link';
 }) {
   const { profile } = useAuth();
   const [saving, setSaving] = useState(false);
@@ -35,6 +38,23 @@ export function GymRoutineCard({ userId, onActivated }: {
       setSaving(false);
     }
   };
+
+  if (variant === 'link') {
+    return (
+      <View style={{ marginTop: space.lg, alignItems: 'center', gap: space.sm }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Use 47 min PPL routine"
+          disabled={saving}
+          onPress={activate}
+          style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: space.md }}
+        >
+          <Muted>{saving ? 'Saving the routine…' : 'Use 47 min PPL routine'}</Muted>
+        </Pressable>
+        {error ? <Body accessibilityRole="alert">{error}</Body> : null}
+      </View>
+    );
+  }
 
   return (
     <Card style={{ marginTop: space.xl, gap: space.md }}>

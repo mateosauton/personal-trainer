@@ -75,6 +75,33 @@ export function estimateDay(day: PlanDay): DayEstimate {
   };
 }
 
+/** PL03/PL04 title. Only the rotation's next day reads "Up next". */
+export function sessionCardTitle(name: string, dayIndex: number, isNext: boolean): string {
+  return isNext ? `Up next · ${name}` : `Day ${dayIndex + 1} · ${name}`;
+}
+
+/** Collapsed session line: "48 min · 3 blocks · 15 sets". */
+export function sessionCardMeta(minutes: number, blocks: number, sets: number): string {
+  return `${minutes} min · ${blocks} ${blocks === 1 ? 'block' : 'blocks'} · ${sets} ${sets === 1 ? 'set' : 'sets'}`;
+}
+
+/** Personalized plans use "Your plan"; the authored rotation uses its Figma title. */
+export function planScreenTitle(isRoutine: boolean): string {
+  return isRoutine ? 'Push · Pull · Legs' : 'Your plan';
+}
+
+/**
+ * Header under the title. `logged` is omitted when history has not loaded,
+ * so a cached plan does not claim zero sessions.
+ */
+export function planScreenSummary(days: number, weeks: number, logged: number | null, isRoutine: boolean): string {
+  const cadence = isRoutine
+    ? `${days}-session rotation`
+    : `${days} ${days === 1 ? 'day' : 'days'} a week`;
+  const loggedLabel = logged == null ? '' : ` · ${logged} logged`;
+  return `${cadence} · ${weeks} week block${loggedLabel}`;
+}
+
 /** Sentence-cased muscle list, capped so a card stays a card. */
 export function bodyPartLabel(parts: string[], max = 4): string {
   if (parts.length === 0) return '—';
