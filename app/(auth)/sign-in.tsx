@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { useRouter } from 'expo-router';
 import { Keyboard, KeyboardAvoidingView, Platform, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -6,7 +7,7 @@ import { Body, Button, Display, Muted, Overline, Screen } from '@/components/ui'
 import { SocialSignInButtons } from '@/components/SocialSignInButtons';
 import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/db/supabase';
-import { authRecoveryRedirectTo, authRedirectTo } from '@/lib/deep-link';
+import { authRedirectTo } from '@/lib/deep-link';
 import { devLoginEmail, devLoginEnabled, devSignIn } from '@/lib/dev-auth';
 import { signInWithSocialProvider, type SocialProvider } from '@/lib/social-auth';
 import { colors, radius, space, type, webFocusRing } from '@/lib/theme';
@@ -14,22 +15,22 @@ import { colors, radius, space, type, webFocusRing } from '@/lib/theme';
 export default function SignIn() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [mode, setMode] = useState<'signIn' | 'signUp' | 'reset'>('signIn');
+  const [mode, setMode] = useState<'signIn' | 'signUp'>('signIn');
   const [busy, setBusy] = useState<'email' | 'dev' | SocialProvider | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const insets = useSafeAreaInsets();
   const passwordRef = useRef<TextInput>(null);
   const pendingAction = useRef(false);
+  const router = useRouter();
   const { authError, clearAuthError } = useAuth();
 
   const isSignUp = mode === 'signUp';
-  const isReset = mode === 'reset';
   const isBusy = busy != null;
   const errorMessage = error ?? (authError instanceof Error ? authError.message : authError);
   // The keyboard's return key and the button are the same action, so they read
   // the same condition rather than each deciding for themselves.
-  const canSubmit = email.trim().length > 0 && (isReset || password.length >= 6) && !isBusy;
+  const canSubmit = email.trim().length > 0 && password.length >= 6 && !isBusy;
 
   const begin = (action: NonNullable<typeof busy>) => {
     if (pendingAction.current) return false;
@@ -47,8 +48,7 @@ export default function SignIn() {
     setBusy(null);
   };
 
-  /** Both routes back to sign-in run through here so they behave identically. */
-  const goTo = (next: 'signIn' | 'signUp' | 'reset') => {
+  const goTo = (next: 'signIn' | 'signUp') => {
     if (pendingAction.current) return;
     Keyboard.dismiss();
     setMode(next);
@@ -82,11 +82,7 @@ export default function SignIn() {
   const submit = async () => {
     if (!canSubmit || !begin('email')) return;
     try {
-      if (mode === 'reset') {
-        const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: authRecoveryRedirectTo() });
-        if (error) throw error;
-        setNotice('If an account exists for this email, you’ll receive a reset link. Open it on this phone.');
-      } else if (mode === 'signUp') {
+      if (mode === 'signUp') {
         const { data, error: signUpError } = await supabase.auth.signUp({
           email: email.trim(),
           password,
@@ -117,7 +113,7 @@ export default function SignIn() {
       {/* Outside the ScrollView on purpose: while creating an account the way
           back must stay put, even with the software keyboard covering the
           bottom of the screen and the form scrolled. */}
-      {isSignUp || isReset ? (
+      {isSignUp ? (
         <View style={[styles.topBar, { paddingTop: insets.top + space.sm }]}>
           <Button
             variant="ghost"
@@ -133,47 +129,55 @@ export default function SignIn() {
 
       <Screen
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={[styles.content, (isSignUp || isReset) && styles.contentUnderTopBar]}
+        contentContainerStyle={[styles.content, isSignUp && styles.contentUnderTopBar]}
       >
-        <View style={[styles.header, (isSignUp || isReset) && styles.headerUnderTopBar]}>
-          <Overline>Office Gym</Overline>
+        <View style={[styles.header, isSignUp && styles.headerUnderTopBar]}>
+          <Overline>{isSignUp ? 'Office Gym' : 'Email sign-in'}</Overline>
           <Display style={styles.display}>
-            {isReset ? 'Reset your\npassword.' : isSignUp ? 'Let’s get\nyou set up.' : 'Welcome\nback.'}
+            {isSignUp ? 'Let’s get\nyou set up.' : 'Sign in'}
           </Display>
-          <Muted style={{ marginTop: space.md }}>
-            Your plan, your logs, your progress — on your phone.
-          </Muted>
+          {isSignUp ? (
+            <Muted style={{ marginTop: space.md }}>
+              Your plan, your logs, your progress — on your phone.
+            </Muted>
+          ) : null}
         </View>
 
         <View style={styles.form}>
-          <SocialSignInButtons
-            disabled={isBusy}
-            loading={busy === 'google' || busy === 'apple' ? busy : null}
-            onPress={(provider) => { void socialSubmit(provider); }}
-          />
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Muted>or use email</Muted>
-            <View style={styles.dividerLine} />
-          </View>
+          {isSignUp ? (
+            <>
+              <SocialSignInButtons
+                disabled={isBusy}
+                loading={busy === 'google' || busy === 'apple' ? busy : null}
+                onPress={(provider) => { void socialSubmit(provider); }}
+              />
+              <View style={styles.divider}>
+                <View style={styles.dividerLine} />
+                <Muted>or use email</Muted>
+                <View style={styles.dividerLine} />
+              </View>
+            </>
+          ) : null}
           <TextInput
             style={styles.input}
             placeholder="Email"
+            accessibilityLabel="Email"
             placeholderTextColor={colors.faint}
             autoCapitalize="none"
             autoComplete="email"
             keyboardType="email-address"
-            returnKeyType={isReset ? 'go' : 'next'}
+            returnKeyType="next"
             submitBehavior="submit"
-            onSubmitEditing={() => { if (isReset) { if (canSubmit) void submit(); } else passwordRef.current?.focus(); }}
+            onSubmitEditing={() => passwordRef.current?.focus()}
             value={email}
             editable={!isBusy}
             onChangeText={setEmail}
           />
-          {!isReset ? <TextInput
+          <TextInput
             ref={passwordRef}
             style={styles.input}
             placeholder="Password"
+            accessibilityLabel="Password"
             placeholderTextColor={colors.faint}
             autoCapitalize="none"
             autoComplete={isSignUp ? 'new-password' : 'current-password'}
@@ -185,13 +189,14 @@ export default function SignIn() {
             value={password}
             editable={!isBusy}
             onChangeText={setPassword}
-          /> : null}
+          />
 
           {errorMessage ? <Body accessibilityRole="alert" style={styles.error}>{errorMessage}</Body> : null}
           {notice ? <Body style={styles.notice}>{notice}</Body> : null}
 
           <Button
-            title={isReset ? 'Send reset link' : isSignUp ? 'Create account' : 'Sign in'}
+            variant={isSignUp ? 'accent' : 'auth'}
+            title={isSignUp ? 'Create account' : 'Sign in'}
             onPress={submit}
             loading={busy === 'email'}
             disabled={!canSubmit}
@@ -199,20 +204,27 @@ export default function SignIn() {
           {/* In sign-up this is the second, deliberately button-shaped way back
               — the ghost text on its own read as a caption, not a control. */}
           <Button
-            variant={isSignUp || isReset ? 'surface' : 'ghost'}
+            variant={isSignUp ? 'surface' : 'ghost'}
             title={
-              isReset ? 'Back to sign in' : isSignUp
+              isSignUp
                 ? notice
                   ? 'Go to sign in'
                   : 'Already have an account? Sign in'
                 : 'No account? Sign up'
             }
-            accessibilityLabel={isSignUp || isReset ? 'Back to sign in' : 'Create an account'}
-            onPress={() => goTo(isSignUp || isReset ? 'signIn' : 'signUp')}
+            accessibilityLabel={isSignUp ? 'Back to sign in' : 'Create an account'}
+            onPress={() => goTo(isSignUp ? 'signIn' : 'signUp')}
             disabled={isBusy}
           />
 
-          {mode === 'signIn' ? <Button title="Forgot password?" variant="ghost" onPress={() => goTo('reset')} disabled={isBusy} /> : null}
+          {mode === 'signIn' ? (
+            <Button
+              title="Forgot password?"
+              variant="ghost"
+              onPress={() => { if (!isBusy) router.push('/reset-password'); }}
+              disabled={isBusy}
+            />
+          ) : null}
 
           {/* Testing shortcut. Present only in a dev build (or with the opt-in
               flag set) and only for the whitelisted address. */}

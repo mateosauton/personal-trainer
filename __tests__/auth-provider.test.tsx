@@ -188,6 +188,16 @@ describe('recovery session security', () => {
     expect(mockAccount).not.toHaveBeenCalledWith('A');
   });
 
+  it('leaves a token-less reset URL on the request form instead of a recovery error', async () => {
+    const auth = mountAuth();
+    await waitFor(() => expect(auth.current.loading).toBe(false));
+    mockCompleteAuthFromUrl.mockResolvedValueOnce(false);
+    await act(async () => { mockURLChange({ url: 'officegym://reset-password' }); });
+    expect(auth.current.authError).toBeNull();
+    expect(auth.current.recoveringPassword).toBe(false);
+    expect(auth.current.processingAuthLink).toBe(false);
+  });
+
   it('shows callback errors and opens recovery for a valid link', async () => {
     const auth = mountAuth();
     await waitFor(() => expect(auth.current.loading).toBe(false));

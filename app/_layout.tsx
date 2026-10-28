@@ -71,7 +71,9 @@ function Routes() {
         <Stack.Screen name="(auth)" />
       </Stack.Protected>
 
-      <Stack.Protected guard={signedIn && recoveringPassword === true}>
+      {/* Unsigned visitors request a link here. A recovery session uses the
+          same route to choose a new password. */}
+      <Stack.Protected guard={!signedIn || recoveringPassword === true}>
         <Stack.Screen name="reset-password" />
       </Stack.Protected>
 

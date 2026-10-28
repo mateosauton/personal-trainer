@@ -87,7 +87,7 @@ Sign in as **`demo@officegym.test` / `demo1234`** (onboarded, with a plan and hi
 **`fresh@officegym.test` / `demo1234`** (lands in onboarding). The mock also exposes `GET /__reset`,
 `GET /__state` (assert a write landed) and `GET /__slow?ms=700` (hold loading states on screen).
 
-**You did it right when:** the dark "Welcome back." sign-in screen appears, and `demo@officegym.test` lands on
+**You did it right when:** the dark "Sign in" screen appears, and `demo@officegym.test` lands on
 **Home** with a plan and a Start button.
 
 > **What Path A cannot tell you.** The mock reproduces *endpoints*, not a database:

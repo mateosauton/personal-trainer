@@ -1,6 +1,6 @@
 # Authentication recovery verification
 
-Password recovery starts from Forgot password on sign-in. Reset emails redirect to `/reset-password` through Expo Linking. Signup confirmation and password recovery use PKCE: request the email and open its link in the same browser or installed app on the same device. The SDK must find the verifier saved when the request began. Implicit token fragments and callbacks outside the generated signup/reset routes are rejected. The reset form is unavailable until code exchange succeeds. Saving a new password signs out so the user signs in with the new credentials.
+Password recovery starts from Forgot password on sign-in. Reset emails redirect to `/reset-password` through Expo Linking. Signup confirmation and password recovery use PKCE: request the email and open its link in the same browser or installed app on the same device. The SDK must find the verifier saved when the request began. Implicit token fragments and callbacks outside the generated signup/reset routes are rejected. Choosing a new password stays unavailable until code exchange succeeds. Opening `/reset-password` with no token shows the request form instead of a recovery error. Saving a new password signs out so the user signs in with the new credentials.
 
 Email callbacks cannot replace an existing signed-in session. Sign out first, then request a new email link on this device; signing out removes any previous verifier. Older implicit-flow emails must also be replaced with a newly requested link.
 
