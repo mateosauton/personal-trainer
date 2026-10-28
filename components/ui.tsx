@@ -72,7 +72,7 @@ interface ButtonProps extends PressableProps {
   /** Optional so an icon alone can be the whole button; give it an accessibilityLabel then. */
   title?: string;
   icon?: IconName;
-  variant?: 'accent' | 'surface' | 'ghost';
+  variant?: 'accent' | 'auth' | 'surface' | 'ghost';
   loading?: boolean;
   style?: ViewStyle;
 }
@@ -81,7 +81,9 @@ export const Button = forwardRef<View, ButtonProps>(function Button(
   { title, icon, variant = 'accent', loading, style, disabled, ...rest },
   ref,
 ) {
-  const isAccent = variant === 'accent';
+  const isAuth = variant === 'auth';
+  const ink = isAuth ? colors.text : colors.accentInk;
+  const isFilled = variant === 'accent' || isAuth;
   return (
     <Pressable
       ref={ref}
@@ -89,22 +91,23 @@ export const Button = forwardRef<View, ButtonProps>(function Button(
       disabled={disabled || loading}
       style={({ pressed }) => [
         styles.button,
-        isAccent && styles.buttonAccent,
+        variant === 'accent' && styles.buttonAccent,
+        isAuth && styles.buttonAuth,
         variant === 'surface' && styles.buttonSurface,
         variant === 'ghost' && styles.buttonGhost,
-        (disabled || loading) && styles.buttonDisabled,
-        pressed && styles.buttonPressed,
+        (disabled || loading) && !isAuth && styles.buttonDisabled,
+        pressed && !isAuth && styles.buttonPressed,
         style,
       ]}
       {...rest}
     >
       {loading ? (
-        <ActivityIndicator color={isAccent ? colors.accentInk : colors.text} />
+        <ActivityIndicator color={isFilled ? ink : colors.text} />
       ) : (
         <View style={styles.buttonInner}>
-          {icon ? <Icon name={icon} size={18} color={isAccent ? colors.accentInk : colors.text} /> : null}
+          {icon ? <Icon name={icon} size={18} color={isFilled ? ink : colors.text} /> : null}
           {title ? (
-            <Text style={[styles.buttonText, isAccent && styles.buttonTextAccent]}>{title}</Text>
+            <Text style={[styles.buttonText, isFilled && { color: ink }]}>{title}</Text>
           ) : null}
         </View>
       )}
@@ -203,13 +206,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.xl,
   },
   buttonAccent: { backgroundColor: colors.accent },
+  buttonAuth: { backgroundColor: colors.accentAuth, opacity: 1 },
   buttonSurface: { backgroundColor: colors.elevated, borderWidth: 1, borderColor: colors.border },
   buttonGhost: { backgroundColor: 'transparent' },
   buttonDisabled: { opacity: 0.4 },
   buttonPressed: { opacity: 0.75, transform: [{ scale: 0.98 }] },
   buttonInner: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   buttonText: { ...type.body, fontWeight: '700', color: colors.text },
-  buttonTextAccent: { color: colors.accentInk },
   chip: {
     paddingVertical: space.md,
     paddingHorizontal: space.lg,

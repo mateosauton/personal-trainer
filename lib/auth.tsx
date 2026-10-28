@@ -103,7 +103,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const recovery = isRecoveryLink(url);
         const completed = await completeAuthFromUrl(url);
         if (!active) return;
-        if (recovery && !completed) throw new Error('Open the password reset link from your email.');
+        // A bare /reset-password visit has no code to exchange. That is the
+        // request-reset screen, not a failed email link.
         if (completed) setRecoveringPassword(recovery);
       } catch (error) {
         if (!active) return;

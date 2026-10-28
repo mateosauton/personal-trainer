@@ -8,6 +8,7 @@ module.exports = {
   testMatch: [
     '<rootDir>/__tests__/**/*.test.ts',
     '<rootDir>/__tests__/auth-provider.test.tsx',
+    '<rootDir>/__tests__/auth-screens.test.tsx',
     '<rootDir>/__tests__/onboarding-layout.test.tsx',
     '<rootDir>/__tests__/profile-measurements.test.tsx',
   ],

@@ -18,6 +18,8 @@ export const colors = {
 
   accent: '#D7FF3E',
   accentInk: '#12160A',
+  /** Enabled auth CTAs (A01 Sign in, A10 Send reset link). Not the in-app neon. */
+  accentAuth: '#58641C',
   success: '#34C759',
   danger: '#FF453A',
   warn: '#FFB340',
